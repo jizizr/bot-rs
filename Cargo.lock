@@ -66,6 +66,7 @@ name = "bot-rs"
 version = "0.1.0"
 dependencies = [
  "ferrisgram",
+ "lazy_static",
  "reqwest",
  "serde",
  "tokio",
