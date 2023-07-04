@@ -8,6 +8,8 @@ use bot_rs::CommandInfo;
 use funcs::command::*;
 use funcs::text::*;
 use lazy_static::lazy_static;
+use std::fs::File;
+use std::io::read_to_string;
 use std::sync::Mutex;
 
 lazy_static! {
@@ -18,7 +20,7 @@ lazy_static! {
 #[tokio::main]
 async fn main() {
     // This function creates a new bot instance and the error is handled accordingly
-    let bot = match Bot::new("Token", None).await {
+    let bot = match Bot::new(&read_to_string(File::open("TOKEN").unwrap()).unwrap(), None).await {
         Ok(bot) => bot,
         Err(error) => panic!("failed to create bot: {}", &error),
     };
