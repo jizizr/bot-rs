@@ -1,7 +1,6 @@
-use std::error::Error;
-
 use super::*;
 use serde::Deserialize;
+use std::error::Error;
 
 // use ferrisgram::error::Result;
 #[derive(Deserialize)]
@@ -13,8 +12,7 @@ struct Quote {
 
 pub async fn quote(bot: Bot, ctx: Context) -> ferrisgram::error::Result<GroupIteration> {
     let msg = ctx.effective_message.unwrap();
-    let resp: Result<Quote, Box<dyn Error + Send + Sync>> =
-        get("https://international.v1.hitokoto.cn/").await;
+    let resp: Result<Quote, Box<dyn Error + Send + Sync>> = get("https://v1.hitokoto.cn/").await;
     match resp {
         Err(e) => {
             let error_message = format!("{:?}", e);
