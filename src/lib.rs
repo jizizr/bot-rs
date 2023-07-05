@@ -29,3 +29,13 @@ impl CommandInfo {
         &self.0
     }
 }
+
+#[macro_export]
+macro_rules! add_handler {
+    ($dispatcher:expr, $command:expr, $handler:expr, $description:expr) => {
+        COMMAND_INFO
+            .lock()
+            .unwrap()
+            .add_handler($dispatcher, $command, $handler, $description);
+    };
+}

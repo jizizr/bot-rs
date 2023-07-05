@@ -1,10 +1,9 @@
+use bot_rs::add_handler;
+use bot_rs::CommandInfo;
 use ferrisgram::error::GroupIteration;
 use ferrisgram::ext::handlers::MessageHandler;
 use ferrisgram::ext::{Context, Dispatcher, Updater};
 use ferrisgram::Bot;
-mod filter;
-pub mod funcs;
-use bot_rs::CommandInfo;
 use funcs::command::*;
 use funcs::text::*;
 use lazy_static::lazy_static;
@@ -12,6 +11,8 @@ use std::fs::File;
 use std::io::read_to_string;
 use std::sync::Mutex;
 
+mod filter;
+mod funcs;
 lazy_static! {
     static ref COMMAND_INFO: Mutex<CommandInfo> = Mutex::new(CommandInfo::new());
 }
@@ -26,20 +27,12 @@ async fn main() {
     };
     let mut dispatcher = &mut Dispatcher::new(&bot);
 
-    COMMAND_INFO
-        .lock()
-        .unwrap()
-        .add_handler(dispatcher, "start", start::start, "发送这个了解我");
-
-    COMMAND_INFO
-        .lock()
-        .unwrap()
-        .add_handler(dispatcher, "my", quote::quote, "名人名言");
-
-    COMMAND_INFO
-        .lock()
-        .unwrap()
-        .add_handler(dispatcher, "help", help, "获取帮助信息");
+    add_handler!(dispatcher, "start", start::start, "发送这个了解我");
+    add_handler!(dispatcher, "my", quote::quote, "名人名言");
+    add_handler!(dispatcher, "help", help, "获取帮助信息");
+    add_handler!(dispatcher, "btc", coin::btc, "实时BTC兑换USDT价格");
+    add_handler!(dispatcher, "eth", coin::eth, "实时ETH兑换USDT价格");
+    add_handler!(dispatcher, "xmr", coin::xmr, "实时XMR兑换USDT价格");
 
     dispatcher.add_handler_to_group(
         MessageHandler::new(quote::quote, filter::simple::Contain::new("一言")),
