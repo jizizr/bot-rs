@@ -1,5 +1,4 @@
 use super::*;
-use std::error::Error;
 
 #[derive(Deserialize)]
 struct Coin {
