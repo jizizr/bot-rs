@@ -33,6 +33,8 @@ async fn main() {
     add_handler!(dispatcher, "btc", coin::btc, "实时BTC兑换USDT价格");
     add_handler!(dispatcher, "eth", coin::eth, "实时ETH兑换USDT价格");
     add_handler!(dispatcher, "xmr", coin::xmr, "实时XMR兑换USDT价格");
+    add_handler!(dispatcher, "id", id::id, "获取自己的id");
+    add_handler!(dispatcher, "today", today::today, "历史上的今天");
 
     dispatcher.add_handler_to_group(
         MessageHandler::new(quote::quote, filter::simple::Contain::new("一言")),
@@ -54,10 +56,10 @@ pub async fn help(bot: Bot, ctx: Context) -> ferrisgram::error::Result<GroupIter
         .unwrap()
         .get_command()
         .iter()
-        .map(|(key, value)| format!("/{:8}    {}", key, value))
+        .map(|(key, value)| format!("/{:8}  {}", key, value))
         .collect::<Vec<String>>()
         .join("\n");
-
+    println!("{text}");
     let msg = ctx.effective_message.unwrap();
     msg.reply(&bot, text.as_str())
         .parse_mode("markdown".to_string())
