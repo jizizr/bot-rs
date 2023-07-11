@@ -4,6 +4,8 @@ use ferrisgram::Bot;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use std::error::Error;
+use std::fmt;
+
 pub mod command;
 pub mod text;
 type FResult<T> = ferrisgram::error::Result<T>;
