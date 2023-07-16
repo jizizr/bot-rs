@@ -1,6 +1,32 @@
 use super::*;
+use thiserror::Error;
 pub mod coin;
 pub mod id;
 pub mod quote;
 pub mod start;
 pub mod today;
+
+#[macro_export]
+macro_rules! error_fmt {
+    ($usage:ident) => {
+        fn clap_fmt(err: &clap::error::Error) -> String {
+            format!(
+                "{}\n{}",
+                err.render().to_string().splitn(2, "Usage").nth(0).unwrap(),
+                *$usage
+            )
+        }
+        fn custom_fmt(err: &String) -> String {
+            format!("{}\n\n{}", err, *USAGE)
+        }
+        #[derive(Error, Debug)]
+        pub enum AppError {
+            #[error("API请求失败: {0}")]
+            RequestError(#[from] reqwest::Error),
+            #[error("{}",clap_fmt(.0))]
+            ClapError(#[from] clap::error::Error),
+            #[error("{}",custom_fmt(.0))]
+            CustomError(String),
+        }
+    };
+}

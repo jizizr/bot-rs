@@ -1,13 +1,15 @@
 use super::*;
+use crate::error_fmt;
 use clap::{CommandFactory, Parser};
 use regex::Regex;
-use reqwest;
 
 lazy_static::lazy_static! {
     static ref HIS_MATCH: Regex = Regex::new(r#"</em>\.(.*?)</dt>"#).unwrap();
     static ref LINK_MATCH:Regex = Regex::new(r#"<a href="(.*?)" target="_blank" class="read-btn">阅读全文</a>"#).unwrap();
     static ref USAGE:String = TodayCmd::command().render_help().to_string() ;
 }
+
+error_fmt!(USAGE);
 
 #[derive(Parser)]
 #[command(
@@ -22,52 +24,6 @@ struct TodayCmd {
     month: Option<u8>,
     /// 日
     day: Option<u8>,
-}
-
-//自定义错误类型
-#[derive(Debug)]
-pub enum AppError {
-    RequestError(reqwest::Error),
-    ClapError(clap::error::Error),
-    CustomError(String),
-}
-
-impl From<reqwest::Error> for AppError {
-    fn from(error: reqwest::Error) -> Self {
-        AppError::RequestError(error)
-    }
-}
-
-impl From<clap::error::Error> for AppError {
-    fn from(error: clap::error::Error) -> Self {
-        AppError::ClapError(error)
-    }
-}
-
-impl From<String> for AppError {
-    fn from(error: String) -> Self {
-        AppError::CustomError(error)
-    }
-}
-
-impl fmt::Display for AppError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            AppError::RequestError(err) => write!(f, "API请求失败: {}", err),
-            AppError::ClapError(err) => {
-                write!(
-                    f,
-                    "{}",
-                    format!(
-                        "{}\n{}\n",
-                        err.render().to_string().splitn(2, "Usage").nth(0).unwrap(),
-                        *USAGE
-                    )
-                )
-            }
-            AppError::CustomError(err) => write!(f, "{}\n\n{}", err, *USAGE),
-        }
-    }
 }
 
 pub async fn get_today(ctx: &Context) -> Result<String, AppError> {
