@@ -5,9 +5,9 @@ struct Coin {
     price: String,
 }
 
-async fn coin(coin_type: &str) -> Result<f32, Box<dyn Error + Send + Sync>> {
-    // println!("{}", coin_type);
-    let price: Result<Coin, Box<dyn Error + Send + Sync>> = get(&format!(
+async fn coin(coin_type: &str) -> Result<f32, reqwest::Error> {
+    // tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    let price: Result<Coin, reqwest::Error> = get(&format!(
         "https://api.binance.com/api/v3/ticker/price?symbol={}USDT",
         coin_type
     ))

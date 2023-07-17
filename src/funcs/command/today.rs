@@ -1,12 +1,11 @@
 use super::*;
-use crate::error_fmt;
-use clap::{CommandFactory, Parser};
 use regex::Regex;
 
-lazy_static::lazy_static! {
+lazy_static! {
     static ref HIS_MATCH: Regex = Regex::new(r#"</em>\.(.*?)</dt>"#).unwrap();
-    static ref LINK_MATCH:Regex = Regex::new(r#"<a href="(.*?)" target="_blank" class="read-btn">阅读全文</a>"#).unwrap();
-    static ref USAGE:String = TodayCmd::command().render_help().to_string() ;
+    static ref LINK_MATCH: Regex =
+        Regex::new(r#"<a href="(.*?)" target="_blank" class="read-btn">阅读全文</a>"#).unwrap();
+    static ref USAGE: String = TodayCmd::command().render_help().to_string();
 }
 
 error_fmt!(USAGE);
@@ -19,6 +18,7 @@ error_fmt!(USAGE);
     next_help_heading = "参数解释",
     disable_help_flag = true
 )]
+
 struct TodayCmd {
     /// 月
     month: Option<u8>,

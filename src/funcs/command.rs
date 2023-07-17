@@ -5,6 +5,11 @@ pub mod id;
 pub mod quote;
 pub mod start;
 pub mod today;
+pub mod wiki;
+
+use crate::error_fmt;
+use clap::{CommandFactory, Parser};
+use lazy_static::lazy_static;
 
 #[macro_export]
 macro_rules! error_fmt {
