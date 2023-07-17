@@ -1,70 +1,77 @@
-use bot_rs::add_handler;
-use bot_rs::CommandInfo;
-use ferrisgram::error::GroupIteration;
-use ferrisgram::ext::handlers::MessageHandler;
-use ferrisgram::ext::{Context, Dispatcher, Updater};
-use ferrisgram::Bot;
+use std::error::Error;
+use teloxide::{prelude::*, types::Me, utils::command::BotCommands};
+mod funcs;
 use funcs::command::*;
-use funcs::text::*;
-use lazy_static::lazy_static;
 use std::fs::File;
 use std::io::read_to_string;
-use std::sync::Mutex;
-
-mod filter;
-mod funcs;
-lazy_static! {
-    static ref COMMAND_INFO: Mutex<CommandInfo> = Mutex::new(CommandInfo::new());
+#[derive(BotCommands)]
+#[command(
+    rename_rule = "lowercase",
+    description = "These commands are supported:"
+)]
+enum Cmd {
+    #[command(description = "获取帮助信息")]
+    Help,
+    #[command(description = "发送这个了解我")]
+    Start,
+    #[command(description = "名人名言")]
+    My,
+    #[command(description = "实时BTC兑换USDT价格")]
+    Btc,
+    #[command(description = "实时XMR兑换USDT价格")]
+    Xmr,
+    #[command(description = "实时ETH兑换USDT价格")]
+    Eth,
+    #[command(description = "获取自己的id")]
+    Id,
+    #[command(description = "历史上的今天")]
+    Today,
+    #[command(description = "维基一下")]
+    Wiki,
 }
 
-#[allow(unused)]
 #[tokio::main]
-async fn main() {
-    // This function creates a new bot instance and the error is handled accordingly
-    let bot = match Bot::new(&read_to_string(File::open("TOKEN").unwrap()).unwrap(), None).await {
-        Ok(bot) => bot,
-        Err(error) => panic!("failed to create bot: {}", &error),
-    };
-    let mut dispatcher = &mut Dispatcher::new(&bot);
+async fn main() -> Result<(), Box<dyn Error>> {
+    pretty_env_logger::init();
+    log::info!("Starting buttons bot...");
 
-    add_handler!(dispatcher, "start", start::start, "发送这个了解我");
-    add_handler!(dispatcher, "my", quote::quote, "名人名言");
-    add_handler!(dispatcher, "help", help, "获取帮助信息");
-    add_handler!(dispatcher, "btc", coin::btc, "实时BTC兑换USDT价格");
-    add_handler!(dispatcher, "eth", coin::eth, "实时ETH兑换USDT价格");
-    add_handler!(dispatcher, "xmr", coin::xmr, "实时XMR兑换USDT价格");
-    add_handler!(dispatcher, "id", id::id, "获取自己的id");
-    add_handler!(dispatcher, "today", today::today, "历史上的今天");
-    add_handler!(dispatcher, "wiki", wiki::wiki, "维基一下");
+    let bot = Bot::new(read_to_string(File::open("TOKEN").unwrap()).unwrap());
 
-    dispatcher.add_handler_to_group(
-        MessageHandler::new(quote::quote, filter::simple::Contain::new("一言")),
-        1,
-    );
+    let handler = dptree::entry().branch(Update::filter_message().endpoint(message_handler));
 
-    dispatcher.add_handler_to_group(
-        MessageHandler::new(six::six, filter::simple::Equal::new("6")),
-        1,
-    );
-
-    let mut updater = Updater::new(&bot, dispatcher);
-    updater.start_polling(true).await;
+    let mut dispatcher = Dispatcher::builder(bot, handler)
+        .enable_ctrlc_handler()
+        .distribution_function(|_| None::<std::convert::Infallible>)
+        .build();
+    tokio::select! {
+        _ = dispatcher.dispatch() => (),
+        _ = tokio::signal::ctrl_c() => (),
+    }
+    Ok(())
 }
 
-pub async fn help(bot: Bot, ctx: Context) -> ferrisgram::error::Result<GroupIteration> {
-    let text = COMMAND_INFO
-        .lock()
-        .unwrap()
-        .get_command()
-        .iter()
-        .map(|(key, value)| format!("/{:8}  {}", key, value))
-        .collect::<Vec<String>>()
-        .join("\n");
-    let msg = ctx.effective_message.unwrap();
-    msg.reply(&bot, text.as_str())
-        .parse_mode("markdown".to_string())
-        .send()
-        .await?;
+async fn message_handler(
+    bot: Bot,
+    msg: Message,
+    me: Me,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    if let Some(text) = msg.text() {
+        match BotCommands::parse(text, me.username()) {
+            Ok(Cmd::Help) => {
+                bot.send_message(msg.chat.id, Cmd::descriptions().to_string())
+                    .await?;
+            }
+            Ok(Cmd::Start) => start::start(bot, msg).await?,
+            Ok(Cmd::My) => quote::quote(bot, msg).await?,
+            Ok(Cmd::Btc) => coin::btc(bot, msg).await?,
+            Ok(Cmd::Xmr) => coin::xmr(bot, msg).await?,
+            Ok(Cmd::Eth) => coin::eth(bot, msg).await?,
+            Ok(Cmd::Id) => id::id(bot, msg).await?,
+            Ok(Cmd::Today) => today::today(bot, msg).await?,
+            Ok(Cmd::Wiki) => wiki::wiki(bot, msg).await?,
+            Err(_) => {}
+        }
+    }
 
-    Ok(GroupIteration::EndGroups)
+    Ok(())
 }

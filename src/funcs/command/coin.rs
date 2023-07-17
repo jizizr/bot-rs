@@ -25,17 +25,19 @@ async fn coin_handle(coin_type: &str) -> String {
 
 macro_rules! generate_crypto_fn {
     ($coin_type:ident) => {
-        pub async fn $coin_type(bot: Bot, ctx: Context) -> FResult<GroupIteration> {
-            let msg = ctx.effective_message.unwrap();
-            msg.reply(
-                &bot,
+        pub async fn $coin_type(
+            bot: Bot,
+            msg: Message,
+        ) -> Result<(), Box<dyn Error + Send + Sync>> {
+            bot.send_message(
+                msg.chat.id,
                 coin_handle(&stringify!($coin_type).to_uppercase())
                     .await
                     .as_str(),
             )
-            .send()
+            .reply_to_message_id(msg.id)
             .await?;
-            Ok(GroupIteration::EndGroups)
+            Ok(())
         }
     };
 }

@@ -41,43 +41,33 @@ struct Page {
     snippet: String,
 }
 
-async fn get_wiki(ctx: &Context) -> Result<String, AppError> {
-    let search = WikiCmd::try_parse_from(
-        ctx.effective_message
-            .as_ref()
-            .unwrap()
-            .text
-            .as_ref()
-            .unwrap()
-            .split_whitespace(),
-    )?;
+async fn get_wiki(msg: &Message) -> Result<String, AppError> {
+    let search = WikiCmd::try_parse_from(msg.text().unwrap().split_whitespace())?;
     let result: SearchResult = get(&format!("https://zh.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit=1&srsearch={}",search.search.join(" "))).await?;
     if result.query.searchinfo.totalhits == 0 {
         return Err(AppError::CustomError("❌未查找到该词条❌".to_string()));
     }
     let search = &result.query.search[0];
     Ok(format!(
-        "*链接*: https://zh.wikipedia.org/wiki/{}
+        "*链接*: https://zh\\.wikipedia\\.org/wiki/{}
         
 *概要*: {}
 
 *总词数*: {}",
-        search.title,
-        MATCH.replace_all(&search.snippet, ""),
+        markdown::escape(&search.title),
+        markdown::escape(&MATCH.replace_all(&search.snippet, "")),
         search.wordcount
     ))
 }
 
-pub async fn wiki(bot: Bot, ctx: Context) -> FResult<GroupIteration> {
-    let text = match get_wiki(&ctx).await {
+pub async fn wiki(bot: Bot, msg: Message) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let text = match get_wiki(&msg).await {
         Ok(msg) => msg,
-        Err(e) => format!("{e}"),
+        Err(e) => markdown::escape(&format!("{e}")),
     };
-    ctx.effective_message
-        .unwrap()
-        .reply(&bot, &text)
-        .parse_mode("markdown".to_string())
-        .send()
+    bot.send_message(msg.chat.id, &text)
+        .parse_mode(ParseMode::MarkdownV2)
+        .reply_to_message_id(msg.id)
         .await?;
-    Ok(GroupIteration::EndGroups)
+    Ok(())
 }

@@ -26,11 +26,10 @@ struct TodayCmd {
     day: Option<u8>,
 }
 
-pub async fn get_today(ctx: &Context) -> Result<String, AppError> {
+pub async fn get_today(msg: &Message) -> Result<String, AppError> {
     let base_url = "http://hao.360.com/histoday/".to_string();
-    let msg = ctx.effective_message.as_ref().unwrap();
-    let today = TodayCmd::try_parse_from(msg.text.as_ref().unwrap().split_whitespace())
-        .map_err(AppError::from)?;
+    let today =
+        TodayCmd::try_parse_from(msg.text().unwrap().split_whitespace()).map_err(AppError::from)?;
     let his = if today.month.is_some() {
         if today.day.is_some() {
             get_history(
@@ -56,19 +55,16 @@ pub async fn get_today(ctx: &Context) -> Result<String, AppError> {
     Ok(his)
 }
 
-pub async fn today(bot: Bot, ctx: Context) -> FResult<GroupIteration> {
-    let text = match get_today(&ctx).await {
+pub async fn today(bot: Bot, msg: Message) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let text = match get_today(&msg).await {
         Ok(msg) => msg,
         Err(e) => format!("{e}"),
     };
-    ctx.effective_message
-        .unwrap()
-        .reply(&bot, &text)
-        .parse_mode("markdown".to_string())
-        .disable_web_page_preview(true)
-        .send()
+    bot.send_message(msg.chat.id, text)
+        .parse_mode(ParseMode::MarkdownV2)
+        .reply_to_message_id(msg.id)
         .await?;
-    Ok(GroupIteration::EndGroups)
+    Ok(())
 }
 
 async fn get_history(url: String, time: Option<String>) -> Result<String, AppError> {
@@ -85,10 +81,10 @@ async fn get_history(url: String, time: Option<String>) -> Result<String, AppErr
             .zip(LINK_MATCH.captures_iter(&rstring))
             .enumerate()
             .map(|(i, (text, link))| format!(
-                "{}. [{}]({})\n",
+                "{}\\. [{}]({})\n",
                 i + 1,
-                text[1].to_string(),
-                link[1].to_string()
+                markdown::escape(&text[1]),
+                markdown::escape_link_url(&link[1])
             ))
             .collect::<String>()
     ))

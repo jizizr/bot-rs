@@ -1,7 +1,8 @@
 use super::*;
 
-pub async fn six(bot: Bot, ctx: Context) -> ferrisgram::error::Result<GroupIteration> {
-    let msg = ctx.effective_message.unwrap();
-    msg.reply(&bot, "6").send().await?;
-    Ok(GroupIteration::EndGroups)
+pub async fn six(bot: Bot, msg: Message) -> Result<(), Box<dyn Error + Send + Sync>> {
+    bot.send_message(msg.chat.id, "")
+        .reply_to_message_id(msg.id)
+        .await?;
+    Ok(())
 }

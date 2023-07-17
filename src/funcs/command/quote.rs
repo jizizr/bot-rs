@@ -7,13 +7,14 @@ struct Quote {
     from: String,
 }
 
-pub async fn quote(bot: Bot, ctx: Context) -> FResult<GroupIteration> {
-    let msg = ctx.effective_message.unwrap();
-    let resp: Result<Quote, reqwest::Error> = get("https://international.v1.hitokoto.cn/").await;
+pub async fn quote(bot: Bot, msg: Message) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let resp: Result<Quote, reqwest::Error> = get("https://v1.hitokoto.cn/").await;
     match resp {
         Err(e) => {
             let error_message = format!("{:?}", e);
-            msg.reply(&bot, &error_message).send().await?;
+            bot.send_message(msg.chat.id, error_message)
+                .reply_to_message_id(msg.id)
+                .await?;
         }
         Ok(quote) => {
             // let quote = resp.unwrap();
@@ -22,8 +23,10 @@ pub async fn quote(bot: Bot, ctx: Context) -> FResult<GroupIteration> {
                 None => "".to_string(),
             };
             let message = format!("{}\n—— {}《{}》", quote.hitokoto, who, quote.from);
-            msg.reply(&bot, &message).send().await?;
+            bot.send_message(msg.chat.id, message)
+                .reply_to_message_id(msg.id)
+                .await?;
         }
     }
-    Ok(GroupIteration::EndGroups)
+    Ok(())
 }

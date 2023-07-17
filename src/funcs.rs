@@ -1,12 +1,10 @@
-use ferrisgram::error::GroupIteration;
-use ferrisgram::ext::Context;
-use ferrisgram::Bot;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use std::error::Error;
+use teloxide::{prelude::*, types::ParseMode, utils::markdown};
 
 pub mod command;
 pub mod text;
-type FResult<T> = ferrisgram::error::Result<T>;
 
 async fn get<T: DeserializeOwned>(url: &str) -> Result<T, reqwest::Error> {
     let resp = reqwest::get(url).await?;
