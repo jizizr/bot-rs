@@ -2,7 +2,7 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use std::error::Error;
 use teloxide::{prelude::*, types::ParseMode, utils::markdown};
-
+use bot_rs::getor;
 pub mod command;
 pub mod text;
 

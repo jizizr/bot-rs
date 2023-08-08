@@ -6,6 +6,7 @@ pub mod quote;
 pub mod start;
 pub mod today;
 pub mod wiki;
+pub mod short;
 
 use crate::error_fmt;
 use clap::{CommandFactory, Parser};
@@ -24,6 +25,7 @@ macro_rules! error_fmt {
         fn custom_fmt(err: &String) -> String {
             format!("{}\n\n{}", err, *USAGE)
         }
+        #[allow(dead_code)]
         #[derive(Error, Debug)]
         pub enum AppError {
             #[error("API请求失败: {0}")]
