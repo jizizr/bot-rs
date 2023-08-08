@@ -6,6 +6,7 @@ pub async fn id(bot: Bot, msg: Message) -> Result<(), Box<dyn Error + Send + Syn
         format!("您的id是 `{}`", msg.from().unwrap().id),
     )
     .parse_mode(ParseMode::MarkdownV2)
+    .reply_to_message_id(msg.id)
     .await?;
     Ok(())
 }

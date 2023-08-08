@@ -26,10 +26,10 @@ struct TodayCmd {
     day: Option<u8>,
 }
 
-pub async fn get_today(msg: &Message) -> Result<String, AppError> {
+async fn get_today(msg: &Message) -> Result<String, AppError> {
     let base_url = "http://hao.360.com/histoday/".to_string();
-    let today =
-        TodayCmd::try_parse_from(msg.text().unwrap().split_whitespace()).map_err(AppError::from)?;
+    let today = TodayCmd::try_parse_from(getor(&msg).unwrap().split_whitespace())
+        .map_err(AppError::from)?;
     let his = if today.month.is_some() {
         if today.day.is_some() {
             get_history(
@@ -56,10 +56,7 @@ pub async fn get_today(msg: &Message) -> Result<String, AppError> {
 }
 
 pub async fn today(bot: Bot, msg: Message) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let text = match get_today(&msg).await {
-        Ok(msg) => msg,
-        Err(e) => format!("{e}"),
-    };
+    let text = get_today(&msg).await.unwrap_or_else(|e| format!("{e}"));
     bot.send_message(msg.chat.id, text)
         .parse_mode(ParseMode::MarkdownV2)
         .reply_to_message_id(msg.id)

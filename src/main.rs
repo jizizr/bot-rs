@@ -1,9 +1,11 @@
-use std::error::Error;
-use teloxide::{prelude::*, types::Me, utils::command::BotCommands};
-mod funcs;
+use bot_rs::getor;
 use funcs::command::*;
+use std::error::Error;
 use std::fs::File;
 use std::io::read_to_string;
+use teloxide::{prelude::*, types::Me, utils::command::BotCommands};
+mod funcs;
+
 #[derive(BotCommands)]
 #[command(
     rename_rule = "lowercase",
@@ -28,6 +30,8 @@ enum Cmd {
     Today,
     #[command(description = "维基一下")]
     Wiki,
+    #[command(description = "生成短链接")]
+    Short,
 }
 
 #[tokio::main]
@@ -35,14 +39,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     pretty_env_logger::init();
     log::info!("Starting buttons bot...");
 
-    let bot = Bot::new(read_to_string(File::open("TOKEN").unwrap()).unwrap());
+    let bot = Bot::new(
+        read_to_string(File::open("TOKEN").expect("TOKEN文件打开失败")).expect("TOKEN文件读取失败"),
+    );
 
-    let handler = dptree::entry().branch(Update::filter_message().endpoint(message_handler));
+    let handler = dptree::entry()
+        .branch(Update::filter_message().endpoint(message_handler))
+        .branch(Update::filter_edited_message().endpoint(message_handler));
 
     let mut dispatcher = Dispatcher::builder(bot, handler)
         .enable_ctrlc_handler()
         .distribution_function(|_| None::<std::convert::Infallible>)
         .build();
+
     tokio::select! {
         _ = dispatcher.dispatch() => (),
         _ = tokio::signal::ctrl_c() => (),
@@ -55,7 +64,7 @@ async fn message_handler(
     msg: Message,
     me: Me,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    if let Some(text) = msg.text() {
+    if let Some(text) = getor(&msg) {
         match BotCommands::parse(text, me.username()) {
             Ok(Cmd::Help) => {
                 bot.send_message(msg.chat.id, Cmd::descriptions().to_string())
@@ -69,8 +78,13 @@ async fn message_handler(
             Ok(Cmd::Id) => id::id(bot, msg).await?,
             Ok(Cmd::Today) => today::today(bot, msg).await?,
             Ok(Cmd::Wiki) => wiki::wiki(bot, msg).await?,
+            Ok(Cmd::Short) => short::short(bot, msg).await?,
             Err(_) => {}
         }
+    } else {
+        //Debug
+        bot.send_message(msg.chat.id, format!("{:#?}", msg.caption()))
+            .await?;
     }
 
     Ok(())

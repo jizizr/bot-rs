@@ -42,14 +42,18 @@ struct Page {
 }
 
 async fn get_wiki(msg: &Message) -> Result<String, AppError> {
-    let search = WikiCmd::try_parse_from(msg.text().unwrap().split_whitespace())?;
+    let search = WikiCmd::try_parse_from(getor(&msg).unwrap().split_whitespace())?;
     let result: SearchResult = get(&format!("https://zh.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit=1&srsearch={}",search.search.join(" "))).await?;
     if result.query.searchinfo.totalhits == 0 {
-        return Err(AppError::CustomError("❌未查找到该词条❌".to_string()));
+        return Ok(format!(
+            "❌未查找到词条 `{}`",
+            markdown::escape_code(&search.search.join(" "))
+        ));
     }
     let search = &result.query.search[0];
     Ok(format!(
-        "*链接*: https://zh\\.wikipedia\\.org/wiki/{}
+        "🔍查找到词条
+*链接*: https://zh\\.wikipedia\\.org/wiki/{}
         
 *概要*: {}
 
