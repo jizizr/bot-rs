@@ -1,5 +1,5 @@
 use bot_rs::getor;
-use funcs::command::*;
+use funcs::{command::*, text::*};
 use std::error::Error;
 use std::fs::File;
 use std::io::read_to_string;
@@ -79,13 +79,12 @@ async fn message_handler(
             Ok(Cmd::Today) => today::today(bot, msg).await?,
             Ok(Cmd::Wiki) => wiki::wiki(bot, msg).await?,
             Ok(Cmd::Short) => short::short(bot, msg).await?,
-            Err(_) => {}
+            Err(_) => {
+                if !text.starts_with("/") {
+                    fix::fix(bot, msg).await?
+                }
+            }
         }
-    } else {
-        //Debug
-        bot.send_message(msg.chat.id, format!("{:#?}", msg.caption()))
-            .await?;
     }
-
     Ok(())
 }

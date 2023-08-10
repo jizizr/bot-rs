@@ -10,7 +10,6 @@ pub mod short;
 
 use crate::error_fmt;
 use clap::{CommandFactory, Parser};
-use lazy_static::lazy_static;
 
 #[macro_export]
 macro_rules! error_fmt {
