@@ -3,8 +3,9 @@ use funcs::{command::*, text::*};
 use std::error::Error;
 use std::fs::File;
 use std::io::read_to_string;
-use teloxide::{prelude::*, types::Me, utils::command::BotCommands};
+use teloxide::{prelude::*, types::Me, update_listeners::webhooks, utils::command::BotCommands};
 mod funcs;
+mod dao;
 
 #[derive(BotCommands)]
 #[command(
@@ -32,29 +33,46 @@ enum Cmd {
     Wiki,
     #[command(description = "生成短链接")]
     Short,
+    #[command(description = "测试")]
+    Test
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let mode = std::env::var("MODE").unwrap_or_default();
     pretty_env_logger::init();
     log::info!("Starting buttons bot...");
 
     let bot = Bot::new(
         read_to_string(File::open("TOKEN").expect("TOKEN文件打开失败")).expect("TOKEN文件读取失败"),
     );
-
     let handler = dptree::entry()
         .branch(Update::filter_message().endpoint(message_handler))
         .branch(Update::filter_edited_message().endpoint(message_handler));
 
-    let mut dispatcher = Dispatcher::builder(bot, handler)
+    let mut dispatcher = Dispatcher::builder(bot.clone(), handler)
         .enable_ctrlc_handler()
         .distribution_function(|_| None::<std::convert::Infallible>)
         .build();
-
-    tokio::select! {
-        _ = dispatcher.dispatch() => (),
-        _ = tokio::signal::ctrl_c() => (),
+    if mode == "r" {
+        let addr = ([127, 0, 0, 1], 12345).into();
+        let url =
+            read_to_string(File::open("URL").expect("URL文件打开失败")).expect("URL文件读取失败");
+        let url = url.parse().unwrap();
+        let listener = webhooks::axum(bot, webhooks::Options::new(addr, url))
+            .await
+            .expect("Couldn't setup webhook");
+        dispatcher
+            .dispatch_with_listener(
+                listener,
+                LoggingErrorHandler::with_custom_text("An error from the update listener"),
+            )
+            .await
+    } else {
+        tokio::select! {
+            _ = dispatcher.dispatch() => (),
+            _ = tokio::signal::ctrl_c() => (),
+        }
     }
     Ok(())
 }
@@ -79,9 +97,11 @@ async fn message_handler(
             Ok(Cmd::Today) => today::today(bot, msg).await?,
             Ok(Cmd::Wiki) => wiki::wiki(bot, msg).await?,
             Ok(Cmd::Short) => short::short(bot, msg).await?,
+            Ok(Cmd::Test) => test::test(bot, msg).await?,
             Err(_) => {
                 if !text.starts_with("/") {
-                    fix::fix(bot, msg).await?
+                    fix::fix(&bot, &msg).await?;
+                    six::six(bot, msg).await?
                 }
             }
         }
