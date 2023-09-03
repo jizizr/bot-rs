@@ -1,9 +1,9 @@
+use bot_rs::getor;
+use lazy_static::lazy_static;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use std::error::Error;
 use teloxide::{prelude::*, types::ParseMode, utils::markdown};
-use bot_rs::getor;
-use lazy_static::lazy_static;
 pub mod command;
 pub mod text;
 
