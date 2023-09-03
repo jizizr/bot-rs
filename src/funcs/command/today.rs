@@ -47,7 +47,7 @@ async fn get_today(msg: &Message) -> Result<String, AppError> {
             )
             .await?
         } else {
-            Err(AppError::CustomError(format!("日期不完整\n\n")))?
+            Err(AppError::CustomError(format!("日期不完整\n")))?
         }
     } else {
         get_history(base_url, None).await?
@@ -59,6 +59,7 @@ pub async fn today(bot: Bot, msg: Message) -> Result<(), Box<dyn Error + Send + 
     let text = get_today(&msg).await.unwrap_or_else(|e| format!("{e}"));
     bot.send_message(msg.chat.id, text)
         .parse_mode(ParseMode::MarkdownV2)
+        .disable_web_page_preview(true)
         .reply_to_message_id(msg.id)
         .await?;
     Ok(())
