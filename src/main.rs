@@ -4,8 +4,9 @@ use std::error::Error;
 use std::fs::File;
 use std::io::read_to_string;
 use teloxide::{prelude::*, types::Me, update_listeners::webhooks, utils::command::BotCommands};
-mod funcs;
+
 mod dao;
+mod funcs;
 
 #[derive(BotCommands)]
 #[command(
@@ -33,8 +34,10 @@ enum Cmd {
     Wiki,
     #[command(description = "生成短链接")]
     Short,
+    #[command(description = "查询实时汇率")]
+    Rate,
     #[command(description = "测试")]
-    Test
+    Test,
 }
 
 #[tokio::main]
@@ -97,11 +100,12 @@ async fn message_handler(
             Ok(Cmd::Today) => today::today(bot, msg).await?,
             Ok(Cmd::Wiki) => wiki::wiki(bot, msg).await?,
             Ok(Cmd::Short) => short::short(bot, msg).await?,
+            Ok(Cmd::Rate) => rate::rate(bot, msg).await?,
             Ok(Cmd::Test) => test::test(bot, msg).await?,
             Err(_) => {
                 if !text.starts_with("/") {
                     fix::fix(&bot, &msg).await?;
-                    six::six(bot, msg).await?
+                    six::six(bot, msg).await?;
                 }
             }
         }

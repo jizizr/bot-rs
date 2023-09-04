@@ -6,6 +6,7 @@ use thiserror::Error;
 pub mod coin;
 pub mod id;
 pub mod quote;
+pub mod rate;
 pub mod short;
 pub mod start;
 pub mod test;
@@ -27,7 +28,7 @@ macro_rules! error_fmt {
         }
         #[allow(dead_code)]
         #[derive(Error, Debug)]
-        pub enum AppError {
+        enum AppError {
             #[error("API请求失败: {0}")]
             RequestError(#[from] reqwest::Error),
             #[error("{}",clap_fmt(.0))]
