@@ -1,15 +1,16 @@
 use super::*;
+use crate::error_fmt;
+use clap::{CommandFactory, Parser};
 use thiserror::Error;
+
 pub mod coin;
 pub mod id;
 pub mod quote;
 pub mod short;
 pub mod start;
+pub mod test;
 pub mod today;
 pub mod wiki;
-pub mod test;
-use crate::error_fmt;
-use clap::{CommandFactory, Parser};
 
 #[macro_export]
 macro_rules! error_fmt {

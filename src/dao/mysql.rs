@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 use mysql_async::{prelude::Queryable, *};
+use crate::exec;
+
 pub mod wordcloud;
 
 pub struct ConnBuf {
