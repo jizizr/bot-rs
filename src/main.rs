@@ -20,12 +20,8 @@ enum Cmd {
     Start,
     #[command(description = "名人名言")]
     My,
-    #[command(description = "实时BTC兑换USDT价格")]
-    Btc,
-    #[command(description = "实时XMR兑换USDT价格")]
-    Xmr,
-    #[command(description = "实时ETH兑换USDT价格")]
-    Eth,
+    #[command(description = "获取实时虚拟货币价格")]
+    Coin,
     #[command(description = "获取自己的id")]
     Id,
     #[command(description = "历史上的今天")]
@@ -51,12 +47,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     let handler = dptree::entry()
         .branch(Update::filter_message().endpoint(message_handler))
-        .branch(Update::filter_edited_message().endpoint(message_handler));
+        .branch(Update::filter_edited_message().endpoint(message_handler))
+        .branch(Update::filter_callback_query().endpoint(coin::coin_callback))
+        .branch(Update::filter_inline_query().endpoint(coin::inline_query_handler));
 
     let mut dispatcher = Dispatcher::builder(bot.clone(), handler)
         .enable_ctrlc_handler()
         .distribution_function(|_| None::<std::convert::Infallible>)
         .build();
+
     if mode == "r" {
         let addr = ([127, 0, 0, 1], 12345).into();
         let url =
@@ -93,9 +92,7 @@ async fn message_handler(
             }
             Ok(Cmd::Start) => start::start(bot, msg).await?,
             Ok(Cmd::My) => quote::quote(bot, msg).await?,
-            Ok(Cmd::Btc) => coin::btc(bot, msg).await?,
-            Ok(Cmd::Xmr) => coin::xmr(bot, msg).await?,
-            Ok(Cmd::Eth) => coin::eth(bot, msg).await?,
+            Ok(Cmd::Coin) => coin::coin(bot, msg).await?,
             Ok(Cmd::Id) => id::id(bot, msg).await?,
             Ok(Cmd::Today) => today::today(bot, msg).await?,
             Ok(Cmd::Wiki) => wiki::wiki(bot, msg).await?,
@@ -109,6 +106,8 @@ async fn message_handler(
                 }
             }
         }
+    } else {
+        println!("{:#?}", msg);
     }
     Ok(())
 }

@@ -1,47 +1,128 @@
 use super::*;
+use bot_rs::load_json;
+use cached::proc_macro::cached;
+use chrono::prelude::*;
+use std::collections::HashSet;
+use teloxide::types::{
+    InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResult, InlineQueryResultArticle,
+    InputMessageContent, InputMessageContentText,
+};
+
+lazy_static! {
+    static ref COIN_TYPES: [&'static str; 3] = ["BTC", "XMR", "ETH"];
+    static ref COINS_SET: HashSet<String> = HashSet::from_iter(
+        load_json::<Vec<String>>("./data/supported_coin_types.json").into_iter()
+    );
+}
 
 #[derive(Deserialize)]
 struct Coin {
     price: String,
 }
 
-async fn coin(coin_type: &str) -> Result<f32, reqwest::Error> {
-    // tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    let price: Result<Coin, reqwest::Error> = get(&format!(
+#[cached(time = 10, result = true)]
+async fn coin_price(coin_type: String) -> Result<f64, reqwest::Error> {
+    let price: Coin = get(&format!(
         "https://api.binance.com/api/v3/ticker/price?symbol={}USDT",
         coin_type
     ))
-    .await;
-    price.map(|x| x.price.parse().unwrap())
+    .await?;
+    Ok(price.price.parse().unwrap())
 }
 
 async fn coin_handle(coin_type: &str) -> String {
-    match coin(coin_type).await {
-        Ok(price) => format!("1.0 {coin_type} = {price} USDT"),
+    match coin_price(coin_type.to_string()).await {
+        Ok(price) => format!(
+            "1.0 {coin_type} = {price} USDT\n最后更新于：{}",
+            Local::now().format("%Y-%m-%d %H:%M:%S%.3f")
+        ),
         Err(_) => "Api 请求异常".to_string(),
-        // Err(e) => format!("{e}"),
     }
 }
 
-macro_rules! generate_crypto_fn {
-    ($coin_type:ident) => {
-        pub async fn $coin_type(
-            bot: Bot,
-            msg: Message,
-        ) -> Result<(), Box<dyn Error + Send + Sync>> {
-            bot.send_message(
-                msg.chat.id,
-                coin_handle(&stringify!($coin_type).to_uppercase())
-                    .await
-                    .as_str(),
-            )
-            .reply_to_message_id(msg.id)
-            .await?;
-            Ok(())
-        }
-    };
+fn popular_coins_menu() -> InlineKeyboardMarkup {
+    let mut keyboard: Vec<Vec<InlineKeyboardButton>> = vec![vec![]; (COIN_TYPES.len() - 1) / 3 + 2];
+
+    for (i, coins) in COIN_TYPES.chunks(3).enumerate() {
+        let row = coins
+            .iter()
+            .map(|&coin_type| InlineKeyboardButton::callback(coin_type, coin_type))
+            .collect();
+        keyboard[i] = row
+    }
+    keyboard.push(vec![
+        InlineKeyboardButton::switch_inline_query_current_chat("其他货币", ""),
+    ]);
+    InlineKeyboardMarkup::new(keyboard)
 }
 
-generate_crypto_fn!(btc);
-generate_crypto_fn!(eth);
-generate_crypto_fn!(xmr);
+fn function_menu(coin_type: &str) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new([[
+        InlineKeyboardButton::callback("刷新🔁", coin_type),
+        InlineKeyboardButton::switch_inline_query_current_chat("其他货币", ""),
+    ]])
+}
+
+pub async fn coin(bot: Bot, msg: Message) -> Result<(), Box<dyn Error + Send + Sync>> {
+    bot.send_message(msg.chat.id, "选择您要查询的虚拟货币")
+        .reply_markup(popular_coins_menu())
+        .await?;
+    Ok(())
+}
+
+pub async fn coin_callback(bot: Bot, q: CallbackQuery) -> Result<(), Box<dyn Error + Send + Sync>> {
+    if let Some(coin_type) = q.data {
+        let text = coin_handle(&coin_type.to_uppercase()).await;
+        bot.answer_callback_query(q.id).await?;
+
+        if let Some(msg) = q.message {
+            bot.edit_message_text(msg.chat.id, msg.id, text)
+                .reply_markup(function_menu(&coin_type))
+                .await?;
+        } else if let Some(id) = q.inline_message_id {
+            println!("{:#?}",q.message);
+            bot.edit_message_text_inline(id, text)
+                .reply_markup(function_menu(&coin_type))
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn inline_coin_handle(coin_type: &str) -> String {
+    if coin_type == "" {
+        return "以下是热门虚拟货币查询\n如果不在下面的列表中，请点击\"其他\"并输入想要查找货币查询".to_string();
+    } else if !COINS_SET.contains(coin_type) {
+        return "不支持的虚拟货币".to_string();
+    }
+    coin_handle(coin_type).await
+}
+
+fn inline_keyboard(coin_type: &str) -> InlineKeyboardMarkup {
+    if !COINS_SET.contains(coin_type) {
+        return popular_coins_menu();
+    } else {
+        return function_menu(coin_type);
+    }
+}
+
+pub async fn inline_query_handler(
+    bot: Bot,
+    q: InlineQuery,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let coins_query = InlineQueryResultArticle::new(
+        "01".to_string(),
+        "查询虚拟货币实时价格".to_string(),
+        InputMessageContent::Text(InputMessageContentText::new(
+            inline_coin_handle(&q.query.to_uppercase()).await,
+        )),
+    )
+    .reply_markup(inline_keyboard(&q.query.to_uppercase()));
+    let results = vec![InlineQueryResult::Article(coins_query)];
+    let response = bot.answer_inline_query(&q.id, results).send().await;
+    if let Err(err) = response {
+        log::error!("Error in handler: {:?}", err);
+    }
+    Ok(respond(())?)
+}
