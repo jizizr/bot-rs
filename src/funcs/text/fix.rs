@@ -19,6 +19,7 @@ macro_rules! hashmaps {
         }
     };
 }
+
 lazy_static! {
     static ref FIX_MAP: HashMap<char, char> = hashmaps![
         ')' => '(',
