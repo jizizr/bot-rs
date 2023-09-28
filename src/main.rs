@@ -1,4 +1,5 @@
 use bot_rs::getor;
+use filter::call_query::*;
 use funcs::{command::*, text::*};
 use std::error::Error;
 use std::fs::File;
@@ -6,6 +7,7 @@ use std::io::read_to_string;
 use teloxide::{prelude::*, types::Me, update_listeners::webhooks, utils::command::BotCommands};
 
 mod dao;
+mod filter;
 mod funcs;
 
 #[derive(BotCommands)]
@@ -48,7 +50,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let handler = dptree::entry()
         .branch(Update::filter_message().endpoint(message_handler))
         .branch(Update::filter_edited_message().endpoint(message_handler))
-        .branch(Update::filter_callback_query().endpoint(coin::coin_callback))
+        .branch(Update::filter_callback_query().endpoint(call_query_handler))
         .branch(Update::filter_inline_query().endpoint(coin::inline_query_handler));
 
     let mut dispatcher = Dispatcher::builder(bot.clone(), handler)

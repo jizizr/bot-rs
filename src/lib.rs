@@ -1,6 +1,7 @@
 use serde::de::DeserializeOwned;
 use std::{fs::File, io::Read};
 use teloxide::prelude::*;
+
 pub fn getor(msg: &Message) -> Option<&str> {
     msg.text().or(msg.caption())
 }

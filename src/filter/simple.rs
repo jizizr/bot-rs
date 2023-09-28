@@ -1,4 +1,8 @@
 use super::*;
+use bot_rs::getor;
+trait MessageFilter {
+    fn check_filter(&self, m: &Message) -> bool;
+}
 
 #[derive(Clone)]
 pub struct Contain<'a>(&'a str);
@@ -11,7 +15,7 @@ impl Contain<'_> {
 
 impl MessageFilter for Contain<'_> {
     fn check_filter(&self, m: &Message) -> bool {
-        m.text.as_ref().map(|t| t.contains(self.0)).unwrap_or(false)
+        getor(m).map(|t| t.contains(self.0)).unwrap_or(false)
     }
 }
 
@@ -26,6 +30,6 @@ impl Equal {
 
 impl MessageFilter for Equal {
     fn check_filter(&self, m: &Message) -> bool {
-        m.text.as_ref().map(|t| *t == self.0).unwrap_or(false)
+        getor(m).map(|t| *t == self.0).unwrap_or(false)
     }
 }

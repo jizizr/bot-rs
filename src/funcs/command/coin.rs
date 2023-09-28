@@ -7,7 +7,7 @@ use teloxide::types::{
     InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResult, InlineQueryResultArticle,
     InputMessageContent, InputMessageContentText,
 };
-
+use tokio::time::{sleep, Duration};
 lazy_static! {
     static ref COIN_TYPES: [&'static str; 3] = ["BTC", "XMR", "ETH"];
     static ref COINS_SET: HashSet<String> = HashSet::from_iter(
@@ -46,7 +46,9 @@ fn popular_coins_menu() -> InlineKeyboardMarkup {
     for (i, coins) in COIN_TYPES.chunks(3).enumerate() {
         let row = coins
             .iter()
-            .map(|&coin_type| InlineKeyboardButton::callback(coin_type, coin_type))
+            .map(|&coin_type| {
+                InlineKeyboardButton::callback(coin_type, format!("coin {}", coin_type))
+            })
             .collect();
         keyboard[i] = row
     }
@@ -58,7 +60,7 @@ fn popular_coins_menu() -> InlineKeyboardMarkup {
 
 fn function_menu(coin_type: &str) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new([[
-        InlineKeyboardButton::callback("刷新🔁", coin_type),
+        InlineKeyboardButton::callback("刷新🔁", format!("coin {}", coin_type)),
         InlineKeyboardButton::switch_inline_query_current_chat("其他货币", ""),
     ]])
 }
@@ -71,6 +73,7 @@ pub async fn coin(bot: Bot, msg: Message) -> Result<(), Box<dyn Error + Send + S
 }
 
 pub async fn coin_callback(bot: Bot, q: CallbackQuery) -> Result<(), Box<dyn Error + Send + Sync>> {
+    sleep(Duration::from_secs(2)).await;
     if let Some(coin_type) = q.data {
         let text = coin_handle(&coin_type.to_uppercase()).await;
         bot.answer_callback_query(q.id).await?;
@@ -80,7 +83,6 @@ pub async fn coin_callback(bot: Bot, q: CallbackQuery) -> Result<(), Box<dyn Err
                 .reply_markup(function_menu(&coin_type))
                 .await?;
         } else if let Some(id) = q.inline_message_id {
-            println!("{:#?}",q.message);
             bot.edit_message_text_inline(id, text)
                 .reply_markup(function_menu(&coin_type))
                 .await?;
