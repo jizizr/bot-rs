@@ -104,7 +104,8 @@ async fn message_handler(
             Err(_) => {
                 if !text.starts_with("/") {
                     fix::fix(&bot, &msg).await?;
-                    six::six(bot, msg).await?;
+                    six::six(&bot, &msg).await?;
+                    repeat::repeat(bot, msg).await?;
                 }
             }
         }
