@@ -11,6 +11,7 @@ pub mod short;
 pub mod start;
 pub mod test;
 pub mod today;
+pub mod wcloud;
 pub mod wiki;
 
 #[macro_export]

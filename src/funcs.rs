@@ -4,4 +4,5 @@ use serde::Deserialize;
 use std::error::Error;
 use teloxide::{prelude::*, types::ParseMode, utils::markdown};
 pub mod command;
+pub mod pkg;
 pub mod text;

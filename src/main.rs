@@ -34,6 +34,8 @@ enum Cmd {
     Short,
     #[command(description = "查询实时汇率")]
     Rate,
+    #[command(description = "生成词云")]
+    Wcloud,
     #[command(description = "测试")]
     Test,
 }
@@ -100,12 +102,14 @@ async fn message_handler(
             Ok(Cmd::Wiki) => wiki::wiki(bot, msg).await?,
             Ok(Cmd::Short) => short::short(bot, msg).await?,
             Ok(Cmd::Rate) => rate::rate(bot, msg).await?,
+            Ok(Cmd::Wcloud) => wcloud::wcloud(bot, msg).await?,
             Ok(Cmd::Test) => test::test(bot, msg).await?,
             Err(_) => {
                 if !text.starts_with("/") {
                     fix::fix(&bot, &msg).await?;
                     six::six(&bot, &msg).await?;
-                    repeat::repeat(bot, msg).await?;
+                    repeat::repeat(&bot, &msg).await?;
+                    pretext::pretext(&bot, &msg).await?;
                 }
             }
         }

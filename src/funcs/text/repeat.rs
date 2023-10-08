@@ -80,7 +80,7 @@ fn search(mc: &mut FixedQueue<MessageConfig>, msg: &MessageConfig) -> bool {
     false
 }
 
-pub async fn repeat(bot: Bot, msg: Message) -> Result<(), Box<dyn Error + Send + Sync>> {
+pub async fn repeat(bot: &Bot, msg: &Message) -> Result<(), Box<dyn Error + Send + Sync>> {
     let m: String = match getor(&msg) {
         Some(m) => m.to_string(),
         None => match msg.sticker() {

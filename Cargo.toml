@@ -22,6 +22,13 @@ fast_qr = { version = "0.10.0", features = ["image"] }
 mysql_async = "0.32.2"
 async-trait = "0.1.73"
 scraper = "0.17.1"
-cached = {version = "0.46.0",features = ["async"]}
+cached = { version = "0.46.0", features = ["async"] }
 chrono = "0.4.29"
 dashmap = "5.5.3"
+image = "0.24.7"
+jieba-rs = "0.6.8"
+futures = "0.3.28"
+
+[dependencies.pyo3]
+version = "0.19.2"
+features = ["auto-initialize"]
