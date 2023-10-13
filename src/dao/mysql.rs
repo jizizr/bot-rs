@@ -59,7 +59,7 @@ macro_rules! exec {
         let _ = ConnBuf{
             conn: $conn,
             buffer: $query,
-        }.run().await.unwrap();
+        }.run().await;
     };
     // Handle the case where both query string and replacements are provided
     ($conn:expr, $query:expr, [$($replacement:expr),*]) => {

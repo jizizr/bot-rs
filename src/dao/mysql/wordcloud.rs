@@ -12,7 +12,7 @@ pub struct Word {
 }
 
 const CREATE_TABLE: &str = "
-CREATE TABLE `{}` (
+CREATE TABLE `WORD_{}` (
     word VARCHAR(255) PRIMARY KEY NOT NULL,
     frequency INT NOT NULL
 );
@@ -32,8 +32,23 @@ pub fn add_word(conn: &mut ConnBufBuilder, w: &str) {
 
 pub async fn get_words(pool: &Pool, table_name: &str) -> Result<Vec<Word>> {
     let mut conn = pool.get_conn().await?;
-    let query = format!("SELECT word, frequency FROM `{}`", table_name);
-    let words = conn.query_map(query, |(word, frequency)| Word { word, frequency }).await?;
+    let query = format!("SELECT word, frequency FROM `WORD_{}`", table_name);
+    let words = conn
+        .query_map(query, |(word, frequency)| Word { word, frequency })
+        .await
+        .unwrap_or(vec![]);
     drop(conn);
     Ok(words)
+}
+
+pub async fn active_group() -> Vec<String> {
+    WORD_POOL
+        .get_conn()
+        .await
+        .unwrap()
+        .query_map("SHOW TABLES", |table_name: String| {
+            table_name[5..].to_string()
+        })
+        .await
+        .unwrap_or(vec![])
 }

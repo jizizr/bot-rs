@@ -66,7 +66,7 @@ pub async fn fix(bot: &Bot, msg: &Message) -> Result<(), Box<dyn Error + Send + 
         }
     }
     let t: String = buffer.chars().filter(|&c| c != '\0').collect();
-    if !t.is_empty() {
+    if !t.trim_end().is_empty() {
         bot.send_message(msg.chat.id, t)
             .reply_to_message_id(msg.id)
             .send()
