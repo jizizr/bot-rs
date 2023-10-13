@@ -1,9 +1,12 @@
 use bot_rs::getor;
+use bot_rs::BOT;
+use chrono::Local;
 use filter::call_query::*;
-use funcs::{command::*, text::*};
+use funcs::{command::*, pkg, text::*};
 use std::error::Error;
 use std::fs::File;
 use std::io::read_to_string;
+use std::str::FromStr;
 use teloxide::{prelude::*, types::Me, update_listeners::webhooks, utils::command::BotCommands};
 
 mod dao;
@@ -42,20 +45,30 @@ enum Cmd {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    tokio::task::spawn(async {
+        let schedule = cron::Schedule::from_str("0 0 10,14,18,22 * * ?").unwrap();
+        loop {
+            let now = Local::now();
+            let next = schedule.upcoming(Local).next().unwrap();
+            let wait_time = next.signed_duration_since(now).to_std().unwrap();
+            tokio::time::sleep(wait_time).await;
+            if let Err(err) = pkg::wcloud::cron::wcloud().await {
+                for e in err {
+                    log::error!("词云生成失败：{}", e);
+                }
+            }
+        }
+    });
     let mode = std::env::var("MODE").unwrap_or_default();
     pretty_env_logger::init();
     log::info!("Starting buttons bot...");
-
-    let bot = Bot::new(
-        read_to_string(File::open("TOKEN").expect("TOKEN文件打开失败")).expect("TOKEN文件读取失败"),
-    );
     let handler = dptree::entry()
         .branch(Update::filter_message().endpoint(message_handler))
         .branch(Update::filter_edited_message().endpoint(message_handler))
         .branch(Update::filter_callback_query().endpoint(call_query_handler))
         .branch(Update::filter_inline_query().endpoint(coin::inline_query_handler));
 
-    let mut dispatcher = Dispatcher::builder(bot.clone(), handler)
+    let mut dispatcher = Dispatcher::builder(BOT.clone(), handler)
         .enable_ctrlc_handler()
         .distribution_function(|_| None::<std::convert::Infallible>)
         .build();
@@ -65,7 +78,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let url =
             read_to_string(File::open("URL").expect("URL文件打开失败")).expect("URL文件读取失败");
         let url = url.parse().unwrap();
-        let listener = webhooks::axum(bot, webhooks::Options::new(addr, url))
+        let listener = webhooks::axum(BOT.clone(), webhooks::Options::new(addr, url))
             .await
             .expect("Couldn't setup webhook");
         dispatcher

@@ -19,10 +19,16 @@ impl ConnBufBuilder {
         self.buffer.push_str(&sql)
     }
 
-    pub async fn run(&mut self){
-        let _ = self.conn.clone().lock().await.query_drop(&self.buffer).await;
+    pub async fn run(&mut self) {
+        let _ = self
+            .conn
+            .clone()
+            .lock()
+            .await
+            .query_drop(&self.buffer)
+            .await;
     }
-    
+
     pub fn build(&mut self) -> ConnBuf {
         self.buffer.pop();
         self.buffer = format!("{}{}{}", self.begin, self.buffer, self.end);

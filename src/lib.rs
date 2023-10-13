@@ -1,6 +1,15 @@
+use lazy_static::lazy_static;
 use serde::de::DeserializeOwned;
 use std::{fs::File, io::Read};
 use teloxide::prelude::*;
+use teloxide::Bot;
+
+lazy_static! {
+    pub static ref BOT: Bot = Bot::new(
+        std::io::read_to_string(File::open("TOKEN").expect("TOKEN文件打开失败"))
+            .expect("TOKEN文件读取失败"),
+    );
+}
 
 pub fn getor(msg: &Message) -> Option<&str> {
     msg.text().or(msg.caption())

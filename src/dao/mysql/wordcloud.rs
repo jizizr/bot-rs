@@ -41,14 +41,13 @@ pub async fn get_words(pool: &Pool, table_name: &str) -> Result<Vec<Word>> {
     Ok(words)
 }
 
-pub async fn active_group() -> Vec<String> {
-    WORD_POOL
+pub async fn active_group() -> std::result::Result<Vec<String>, mysql_async::Error> {
+    Ok(WORD_POOL
         .get_conn()
-        .await
-        .unwrap()
+        .await?
         .query_map("SHOW TABLES", |table_name: String| {
             table_name[5..].to_string()
         })
         .await
-        .unwrap_or(vec![])
+        .unwrap_or(vec![]))
 }
