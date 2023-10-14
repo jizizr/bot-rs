@@ -8,6 +8,7 @@ trait MessageFilter {
 pub struct Contain<'a>(&'a str);
 
 impl Contain<'_> {
+    #[allow(dead_code)]
     pub fn new<'a>(text: &'a str) -> Box<Contain<'a>> {
         Box::new(Contain(text))
     }
@@ -23,6 +24,7 @@ impl MessageFilter for Contain<'_> {
 pub struct Equal(String);
 
 impl Equal {
+    #[allow(dead_code)]
     pub fn new<'a>(text: &str) -> Box<Equal> {
         Box::new(Equal(text.to_string()))
     }

@@ -1,13 +1,11 @@
-use bot_rs::getor;
 use bot_rs::BOT;
-use chrono::Local;
 use filter::call_query::*;
-use funcs::{command::*, pkg, text::*};
+use funcs::message_handler;
+use funcs::{command::*, pkg, pkg::cron::cron};
 use std::error::Error;
 use std::fs::File;
 use std::io::read_to_string;
-use std::str::FromStr;
-use teloxide::{prelude::*, types::Me, update_listeners::webhooks, utils::command::BotCommands};
+use teloxide::{prelude::*, update_listeners::webhooks, utils::command::BotCommands};
 
 mod dao;
 mod filter;
@@ -45,23 +43,9 @@ enum Cmd {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    tokio::task::spawn(async {
-        let schedule = cron::Schedule::from_str("0 0 10,14,18,22 * * ?").unwrap();
-        loop {
-            let now = Local::now();
-            let next = schedule.upcoming(Local).next().unwrap();
-            let wait_time = next.signed_duration_since(now).to_std().unwrap();
-            tokio::time::sleep(wait_time).await;
-            if let Err(err) = pkg::wcloud::cron::wcloud().await {
-                for e in err {
-                    log::error!("词云生成失败：{}", e);
-                }
-            }
-        }
-    });
-    let mode = std::env::var("MODE").unwrap_or_default();
     pretty_env_logger::init();
     log::info!("Starting buttons bot...");
+
     let handler = dptree::entry()
         .branch(Update::filter_message().endpoint(message_handler))
         .branch(Update::filter_edited_message().endpoint(message_handler))
@@ -72,6 +56,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .enable_ctrlc_handler()
         .distribution_function(|_| None::<std::convert::Infallible>)
         .build();
+
+    cron::run("0 0 10,14,18,22 * * ?", pkg::wcloud::cron::wcloud).await;
+
+    let mode = std::env::var("MODE").unwrap_or_default();
 
     if mode == "r" {
         let addr = ([127, 0, 0, 1], 12345).into();
@@ -92,42 +80,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             _ = dispatcher.dispatch() => (),
             _ = tokio::signal::ctrl_c() => (),
         }
-    }
-    Ok(())
-}
-
-async fn message_handler(
-    bot: Bot,
-    msg: Message,
-    me: Me,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    if let Some(text) = getor(&msg) {
-        match BotCommands::parse(text, me.username()) {
-            Ok(Cmd::Help) => {
-                bot.send_message(msg.chat.id, Cmd::descriptions().to_string())
-                    .await?;
-            }
-            Ok(Cmd::Start) => start::start(bot, msg).await?,
-            Ok(Cmd::My) => quote::quote(bot, msg).await?,
-            Ok(Cmd::Coin) => coin::coin(bot, msg).await?,
-            Ok(Cmd::Id) => id::id(bot, msg).await?,
-            Ok(Cmd::Today) => today::today(bot, msg).await?,
-            Ok(Cmd::Wiki) => wiki::wiki(bot, msg).await?,
-            Ok(Cmd::Short) => short::short(bot, msg).await?,
-            Ok(Cmd::Rate) => rate::rate(bot, msg).await?,
-            Ok(Cmd::Wcloud) => wcloud::wcloud(bot, msg).await?,
-            Ok(Cmd::Test) => test::test(bot, msg).await?,
-            Err(_) => {
-                if !text.starts_with("/") {
-                    fix::fix(&bot, &msg).await?;
-                    six::six(&bot, &msg).await?;
-                    repeat::repeat(&bot, &msg).await?;
-                    pretext::pretext(&bot, &msg).await?;
-                }
-            }
-        }
-    } else {
-        println!("{:#?}", msg);
     }
     Ok(())
 }
