@@ -64,7 +64,7 @@ async fn get_wiki(msg: &Message) -> Result<String, AppError> {
     ))
 }
 
-pub async fn wiki(bot: Bot, msg: Message) -> Result<(), Box<dyn Error + Send + Sync>> {
+pub async fn wiki(bot: Bot, msg: Message) -> Result<(), BotError> {
     let text = match get_wiki(&msg).await {
         Ok(msg) => msg,
         Err(e) => markdown::escape(&format!("{e}")),

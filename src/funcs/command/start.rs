@@ -1,6 +1,6 @@
 use super::*;
 
-pub async fn start(bot: Bot, msg: Message) -> Result<(), Box<dyn Error + Send + Sync>> {
+pub async fn start(bot: Bot, msg: Message) -> Result<(), BotError> {
     bot.send_message(msg.chat.id,
         "你好！我是Allen，使用 [teloxide](https://github.com/teloxide/teloxide) Telegram Bot API 包装器和 \
     [Rust](https://www.rust\\-lang\\.org/) 编程语言书写。开源地址：https://github\\.com/jizizr/bot\\-rs 。\n发送 */help* 了解我的指令！")

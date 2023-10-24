@@ -4,7 +4,10 @@ use pkg::jieba::cut::text_cut;
 
 const WCLOUD_END: &str = " ON DUPLICATE KEY UPDATE frequency = frequency + 1;";
 
-pub async fn pretext(_bot: &Bot, msg: &Message) -> Result<(), Box<dyn Error + Send + Sync>> {
+pub async fn pretext(_bot: &Bot, msg: &Message) -> Result<(), BotError> {
+    if msg.edit_date().is_some() {
+        return Ok(());
+    }
     let mut conn = WORD_POOL
         .get_conn_buf(
             &format!(

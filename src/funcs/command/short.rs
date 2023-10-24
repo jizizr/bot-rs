@@ -34,7 +34,7 @@ struct Short {
     shorturl: String,
 }
 
-fn fix_start(u: String) -> String {
+pub fn fix_start(u: String) -> String {
     let url = u.trim().to_string();
     if url.starts_with("http://") || url.starts_with("https://") {
         return url;
@@ -98,7 +98,7 @@ fn url2qr(url: &str) -> Vec<u8> {
         .unwrap()
 }
 
-pub async fn short(bot: Bot, msg: Message) -> Result<(), Box<dyn Error + Send + Sync>> {
+pub async fn short(bot: Bot, msg: Message) -> Result<(), BotError> {
     match get_short(&msg).await {
         Ok(url) => {
             bot.send_photo(msg.chat.id, InputFile::memory(url2qr(&url)))

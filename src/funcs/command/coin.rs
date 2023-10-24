@@ -7,7 +7,7 @@ use teloxide::types::{
     InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResult, InlineQueryResultArticle,
     InputMessageContent, InputMessageContentText,
 };
-use tokio::time::{sleep, Duration};
+
 lazy_static! {
     static ref COIN_TYPES: [&'static str; 3] = ["BTC", "XMR", "ETH"];
     static ref COINS_SET: HashSet<String> = HashSet::from_iter(
@@ -60,29 +60,41 @@ fn popular_coins_menu() -> InlineKeyboardMarkup {
 
 fn function_menu(coin_type: &str) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new([[
+        InlineKeyboardButton::callback("返回🔙", format!("coin back")),
         InlineKeyboardButton::callback("刷新🔁", format!("coin {}", coin_type)),
         InlineKeyboardButton::switch_inline_query_current_chat("其他货币", ""),
     ]])
 }
 
-pub async fn coin(bot: Bot, msg: Message) -> Result<(), Box<dyn Error + Send + Sync>> {
+pub async fn coin(bot: Bot, msg: Message) -> Result<(), BotError> {
     bot.send_message(msg.chat.id, "选择您要查询的虚拟货币")
         .reply_markup(popular_coins_menu())
         .await?;
     Ok(())
 }
 
-pub async fn coin_callback(bot: Bot, q: CallbackQuery) -> Result<(), Box<dyn Error + Send + Sync>> {
-    sleep(Duration::from_secs(2)).await;
+pub async fn coin_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> {
     if let Some(coin_type) = q.data {
         let text = coin_handle(&coin_type.to_uppercase()).await;
         bot.answer_callback_query(q.id).await?;
-
         if let Some(msg) = q.message {
+            if coin_type == "back" {
+                bot.edit_message_text(msg.chat.id, msg.id, "选择您要查询的虚拟货币")
+                    .reply_markup(popular_coins_menu())
+                    .await?;
+                return Ok(());
+            }
             bot.edit_message_text(msg.chat.id, msg.id, text)
                 .reply_markup(function_menu(&coin_type))
                 .await?;
         } else if let Some(id) = q.inline_message_id {
+            if coin_type == "back" {
+                let _ = bot
+                    .edit_message_text_inline(id, "选择您要查询的虚拟货币")
+                    .reply_markup(popular_coins_menu())
+                    .await;
+                return Ok(());
+            }
             bot.edit_message_text_inline(id, text)
                 .reply_markup(function_menu(&coin_type))
                 .await?;
@@ -109,10 +121,7 @@ fn inline_keyboard(coin_type: &str) -> InlineKeyboardMarkup {
     }
 }
 
-pub async fn inline_query_handler(
-    bot: Bot,
-    q: InlineQuery,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+pub async fn inline_query_handler(bot: Bot, q: InlineQuery) -> Result<(), BotError> {
     let coins_query = InlineQueryResultArticle::new(
         "01".to_string(),
         "查询虚拟货币实时价格".to_string(),
