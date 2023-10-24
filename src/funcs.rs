@@ -14,6 +14,8 @@ pub mod command;
 pub mod pkg;
 pub mod text;
 
+type BotError = Box<dyn Error + Send + Sync>;
+
 #[derive(BotCommands)]
 #[command(
     rename_rule = "lowercase",
@@ -40,15 +42,13 @@ enum Cmd {
     Rate,
     #[command(description = "生成词云")]
     Wcloud,
+    #[command(description = "curl")]
+    Curl,
     #[command(description = "测试")]
     Test,
 }
 
-pub async fn message_handler(
-    bot: Bot,
-    msg: Message,
-    me: Me,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+pub async fn message_handler(bot: Bot, msg: Message, me: Me) -> Result<(), BotError> {
     if let Some(text) = getor(&msg) {
         match BotCommands::parse(text, me.username()) {
             Ok(Cmd::Help) => {
@@ -64,6 +64,7 @@ pub async fn message_handler(
             Ok(Cmd::Short) => short::short(bot, msg).await?,
             Ok(Cmd::Rate) => rate::rate(bot, msg).await?,
             Ok(Cmd::Wcloud) => wcloud::wcloud(bot, msg).await?,
+            Ok(Cmd::Curl) => curl::curl(bot, msg).await?,
             Ok(Cmd::Test) => test::test(bot, msg).await?,
             Err(_) => {
                 if !text.starts_with("/") {

@@ -4,6 +4,7 @@ use clap::{CommandFactory, Parser};
 use thiserror::Error;
 
 pub mod coin;
+pub mod curl;
 pub mod id;
 pub mod quote;
 pub mod rate;
