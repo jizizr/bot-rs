@@ -1,16 +1,16 @@
 use super::*;
-use native_tls::TlsConnector;
 use regex::Regex;
 use reqwest::{Client, Response, Version};
 use scraper::{Html, Selector};
-use std::net::TcpStream;
+use tokio::net::TcpStream;
+use tokio_native_tls::{native_tls, TlsConnector};
 use x509_parser::parse_x509_certificate;
 
 lazy_static! {
     static ref USAGE: String = CurlCmd::command().render_help().to_string();
     static ref CLIENT: Client = Client::new();
     static ref MATCH: Regex = Regex::new(r#"(\s|^|https?://)(([^:\./\s]+\.)+[^\d\./:\s\\"]{2,}|((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?))(:\d{1,5})?(/\S*)*(\s|$)"#).unwrap();
-    static ref CONNECTOR:TlsConnector = native_tls::TlsConnector::new().unwrap();
+    static ref CONNECTOR:TlsConnector = TlsConnector::from(native_tls::TlsConnector::new().unwrap());
 }
 
 #[derive(Parser)]
@@ -25,6 +25,22 @@ struct CurlCmd {
     ///网址
     #[arg(value_parser = fixer)]
     url: String,
+}
+
+#[derive(Deserialize)]
+struct Ip {
+    continent: Option<String>,
+    country: Option<String>,
+    region: Option<String>,
+    city: Option<String>,
+    connection: Option<ASN>,
+    message: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ASN {
+    asn: i32,
+    isp: String,
 }
 
 fn fixer(url: &str) -> Result<String, String> {
@@ -66,15 +82,54 @@ fn get_http_version(resq: &Response) -> String {
     .to_string()
 }
 
+async fn get_ip_info(ip: &str) -> String {
+    let ip_info: Result<Ip, reqwest::Error> = get(&format!("http://ipwho.is/{ip}")).await;
+    match ip_info {
+        Ok(ip) if ip.message.is_some() => {
+            if ip.message.as_ref().unwrap() == "Invalid IP address"
+                || ip.message.unwrap() == "Reserved range"
+            {
+                format!(
+                    "*Location:* {}\n*Announced By:* {}",
+                    "Reserved range", "Reserved range"
+                )
+            } else {
+                "API到达限额".to_string()
+            }
+        }
+        Ok(ip) => format!(
+            "*Location:* {}\n*Announced By:* {}",
+            markdown::escape(&format!(
+                "{} {} {} {}",
+                ip.continent.unwrap_or(String::new()),
+                ip.country.unwrap_or(String::new()),
+                ip.region.unwrap_or(String::new()),
+                ip.city.unwrap_or(String::new())
+            )),
+            markdown::escape(&format!(
+                "AS{} {}",
+                ip.connection.as_ref().unwrap().asn,
+                ip.connection.as_ref().unwrap().isp
+            ))
+        ),
+        Err(e) => {
+            log::error!("{e}");
+            "".to_string()
+        }
+    }
+}
+
 async fn get_ssl(url: &str) -> Result<String, BotError> {
     // 连接到远程服务器
-    let stream = CONNECTOR.connect(url, TcpStream::connect(format!("{url}:443"))?)?;
+    let stream = CONNECTOR
+        .connect(url, TcpStream::connect(format!("{url}:443")).await?)
+        .await?;
 
     // 获取服务器证书
-    let certificate = stream.peer_certificate()?.unwrap();
+    let certificate = stream.get_ref().peer_certificate().unwrap();
 
     // 输出证书的 DER 编码
-    let buffer = certificate.to_der()?.to_vec();
+    let buffer = certificate.unwrap().to_der()?.to_vec();
     let (_, cert) = parse_x509_certificate(&buffer)?;
 
     // 获取证书信息
@@ -119,10 +174,10 @@ async fn get_curl(msg: &Message) -> Result<String, BotError> {
         ));
     });
     let url = resp.url().clone();
-    let ssl = if url.scheme() == "https" {
-        get_ssl(url.host_str().unwrap()).await?
+    let (ssl, ip_info) = if url.scheme() == "https" {
+        tokio::join!(get_ssl(url.host_str().unwrap()), get_ip_info(&ip))
     } else {
-        "".to_string()
+        (Ok("".to_string()), get_ip_info(&ip).await)
     };
     let version = get_http_version(&resp);
     let body = resp.text().await?;
@@ -136,7 +191,8 @@ async fn get_curl(msg: &Message) -> Result<String, BotError> {
     };
     result.push_str(&title);
     result.push_str(&format!(
-        "\n\n▼ *Server Info:*\n{ssl}\n*IP Address:*{ip}\n\n*▼ Headers:\n*{version}\n{header}",
+        "\n\n▼ *Server Info:*\n{}\n*IP Address:*{ip}\n{ip_info}\n\n*▼ Headers:\n*{version}\n{header}",
+        ssl.unwrap_or_else(|e| e.to_string()),
     ));
     Ok(result)
 }

@@ -426,7 +426,6 @@ dependencies = [
  "lazy_static",
  "log",
  "mysql_async",
- "native-tls",
  "pretty_env_logger",
  "pyo3",
  "rand",
@@ -438,6 +437,7 @@ dependencies = [
  "teloxide",
  "thiserror",
  "tokio",
+ "tokio-native-tls",
  "x509-parser",
 ]
 
