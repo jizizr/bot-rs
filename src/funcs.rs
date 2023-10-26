@@ -15,12 +15,14 @@ pub mod pkg;
 pub mod text;
 
 type BotError = Box<dyn Error + Send + Sync>;
+type BotResult = Result<(), BotError>;
 
 #[derive(BotCommands)]
 #[command(
     rename_rule = "lowercase",
     description = "These commands are supported:"
 )]
+
 enum Cmd {
     #[command(description = "获取帮助信息")]
     Help,
@@ -48,7 +50,47 @@ enum Cmd {
     Test,
 }
 
-pub async fn message_handler(bot: Bot, msg: Message, me: Me) -> Result<(), BotError> {
+trait Display {
+    fn fmt(&self) -> Option<String>;
+}
+
+impl Display for BotResult {
+    fn fmt(&self) -> Option<String> {
+        if let Err(e) = self {
+            Some(format!("{}", e))
+        } else {
+            None
+        }
+    }
+}
+
+macro_rules! impl_tuple {
+    ($($idx:tt $t:tt),+) => {
+        impl<$($t,)+> Display for ($($t,)+)
+        where
+            $($t: Display,)+
+        {
+            fn fmt(&self) -> Option<String> {
+                let mut estring = String::new();
+                ($(
+                    match self.$idx.fmt() {
+                        Some(s) => estring.push_str(&s),
+                        None => (),
+                    },
+                )+);
+                if estring.is_empty() {
+                    None
+                } else {
+                    Some(estring)
+                }
+            }
+        }
+    };
+}
+
+impl_tuple!(0 A, 1 B, 2 C, 3 D);
+
+pub async fn message_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
     if let Some(text) = getor(&msg) {
         match BotCommands::parse(text, me.username()) {
             Ok(Cmd::Help) => {
@@ -68,10 +110,15 @@ pub async fn message_handler(bot: Bot, msg: Message, me: Me) -> Result<(), BotEr
             Ok(Cmd::Test) => test::test(bot, msg).await?,
             Err(_) => {
                 if !text.starts_with("/") {
-                    fix::fix(&bot, &msg).await?;
-                    six::six(&bot, &msg).await?;
-                    repeat::repeat(&bot, &msg).await?;
-                    pretext::pretext(&bot, &msg).await?;
+                    let e = tokio::join!(
+                        fix::fix(&bot, &msg),
+                        six::six(&bot, &msg),
+                        repeat::repeat(&bot, &msg),
+                        pretext::pretext(&bot, &msg)
+                    );
+                    if let Some(err) = e.fmt() {
+                        log::error!("{}", err);
+                    }
                 }
             }
         }
