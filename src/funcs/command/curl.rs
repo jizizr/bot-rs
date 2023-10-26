@@ -147,10 +147,8 @@ async fn get_ssl(url: &str) -> Result<String, BotError> {
     ))
 }
 
-async fn get_curl(msg: &Message) -> Result<String, BotError> {
-    let curl = CurlCmd::try_parse_from(getor(&msg).unwrap().split_whitespace())?;
-    let url = curl.url;
-    let resp = CLIENT.get(&url).send().await?.error_for_status();
+async fn get_resp(url: &str) -> Result<Response, BotError> {
+    let resp = CLIENT.get(url).send().await?.error_for_status();
     // 如果请求失败，尝试使用 http 协议请求
     let resp = match resp {
         Ok(res) if res.status().is_success() => res,
@@ -160,7 +158,10 @@ async fn get_curl(msg: &Message) -> Result<String, BotError> {
             .await?
             .error_for_status()?,
     };
-    let ip = markdown::escape(&resp.remote_addr().unwrap().ip().to_string());
+    Ok(resp)
+}
+
+async fn get_header(resp: &Response) -> Result<String, BotError> {
     let mut header = String::new();
     resp.headers().iter().for_each(|(k, v)| {
         let hn = k.as_str();
@@ -173,6 +174,15 @@ async fn get_curl(msg: &Message) -> Result<String, BotError> {
             markdown::escape(v.to_str().unwrap())
         ));
     });
+    Ok(header)
+}
+
+async fn get_curl(msg: &Message) -> Result<String, BotError> {
+    let curl = CurlCmd::try_parse_from(getor(&msg).unwrap().split_whitespace())?;
+    let url = curl.url;
+    let resp = get_resp(&url).await?;
+    let ip = markdown::escape(&resp.remote_addr().unwrap().ip().to_string());
+    let header = get_header(&resp).await?;
     let url = resp.url().clone();
     let (ssl, ip_info) = if url.scheme() == "https" {
         tokio::join!(get_ssl(url.host_str().unwrap()), get_ip_info(&ip))
@@ -197,7 +207,7 @@ async fn get_curl(msg: &Message) -> Result<String, BotError> {
     Ok(result)
 }
 
-pub async fn curl(bot: Bot, msg: Message) -> Result<(), BotError> {
+pub async fn curl(bot: Bot, msg: Message) -> BotResult {
     match get_curl(&msg).await {
         Ok(text) => {
             bot.send_message(msg.chat.id, text)
