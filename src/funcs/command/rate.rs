@@ -56,7 +56,7 @@ async fn get_rate(msg: &Message) -> Result<String, AppError> {
     ))
 }
 
-pub async fn rate(bot: Bot, msg: Message) -> Result<(), BotError> {
+pub async fn rate(bot: Bot, msg: Message) -> BotResult {
     let text = get_rate(&msg)
         .await
         .unwrap_or_else(|e| markdown::escape(&format!("{e}")));

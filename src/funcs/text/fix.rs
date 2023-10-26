@@ -58,7 +58,7 @@ fn extend(buffer: &mut String, new: char, old: char) {
     }
 }
 
-pub async fn fix(bot: &Bot, msg: &Message) -> Result<(), BotError> {
+pub async fn fix(bot: &Bot, msg: &Message) -> BotResult {
     let mut buffer = String::with_capacity(4);
     for c in getor(msg).unwrap().chars() {
         if let Some(ch) = FIX_MAP.get(&c) {

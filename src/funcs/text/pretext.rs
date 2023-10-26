@@ -4,7 +4,7 @@ use pkg::jieba::cut::text_cut;
 
 const WCLOUD_END: &str = " ON DUPLICATE KEY UPDATE frequency = frequency + 1;";
 
-pub async fn pretext(_bot: &Bot, msg: &Message) -> Result<(), BotError> {
+pub async fn pretext(_bot: &Bot, msg: &Message) -> BotResult {
     if msg.edit_date().is_some() {
         return Ok(());
     }

@@ -66,14 +66,14 @@ fn function_menu(coin_type: &str) -> InlineKeyboardMarkup {
     ]])
 }
 
-pub async fn coin(bot: Bot, msg: Message) -> Result<(), BotError> {
+pub async fn coin(bot: Bot, msg: Message) -> BotResult {
     bot.send_message(msg.chat.id, "选择您要查询的虚拟货币")
         .reply_markup(popular_coins_menu())
         .await?;
     Ok(())
 }
 
-pub async fn coin_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> {
+pub async fn coin_callback(bot: Bot, q: CallbackQuery) -> BotResult {
     if let Some(coin_type) = q.data {
         let text = coin_handle(&coin_type.to_uppercase()).await;
         bot.answer_callback_query(q.id).await?;
@@ -121,7 +121,7 @@ fn inline_keyboard(coin_type: &str) -> InlineKeyboardMarkup {
     }
 }
 
-pub async fn inline_query_handler(bot: Bot, q: InlineQuery) -> Result<(), BotError> {
+pub async fn inline_query_handler(bot: Bot, q: InlineQuery) -> BotResult {
     let coins_query = InlineQueryResultArticle::new(
         "01".to_string(),
         "查询虚拟货币实时价格".to_string(),

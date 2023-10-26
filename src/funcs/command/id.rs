@@ -1,6 +1,6 @@
 use super::*;
 
-pub async fn id(bot: Bot, msg: Message) -> Result<(), BotError> {
+pub async fn id(bot: Bot, msg: Message) -> BotResult {
     bot.send_message(
         msg.chat.id,
         format!("您的id是 `{}`", msg.from().unwrap().id),

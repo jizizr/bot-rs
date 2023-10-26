@@ -7,7 +7,7 @@ struct Quote {
     from: String,
 }
 
-pub async fn quote(bot: Bot, msg: Message) -> Result<(), BotError> {
+pub async fn quote(bot: Bot, msg: Message) -> BotResult {
     let resp: Result<Quote, reqwest::Error> = get("https://v1.hitokoto.cn/").await;
     match resp {
         Err(e) => {

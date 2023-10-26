@@ -98,7 +98,7 @@ fn url2qr(url: &str) -> Vec<u8> {
         .unwrap()
 }
 
-pub async fn short(bot: Bot, msg: Message) -> Result<(), BotError> {
+pub async fn short(bot: Bot, msg: Message) -> BotResult {
     match get_short(&msg).await {
         Ok(url) => {
             bot.send_photo(msg.chat.id, InputFile::memory(url2qr(&url)))
