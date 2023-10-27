@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-reqwest = "0.11.18"
+reqwest = { version = "0.11.18", features = ["rustls-tls"] }
 serde = "1.0.164"
 lazy_static = "1.4.0"
 regex = "1.9.0"
@@ -21,7 +21,7 @@ serde_json = "1.0.104"
 fast_qr = { version = "0.10.0", features = ["image"] }
 mysql_async = "0.32.2"
 async-trait = "0.1.73"
-scraper = "0.17.1"
+scraper = "0.18.0"
 cached = { version = "0.46.0", features = ["async"] }
 chrono = "0.4.29"
 dashmap = "5.5.3"

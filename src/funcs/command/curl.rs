@@ -1,6 +1,11 @@
+use std::{rc::Rc, sync::Arc};
+
 use super::*;
 use regex::Regex;
-use reqwest::{Client, Response, Version};
+use reqwest::{
+    header::{HeaderMap, HeaderValue},
+    Client, ClientBuilder, Response, Version,
+};
 use scraper::{Html, Selector};
 use tokio::net::TcpStream;
 use tokio_native_tls::{native_tls, TlsConnector};
@@ -8,7 +13,15 @@ use x509_parser::parse_x509_certificate;
 
 lazy_static! {
     static ref USAGE: String = CurlCmd::command().render_help().to_string();
-    static ref CLIENT: Client = Client::new();
+    static ref CLIENT: Client = ClientBuilder::use_rustls_tls(ClientBuilder::new()).build().unwrap();
+    static ref PASTE :Client = Client::builder().default_headers({
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Content-Type",
+            HeaderValue::from_static("text/html"),
+        );
+        headers
+    }).build().unwrap();
     static ref MATCH: Regex = Regex::new(r#"(\s|^|https?://)(([^:\./\s]+\.)+[^\d\./:\s\\"]{2,}|((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?))(:\d{1,5})?(/\S*)*(\s|$)"#).unwrap();
     static ref CONNECTOR:TlsConnector = TlsConnector::from(native_tls::TlsConnector::new().unwrap());
 }
@@ -41,6 +54,12 @@ struct Ip {
 struct ASN {
     asn: i32,
     isp: String,
+}
+
+// paste.op.wiki 返回的数据结构
+#[derive(Deserialize)]
+struct Paste {
+    key: String,
 }
 
 fn fixer(url: &str) -> Result<String, String> {
@@ -177,6 +196,17 @@ async fn get_header(resp: &Response) -> Result<String, BotError> {
     Ok(header)
 }
 
+async fn post_paste(text: String) -> Result<String, BotError> {
+    let resp: Paste = PASTE
+        .post("https://s.op.wiki/data/post")
+        .body(text.trim().to_string())
+        .send()
+        .await?
+        .json()
+        .await?;
+    Ok(format!("https://paste\\.op\\.wiki/{}", resp.key))
+}
+
 async fn get_curl(msg: &Message) -> Result<String, BotError> {
     let curl = CurlCmd::try_parse_from(getor(&msg).unwrap().split_whitespace())?;
     let url = curl.url;
@@ -184,34 +214,63 @@ async fn get_curl(msg: &Message) -> Result<String, BotError> {
     let ip = markdown::escape(&resp.remote_addr().unwrap().ip().to_string());
     let header = get_header(&resp).await?;
     let url = resp.url().clone();
-    let (ssl, ip_info) = if url.scheme() == "https" {
-        tokio::join!(get_ssl(url.host_str().unwrap()), get_ip_info(&ip))
-    } else {
-        (Ok("".to_string()), get_ip_info(&ip).await)
-    };
     let version = get_http_version(&resp);
     let body = resp.text().await?;
-    let mut result = format!(
-        "*HTTP Request Summary*\n{}\n",
-        markdown::escape(&url.to_string())
-    );
     let title = match get_title(&body) {
-        Some(title) => format!("*Page Title: *{}", title),
+        Some(s) => format!("*Page Title: *{}", s),
         None => String::new(),
     };
-    result.push_str(&title);
-    result.push_str(&format!(
-        "\n\n▼ *Server Info:*\n{}\n*IP Address:*{ip}\n{ip_info}\n\n*▼ Headers:\n*{version}\n{header}",
+    let (ssl, ip_info, paste_url) = if url.scheme() == "https" {
+        tokio::join!(
+            get_ssl(url.host_str().unwrap()),
+            get_ip_info(&ip),
+            post_paste(body)
+        )
+    } else {
+        let temp = tokio::join!(get_ip_info(&ip), post_paste(body));
+        (Ok("".to_string()), temp.0, temp.1)
+    };
+    let result = format!(
+        "
+*HTTP Request Summary*
+{}
+{title}
+
+▼ *Server Info:*
+{}
+*IP Address:*{ip}
+{ip_info}
+
+*▼ Headers:*
+{version}
+{header}
+
+*▼ Body:*
+{}",
+        markdown::escape(&url.to_string()),
         ssl.unwrap_or_else(|e| e.to_string()),
-    ));
+        paste_url.unwrap_or_else(|e| e.to_string()),
+    );
     Ok(result)
 }
 
 pub async fn curl(bot: Bot, msg: Message) -> BotResult {
+    let bot = Arc::new(bot);
+    let msg = Arc::new(msg);
+    let bot_clone = bot.clone();
+    let msg_clone = msg.clone();
+
+    tokio::spawn(async move {
+        bot_clone
+            .send_chat_action(msg_clone.chat.id, ChatAction::Typing)
+            .await
+    });
+
     match get_curl(&msg).await {
         Ok(text) => {
             bot.send_message(msg.chat.id, text)
                 .reply_to_message_id(msg.id)
+                .disable_web_page_preview(true)
                 .parse_mode(ParseMode::MarkdownV2)
                 .send()
                 .await?;

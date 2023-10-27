@@ -4,7 +4,7 @@ use serde::Deserialize;
 use std::error::Error;
 use teloxide::{
     prelude::*,
-    types::{Me, ParseMode},
+    types::{Me, ParseMode,ChatAction},
     utils::{command::BotCommands, markdown},
 };
 
