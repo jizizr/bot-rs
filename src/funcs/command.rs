@@ -2,6 +2,8 @@ use super::*;
 use crate::error_fmt;
 use clap::{CommandFactory, Parser};
 use dashmap::DashSet;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use thiserror::Error;
 
 pub mod coin;
@@ -16,6 +18,11 @@ pub mod test;
 pub mod today;
 pub mod wcloud;
 pub mod wiki;
+
+lazy_static! {
+    static ref LIMITER_Q: BottomLocker<(ChatId, MessageId)> = BottomLocker(DashSet::new());
+    static ref LIMITER_I: BottomLocker<u64> = BottomLocker(DashSet::new());
+}
 
 #[macro_export]
 macro_rules! error_fmt {
@@ -79,27 +86,40 @@ pub enum Cmd {
     Test,
 }
 
-type MsgKey = (ChatId, MessageId);
+fn hashing(s: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    s.hash(&mut hasher);
+    hasher.finish()
+}
 
-struct BottomLocker(DashSet<MsgKey>);
+struct BottomLocker<T>(DashSet<T>);
 
-impl BottomLocker {
-    fn is_running(&self, flag: MsgKey) -> bool {
+impl<T> BottomLocker<T>
+where
+    T: Eq + Hash,
+{
+    fn is_running(&self, flag: T) -> bool {
         !self.0.insert(flag)
     }
-    fn over(&self, flag: MsgKey) {
+    fn over(&self, flag: T) {
         self.0.remove(&flag);
     }
 }
 
-struct Guard<'a> {
-    locker: &'a BottomLocker,
-    flag: MsgKey,
+struct Guard<'a, T>
+where
+    T: Hash + Eq + Copy,
+{
+    locker: &'a BottomLocker<T>,
+    flag: T,
     is_running: bool,
 }
 
-impl<'a> Guard<'a> {
-    fn new(locker: &'a BottomLocker, flag: MsgKey) -> Self {
+impl<'a, T> Guard<'a, T>
+where
+    T: Eq + Hash + Copy,
+{
+    fn new(locker: &'a BottomLocker<T>, flag: T) -> Self {
         Guard {
             locker,
             flag,
@@ -108,7 +128,10 @@ impl<'a> Guard<'a> {
     }
 }
 
-impl<'a> Drop for Guard<'a> {
+impl<'a, T> Drop for Guard<'a, T>
+where
+    T: Hash + Eq + Copy,
+{
     fn drop(&mut self) {
         self.locker.over(self.flag);
     }
