@@ -10,7 +10,6 @@ use teloxide::{
 lazy_static! {
     static ref USAGE: String = MusicCmd::command().render_help().to_string();
     static ref CLIENT: Client = Client::new();
-    static ref LIMITER: BottomLocker = BottomLocker(DashSet::new());
 }
 
 #[derive(Parser)]
@@ -146,7 +145,7 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> BotResult {
         bot.answer_callback_query(q.id).await?;
         let mut music = music.splitn(2, " ");
         if let Some(msg) = q.message {
-            let guard = Guard::new(&LIMITER, (msg.chat.id, msg.id));
+            let guard = Guard::new(&LIMITER_Q, (msg.chat.id, msg.id));
             if guard.is_running {
                 return Ok(());
             }
