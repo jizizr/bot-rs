@@ -1,5 +1,3 @@
-use std::{rc::Rc, sync::Arc};
-
 use super::*;
 use regex::Regex;
 use reqwest::{
@@ -7,6 +5,7 @@ use reqwest::{
     Client, ClientBuilder, Response, Version,
 };
 use scraper::{Html, Selector};
+use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_native_tls::{native_tls, TlsConnector};
 use x509_parser::parse_x509_certificate;
@@ -265,7 +264,6 @@ pub async fn curl(bot: Bot, msg: Message) -> BotResult {
             .send_chat_action(msg_clone.chat.id, ChatAction::Typing)
             .await
     });
-
     match get_curl(&msg).await {
         Ok(text) => {
             bot.send_message(msg.chat.id, text)
