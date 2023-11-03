@@ -1,11 +1,13 @@
 use super::*;
 use crate::error_fmt;
 use clap::{CommandFactory, Parser};
+use dashmap::DashSet;
 use thiserror::Error;
 
 pub mod coin;
 pub mod curl;
 pub mod id;
+pub mod music;
 pub mod quote;
 pub mod rate;
 pub mod short;
@@ -37,10 +39,11 @@ macro_rules! error_fmt {
             ClapError(#[from] clap::error::Error),
             #[error("{}",custom_fmt(.0))]
             CustomError(String),
+            #[error("{}",.0)]
+            SendError(#[from] teloxide::RequestError),
         }
     };
 }
-
 #[derive(BotCommands)]
 #[command(
     rename_rule = "lowercase",
@@ -70,8 +73,45 @@ pub enum Cmd {
     Wcloud,
     #[command(description = "curl")]
     Curl,
+    #[command(description = "音乐")]
+    Music,
     #[command(description = "测试")]
     Test,
+}
+
+type MsgKey = (ChatId, MessageId);
+
+struct BottomLocker(DashSet<MsgKey>);
+
+impl BottomLocker {
+    fn is_running(&self, flag: MsgKey) -> bool {
+        !self.0.insert(flag)
+    }
+    fn over(&self, flag: MsgKey) {
+        self.0.remove(&flag);
+    }
+}
+
+struct Guard<'a> {
+    locker: &'a BottomLocker,
+    flag: MsgKey,
+    is_running: bool,
+}
+
+impl<'a> Guard<'a> {
+    fn new(locker: &'a BottomLocker, flag: MsgKey) -> Self {
+        Guard {
+            locker,
+            flag,
+            is_running: locker.is_running(flag),
+        }
+    }
+}
+
+impl<'a> Drop for Guard<'a> {
+    fn drop(&mut self) {
+        self.locker.over(self.flag);
+    }
 }
 
 pub async fn command_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
@@ -90,6 +130,7 @@ pub async fn command_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
         Ok(Cmd::Rate) => rate::rate(bot, msg).await?,
         Ok(Cmd::Wcloud) => wcloud::wcloud(bot, msg).await?,
         Ok(Cmd::Curl) => curl::curl(bot, msg).await?,
+        Ok(Cmd::Music) => music::music(bot, msg).await?,
         Ok(Cmd::Test) => test::test(bot, msg).await?,
         Err(e) => {
             log::error!("Error in handler: {}", e);
