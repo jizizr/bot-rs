@@ -6,7 +6,9 @@ use teloxide::{
         InlineKeyboardButton, InlineKeyboardButtonKind::CallbackData, InlineKeyboardMarkup,
         InputFile, InputMediaAudio,
     },
+    RequestError,
 };
+use tokio::task::JoinHandle;
 lazy_static! {
     static ref USAGE: String = MusicCmd::command().render_help().to_string();
     static ref CLIENT: Client = Client::new();
@@ -57,7 +59,10 @@ async fn get_music_data(name: &str, num: &str) -> Result<MusicData, AppError> {
     let url = if num == "1" {
         format!("https://api.vkeys.cn/API/QQ_Music?word={}&n=1&q=7", name)
     } else {
-        format!("https://api.vkeys.cn/API/QQ_Music?word={}&id={}&q=7", name, num)
+        format!(
+            "https://api.vkeys.cn/API/QQ_Music?word={}&id={}&q=7",
+            name, num
+        )
     };
     let music_data: Music = get(&url).await?;
     Ok(music_data.data)
@@ -198,21 +203,60 @@ async fn get_music_info(music: &MusicData) -> Result<(Vec<u8>, Vec<u8>), AppErro
     Ok((audio?, cover?))
 }
 
+async fn handle_first_msg(
+    bot: Arc<Bot>,
+    jhandle: JoinHandle<Result<Message, RequestError>>,
+) -> Result<Message, AppError> {
+    if let Ok(result) = jhandle.await {
+        let msg = result?;
+        return Ok(bot
+            .edit_message_text(msg.chat.id, msg.id, "获取成功🎉！")
+            .send()
+            .await
+            .unwrap_or(msg));
+    } else {
+        return Err(AppError::CustomError("Join Task Error".to_string()));
+    }
+}
+
 pub async fn music(bot: Bot, msg: Message) -> BotResult {
+    let bot = Arc::new(bot);
+    let bot_clone = bot.clone();
+    tokio::spawn(async move {
+        bot_clone
+            .send_chat_action(msg.chat.id, ChatAction::Typing)
+            .await
+    });
+    let bot_clone = bot.clone();
+    let jhandle = tokio::spawn(async move {
+        bot_clone
+            .send_message(msg.chat.id, "正在获取音乐...")
+            .reply_to_message_id(msg.id)
+            .send()
+            .await
+    });
     let (music, name) = get_music(&msg).await?;
     let (audio, cover) = get_music_info(&music).await?;
-    bot.send_audio(
-        msg.chat.id,
-        InputFile::memory(audio).file_name(music.song.clone()),
-    )
-    .thumb(InputFile::memory(cover))
-    .reply_to_message_id(msg.id)
-    .reply_markup(link2gui_menu(music.cover, name))
-    .caption(format!(
-        "演唱者:「{}」\n歌曲链接：{}",
-        music.singer, music.song
-    ))
-    .send()
-    .await?;
+    let bot_clone = bot.clone();
+    let err = tokio::join!(
+        bot.send_audio(
+            msg.chat.id,
+            InputFile::memory(audio).file_name(music.song.clone()),
+        )
+        .thumb(InputFile::memory(cover))
+        .reply_to_message_id(msg.id)
+        .reply_markup(link2gui_menu(music.cover, name))
+        .caption(format!(
+            "演唱者:「{}」\n歌曲链接：{}",
+            music.singer, music.song
+        ))
+        .send(),
+        handle_first_msg(bot_clone, jhandle)
+    );
+    err.0?;
+    bot.clone()
+        .delete_message(msg.chat.id, err.1?.id)
+        .send()
+        .await?;
     Ok(())
 }
