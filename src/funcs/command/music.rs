@@ -111,12 +111,9 @@ async fn get_music_cover(bot: Bot, msg: Message, search: &str) {
             .reply_markup(InlineKeyboardMarkup::new([[
                 InlineKeyboardButton::callback(
                     "搜索更多🔍",
-                    if let CallbackData(data) =
-                        &msg.reply_markup().unwrap().inline_keyboard[0][1].kind
-                    {
-                        data
-                    } else {
-                        return;
+                    match &msg.reply_markup().unwrap().inline_keyboard[0][1].kind {
+                        CallbackData(data) => data,
+                        _ => return,
                     },
                 ),
             ]]))
@@ -145,23 +142,28 @@ async fn get_callback_music(bot: Bot, msg: Message, id: &str, name: &str) -> Res
     Ok(())
 }
 
-pub async fn music_callback(bot: Bot, q: CallbackQuery) -> BotResult {
+pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), AppError> {
     if let Some(music) = q.data {
         bot.answer_callback_query(q.id).await?;
         let mut music = music.splitn(2, " ");
-        if let Some(msg) = q.message {
-            let guard = Guard::new(&LIMITER_Q, (msg.chat.id, msg.id));
-            if guard.is_running {
-                return Ok(());
+        let msg = match q.message {
+            None => return Ok(()),
+            Some(msg) => msg,
+        };
+        let guard = Guard::new(&LIMITER_Q, (msg.chat.id, msg.id));
+        if guard.is_running {
+            return Ok(());
+        }
+        match music.next() {
+            Some("gui") => get_music_gui(bot, msg, music.next().unwrap()).await?,
+            Some("cover") => get_music_cover(bot, msg, music.next().unwrap()).await,
+            Some(music_name) => {
+                get_callback_music(bot, msg, music_name, music.next().unwrap()).await?
             }
-            if let Some(music_name) = music.next() {
-                if music_name == "gui" {
-                    get_music_gui(bot, msg, music.next().unwrap()).await?;
-                } else if music_name == "cover" {
-                    get_music_cover(bot, msg, music.next().unwrap()).await;
-                } else {
-                    get_callback_music(bot, msg, music_name, music.next().unwrap()).await?;
-                }
+            None => {
+                return Err(AppError::CustomError(
+                    "Unknown Error in [Music music_callback]".to_string(),
+                ))
             }
         }
     }
