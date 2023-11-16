@@ -5,7 +5,6 @@ use reqwest::{
     Client, ClientBuilder, Response, Version,
 };
 use scraper::{Html, Selector};
-use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_native_tls::{native_tls, TlsConnector};
 use x509_parser::parse_x509_certificate;
@@ -255,13 +254,11 @@ async fn get_curl(msg: &Message) -> Result<String, BotError> {
 
 pub async fn curl(bot: Bot, msg: Message) -> BotResult {
     let bot = Arc::new(bot);
-    let msg = Arc::new(msg);
     let bot_clone = bot.clone();
-    let msg_clone = msg.clone();
 
     tokio::spawn(async move {
         bot_clone
-            .send_chat_action(msg_clone.chat.id, ChatAction::Typing)
+            .send_chat_action(msg.chat.id, ChatAction::Typing)
             .await
     });
     match get_curl(&msg).await {

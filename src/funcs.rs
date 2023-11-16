@@ -2,6 +2,7 @@ use bot_rs::{get, getor};
 use lazy_static::lazy_static;
 use serde::Deserialize;
 use std::error::Error;
+use std::sync::Arc;
 use teloxide::{
     prelude::*,
     types::{ChatAction, Me, MessageId, ParseMode},
