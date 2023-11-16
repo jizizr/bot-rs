@@ -34,18 +34,18 @@ struct Music {
 
 #[derive(Deserialize)]
 struct MusicData {
-    songname: String,
-    name: String,
+    song: String,
+    singer: String,
     cover: String,
-    songurl: String,
-    src: String,
+    link: String,
+    url: String,
 }
 
 #[derive(Deserialize)]
 struct MusicListData {
     id: i32,
-    songname: String,
-    name: String,
+    song: String,
+    singer: String,
 }
 
 #[derive(Deserialize)]
@@ -54,15 +54,16 @@ struct MusicList {
 }
 
 async fn get_music_data(name: &str, num: &str) -> Result<MusicData, AppError> {
-    let url = format!(
-        "http://ovoa.cc/api/QQmusic.php?msg={}&n={}&type=",
-        name, num
-    );
+    let url = if num == "1" {
+        format!("https://api.vkeys.cn/API/QQ_Music?word={}&n=1&q=7", name)
+    } else {
+        format!("https://api.vkeys.cn/API/QQ_Music?word={}&id={}&q=7", name, num)
+    };
     let music_data: Music = get(&url).await?;
     Ok(music_data.data)
 }
 
-async fn music2vec(url: String) -> Result<Vec<u8>, AppError> {
+async fn music2vec(url: &str) -> Result<Vec<u8>, AppError> {
     let mut resp = CLIENT.get(url).send().await?;
     let mut buf = Vec::new();
     while let Some(chunk) = resp.chunk().await? {
@@ -79,7 +80,7 @@ async fn get_music(msg: &Message) -> Result<(MusicData, String), AppError> {
 
 async fn get_music_gui(bot: Bot, msg: Message, search: &str) -> Result<(), AppError> {
     let music_datas: MusicList = get(&format!(
-        "http://ovoa.cc/api/QQmusic.php?msg={}&n=&type=",
+        "https://api.vkeys.cn/API/QQ_Music?word={}",
         search
     ))
     .await?;
@@ -125,12 +126,11 @@ async fn get_callback_music(bot: Bot, msg: Message, id: &str, name: &str) -> Res
         msg.id,
         teloxide::types::InputMedia::Audio(InputMediaAudio::caption(
             InputMediaAudio::new(
-                InputFile::memory(music2vec(music_data.src.to_string()).await?)
-                    .file_name(music_data.songname),
+                InputFile::memory(music2vec(&music_data.url).await?).file_name(music_data.song),
             ),
             format!(
                 "演唱者:「{}」\n歌曲链接：{}",
-                music_data.name, music_data.songurl,
+                music_data.singer, music_data.link,
             ),
         )),
     )
@@ -183,7 +183,7 @@ fn gui_menu(music_datas: Vec<MusicListData>, search: &str) -> InlineKeyboardMark
             .iter()
             .map(|music_data| {
                 InlineKeyboardButton::callback(
-                    format!("{}|{}", music_data.songname, music_data.name),
+                    format!("{}|{}", music_data.song, music_data.singer),
                     format!("music {} {}", music_data.id, search),
                 )
             })
@@ -193,17 +193,24 @@ fn gui_menu(music_datas: Vec<MusicListData>, search: &str) -> InlineKeyboardMark
     InlineKeyboardMarkup::new(keyboard)
 }
 
+async fn get_music_info(music: &MusicData) -> Result<(Vec<u8>, Vec<u8>), AppError> {
+    let (audio, cover) = tokio::join!(music2vec(&music.url), music2vec(&music.cover));
+    Ok((audio?, cover?))
+}
+
 pub async fn music(bot: Bot, msg: Message) -> BotResult {
     let (music, name) = get_music(&msg).await?;
+    let (audio, cover) = get_music_info(&music).await?;
     bot.send_audio(
         msg.chat.id,
-        InputFile::memory(music2vec(music.src).await?).file_name(music.songname.clone()),
+        InputFile::memory(audio).file_name(music.song.clone()),
     )
+    .thumb(InputFile::memory(cover))
     .reply_to_message_id(msg.id)
     .reply_markup(link2gui_menu(music.cover, name))
     .caption(format!(
         "演唱者:「{}」\n歌曲链接：{}",
-        music.name, music.songurl
+        music.singer, music.song
     ))
     .send()
     .await?;
