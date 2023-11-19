@@ -12,7 +12,7 @@ pub async fn call_query_handler(
     if "coin" == data[0] {
         return coin::coin_callback(bot, q).await;
     } else if "music" == data[0] {
-        return music::music_callback(bot, q).await;
+        return music::music_callback(bot, q).await.map_err(|e| e.into());
     }
     Ok(())
 }

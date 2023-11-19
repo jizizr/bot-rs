@@ -39,7 +39,7 @@ macro_rules! error_fmt {
         }
         #[allow(dead_code)]
         #[derive(Error, Debug)]
-        enum AppError {
+        pub enum AppError {
             #[error("API请求失败: {0}")]
             RequestError(#[from] reqwest::Error),
             #[error("{}",clap_fmt(.0))]
