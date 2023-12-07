@@ -3,12 +3,9 @@ use serde::de::DeserializeOwned;
 use std::{fs::File, io::Read};
 use teloxide::prelude::*;
 use teloxide::Bot;
-
+mod settings;
 lazy_static! {
-    pub static ref BOT: Bot = Bot::new(
-        std::io::read_to_string(File::open("TOKEN").expect("TOKEN文件打开失败"))
-            .expect("TOKEN文件读取失败"),
-    );
+    pub static ref BOT: Bot = Bot::new(settings::SETTINGS.bot.token.clone());
 }
 
 pub fn getor(msg: &Message) -> Option<&str> {
