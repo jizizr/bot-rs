@@ -3,3 +3,5 @@
 /bot_derive
 TOKEN
 URL
+/data/conf.toml
+/data/func_switch

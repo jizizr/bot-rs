@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 reqwest = { version = "0.11.18", features = ["rustls-tls"] }
-serde = "1.0.164"
+serde = {version = "1.0.164",features = ["derive"]}
 lazy_static = "1.4.0"
 regex = "1.9.0"
 clap = { version = "4.3.11", features = ["derive"] }
@@ -18,8 +18,8 @@ pretty_env_logger = "0.5.0"
 tokio = { version = "1.29.1", features = ["rt-multi-thread", "macros", "full"] }
 rand = "0.8.5"
 serde_json = "1.0.104"
-fast_qr = { version = "0.10.0", features = ["image"] }
-mysql_async = "0.32.2"
+fast_qr = { version = "0.10.4", features = ["image"] }
+mysql_async = "0.33.0"
 async-trait = "0.1.73"
 scraper = "0.18.0"
 cached = { version = "0.46.0", features = ["async"] }
@@ -27,10 +27,11 @@ chrono = "0.4.29"
 dashmap = "5.5.3"
 image = "0.24.7"
 jieba-rs = "0.6.8"
-futures = "0.3.28"
 cron = "0.12.0"
 tokio-native-tls = "0.3.1"
 x509-parser = "0.15.1"
+toml = "0.8.8"
+sled = "0.34.7"
 [dependencies.pyo3]
 version = "0.20.0"
 features = ["auto-initialize"]
