@@ -5,7 +5,7 @@ use std::error::Error;
 use std::sync::Arc;
 use teloxide::{
     prelude::*,
-    types::{ChatAction, Me, MessageId, ParseMode},
+    types::{ChatAction, Me, MessageId},
     utils::{command::BotCommands, markdown},
 };
 pub mod command;
