@@ -3,4 +3,5 @@ use thiserror::Error;
 
 pub mod cron;
 pub mod jieba;
+pub mod kv;
 pub mod wcloud;

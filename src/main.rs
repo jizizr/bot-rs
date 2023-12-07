@@ -9,12 +9,13 @@ use teloxide::{prelude::*, update_listeners::webhooks};
 mod dao;
 mod filter;
 mod funcs;
+mod settings;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     pretty_env_logger::init();
     log::info!("Starting buttons bot...");
-
+    init();
     let handler = dptree::entry()
         .branch(
             Update::filter_message()
