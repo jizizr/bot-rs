@@ -1,14 +1,8 @@
 use super::*;
 use reqwest::{Client, Url};
-use teloxide::{
-    payloads::EditMessageReplyMarkupSetters,
-    types::{
-        InlineKeyboardButton, InlineKeyboardButtonKind::CallbackData, InlineKeyboardMarkup,
-        InputFile, InputMediaAudio,
-    },
-    RequestError,
-};
+use teloxide::{payloads::EditMessageReplyMarkupSetters, RequestError};
 use tokio::task::JoinHandle;
+
 lazy_static! {
     static ref USAGE: String = MusicCmd::command().render_help().to_string();
     static ref CLIENT: Client = Client::new();

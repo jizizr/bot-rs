@@ -3,10 +3,6 @@ use bot_rs::load_json;
 use cached::proc_macro::cached;
 use chrono::prelude::*;
 use std::collections::HashSet;
-use teloxide::types::{
-    InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResult, InlineQueryResultArticle,
-    InputMessageContent, InputMessageContentText,
-};
 
 lazy_static! {
     static ref COIN_TYPES: [&'static str; 3] = ["BTC", "XMR", "ETH"];

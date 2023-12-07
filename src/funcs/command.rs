@@ -4,9 +4,15 @@ use clap::{CommandFactory, Parser};
 use dashmap::DashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use teloxide::types::{
+    InlineKeyboardButton, InlineKeyboardButtonKind::CallbackData, InlineKeyboardMarkup,
+    InlineQueryResult, InlineQueryResultArticle, InputFile, InputMediaAudio, InputMessageContent,
+    InputMessageContentText, Message, ParseMode,
+};
 use thiserror::Error;
 
 pub mod coin;
+pub mod config;
 pub mod curl;
 pub mod id;
 pub mod music;
@@ -82,6 +88,8 @@ pub enum Cmd {
     Curl,
     #[command(description = "音乐")]
     Music,
+    #[command(description = "功能开关")]
+    Config,
     #[command(description = "测试")]
     Test,
 }
@@ -154,6 +162,7 @@ pub async fn command_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
         Ok(Cmd::Wcloud) => wcloud::wcloud(bot, msg).await?,
         Ok(Cmd::Curl) => curl::curl(bot, msg).await?,
         Ok(Cmd::Music) => music::music(bot, msg).await?,
+        Ok(Cmd::Config) => config::config(bot, msg).await?,
         Ok(Cmd::Test) => test::test(bot, msg).await?,
         Err(e) => {
             log::error!("Error in handler: {}", e);
