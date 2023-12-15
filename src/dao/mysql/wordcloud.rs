@@ -18,6 +18,8 @@ CREATE TABLE `WORD_{}` (
 );
 ";
 
+const DELETE_TABLE: &str = "DROP TABLE `WORD_{}`;";
+
 pub async fn create_table(conn: &mut ConnBufBuilder, table_name: &str) {
     exec!(
         conn.conn.clone(),
@@ -50,4 +52,12 @@ pub async fn active_group() -> std::result::Result<Vec<String>, mysql_async::Err
         })
         .await
         .unwrap_or(vec![]))
+}
+
+pub async fn delete_table(table_name: &str) -> std::result::Result<(), mysql_async::Error> {
+    Ok(WORD_POOL
+        .get_conn()
+        .await?
+        .query_drop(&DELETE_TABLE.replacen("{}", table_name, 1))
+        .await?)
 }
