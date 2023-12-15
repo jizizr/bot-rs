@@ -17,9 +17,15 @@ pub struct Url {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct Mysql {
+    pub url: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct Settings {
     pub bot: Bot,
     pub url: Url,
+    pub mysql: Mysql,
 }
 
 impl Default for Settings {

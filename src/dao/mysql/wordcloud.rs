@@ -1,8 +1,10 @@
+use crate::settings;
+
 use super::*;
 use lazy_static::lazy_static;
 
 lazy_static! {
-    pub static ref WORD_POOL: Pool = init_mysql("mysql://root@127.0.0.1:3306/wordcloud");
+    pub static ref WORD_POOL: Pool = init_mysql(&settings::SETTINGS.mysql.url.clone());
 }
 
 #[derive(Debug, PartialEq, Eq)]
