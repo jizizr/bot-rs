@@ -2,8 +2,6 @@ use bot_rs::BOT;
 use filter::call_query::*;
 use funcs::{command::*, pkg, pkg::cron::cron, text::*};
 use std::error::Error;
-use std::fs::File;
-use std::io::read_to_string;
 use teloxide::{prelude::*, update_listeners::webhooks};
 
 mod dao;
@@ -43,8 +41,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     if mode == "r" {
         let addr = ([127, 0, 0, 1], 12345).into();
-        let url =
-            read_to_string(File::open("URL").expect("URL文件打开失败")).expect("URL文件读取失败");
+        let url = settings::SETTINGS.url.url.clone();
         let url = url.parse().unwrap();
         let listener = webhooks::axum(BOT.clone(), webhooks::Options::new(addr, url))
             .await

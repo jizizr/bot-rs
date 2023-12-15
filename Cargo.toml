@@ -35,3 +35,5 @@ sled = "0.34.7"
 [dependencies.pyo3]
 version = "0.20.0"
 features = ["auto-initialize"]
+[profile.release]
+lto = true

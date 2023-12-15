@@ -12,8 +12,14 @@ pub struct Bot {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct Url {
+    pub url: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct Settings {
     pub bot: Bot,
+    pub url: Url,
 }
 
 impl Default for Settings {
