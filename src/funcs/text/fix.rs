@@ -39,13 +39,15 @@ lazy_static! {
 }
 
 fn clear(input: &mut String, target_char: char) -> Option<()> {
-    if let Some(index) = input
+    if let Some((index, char_len)) = input
         .char_indices()
         .find(|(_, c)| *c == target_char)
-        .map(|(i, _)| i)
+        .map(|(i, _)| (i, target_char.len_utf8()))
     {
         let bytes = unsafe { input.as_mut_vec() };
-        bytes[index] = 0;
+        for i in index..(index + char_len) {
+            bytes[i] = 0;
+        }
         Some(())
     } else {
         None
