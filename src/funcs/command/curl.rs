@@ -205,7 +205,7 @@ async fn get_curl(msg: &Message) -> Result<String, BotError> {
     let curl = CurlCmd::try_parse_from(getor(&msg).unwrap().split_whitespace())?;
     let url = curl.url;
     let resp = get_resp(&url).await?;
-    let ip = markdown::escape(&resp.remote_addr().unwrap().ip().to_string());
+    let ip = &resp.remote_addr().unwrap().ip().to_string();
     let header = get_header(&resp).await?;
     let url = resp.url().clone();
     let version = get_http_version(&resp);
@@ -232,7 +232,7 @@ async fn get_curl(msg: &Message) -> Result<String, BotError> {
 
 ▼ *Server Info:*
 {}
-*IP Address:*{ip}
+*IP Address:*{}
 {ip_info}
 
 *▼ Headers:*
@@ -243,6 +243,7 @@ async fn get_curl(msg: &Message) -> Result<String, BotError> {
 {}",
         markdown::escape(&url.to_string()),
         ssl.unwrap_or_else(|e| e.to_string()),
+        markdown::escape(&ip),
         paste_url.unwrap_or_else(|e| e.to_string()),
     );
     Ok(result)
