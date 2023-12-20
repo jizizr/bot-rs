@@ -24,19 +24,15 @@ lazy_static! {
     static ref CONNECTOR:TlsConnector = TlsConnector::from(native_tls::TlsConnector::new().unwrap());
 }
 
-#[derive(Parser)]
-#[command(
-    help_template = "使用方法：{usage}\n\n{all-args}\n\n{about}",
-    about = "命令功能：访问网站",
-    name = "/curl",
-    next_help_heading = "参数解释",
-    disable_help_flag = true
-)]
-struct CurlCmd {
-    ///网址
-    #[arg(value_parser = fixer)]
-    url: String,
-}
+command_gen!(
+    "/curl",
+    "获取网页信息",
+    struct CurlCmd {
+        ///网址
+        #[arg(value_parser = fixer)]
+        url: String,
+    }
+);
 
 #[derive(Deserialize)]
 struct Ip {

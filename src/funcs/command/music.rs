@@ -8,20 +8,16 @@ lazy_static! {
     static ref CLIENT: Client = Client::new();
 }
 
-#[derive(Parser)]
-#[command(
-    help_template = "使用方法：{usage}\n\n{all-args}\n\n{about}",
-    about = "命令功能：获取音乐",
-    name = "/music",
-    next_help_heading = "参数解释",
-    disable_help_flag = true
-)]
-struct MusicCmd {
-    ///音乐名
-    url: Vec<String>,
-}
-
 error_fmt!(USAGE);
+
+command_gen!(
+    "/music",
+    "获取音乐",
+    struct MusicCmd {
+        ///音乐名
+        url: Vec<String>,
+    }
+);
 
 #[derive(Deserialize)]
 struct Music {

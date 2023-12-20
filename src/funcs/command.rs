@@ -1,5 +1,5 @@
 use super::*;
-use crate::error_fmt;
+use crate::{command_gen, error_fmt};
 use clap::{CommandFactory, Parser};
 use dashmap::DashSet;
 use std::collections::hash_map::DefaultHasher;
@@ -57,6 +57,22 @@ macro_rules! error_fmt {
         }
     };
 }
+
+#[macro_export]
+macro_rules! command_gen {
+    ($name:expr, $about:expr, $struct_def:item) => {
+        #[derive(Parser)]
+        #[command(
+                            help_template = "使用方法：{usage}\n\n{all-args}\n\n{about}",
+                            about = concat!("命令功能：",$about),
+                            name = $name,
+                            next_help_heading = "参数解释",
+                            disable_help_flag = true
+                        )]
+        $struct_def
+    };
+}
+
 #[derive(BotCommands)]
 #[command(
     rename_rule = "lowercase",

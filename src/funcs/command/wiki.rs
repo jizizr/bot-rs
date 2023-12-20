@@ -7,19 +7,16 @@ lazy_static! {
     static ref USAGE: String = WikiCmd::command().render_help().to_string();
     static ref MATCH: Regex = Regex::new(r#"<span class="searchmatch">|</span>"#).unwrap();
 }
-#[derive(Parser)]
-#[command(
-    help_template = "使用方法：{usage}\n\n{all-args}\n\n{about}",
-    about = "命令功能：在中文维基百科中搜索词条",
-    name = "/wiki",
-    next_help_heading = "参数解释",
-    disable_help_flag = true
-)]
-struct WikiCmd {
-    ///词条名
-    #[arg(required = true)]
-    search: Vec<String>,
-}
+
+command_gen!(
+    "/wiki",
+    "在中文维基百科中搜索词条",
+    struct WikiCmd {
+        ///词条名
+        #[arg(required = true)]
+        search: Vec<String>,
+    }
+);
 
 #[derive(Deserialize)]
 struct SearchResult {

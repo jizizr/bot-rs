@@ -13,20 +13,16 @@ lazy_static! {
 
 error_fmt!(USAGE);
 
-#[derive(Parser)]
-#[command(
-    help_template = "使用方法：{usage}\n\n{all-args}\n\n{about}",
-    about = "命令功能：缩短长链接",
-    name = "/short",
-    next_help_heading = "参数解释",
-    disable_help_flag = true
-)]
-struct ShortCmd {
-    ///长链接
-    url: Option<String>,
-    ///短链后缀
-    surl: Option<String>,
-}
+command_gen!(
+    "/short",
+    "缩短长链接",
+    struct ShortCmd {
+        ///长链接
+        url: Option<String>,
+        ///短链后缀
+        surl: Option<String>,
+    }
+);
 
 #[derive(Deserialize)]
 struct Short {

@@ -9,23 +9,17 @@ lazy_static! {
 
 error_fmt!(USAGE);
 
-#[derive(Parser)]
-#[command(
-    help_template = "使用方法：{usage}\n\n{all-args}\n\n{about}",
-    about = "命令功能：获取实时汇率",
-    name = "/rate",
-    next_help_heading = "参数解释",
-    disable_help_flag = true
-)]
-
-struct RateCmd {
-    /// 原货币
-    from: String,
-
-    /// 目标货币
-    #[arg(default_value_t = String::from("USD"))]
-    to: String,
-}
+command_gen!(
+    "/rate",
+    "获取实时汇率",
+    struct RateCmd {
+        ///原货币
+        from: String,
+        ///目标货币
+        #[arg(default_value_t = String::from("USD"))]
+        to: String,
+    }
+);
 
 //This function code was contributed by @Misaka_master
 async fn coin_exchange(from: &str, to: &str) -> Result<String, AppError> {

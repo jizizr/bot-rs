@@ -10,21 +10,16 @@ lazy_static! {
 
 error_fmt!(USAGE);
 
-#[derive(Parser)]
-#[command(
-    help_template = "使用方法：{usage}\n\n{all-args}\n\n{about}",
-    about = "命令功能：获取历史上的今天",
-    name = "/today",
-    next_help_heading = "参数解释",
-    disable_help_flag = true
-)]
-
-struct TodayCmd {
-    /// 月
-    month: Option<u8>,
-    /// 日
-    day: Option<u8>,
-}
+command_gen!(
+    "/today",
+    "获取历史上的今天",
+    struct TodayCmd {
+        /// 月
+        month: Option<u8>,
+        /// 日
+        day: Option<u8>,
+    }
+);
 
 async fn get_today(msg: &Message) -> Result<String, AppError> {
     let base_url = "http://hao.360.com/histoday/".to_string();
