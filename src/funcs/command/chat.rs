@@ -25,7 +25,8 @@ command_gen!(
     "Ai聊天",
     struct ChatCmd {
         ///聊天内容
-        content: String,
+        #[arg(required = true)]
+        content: Vec<String>,
     }
 );
 
@@ -68,7 +69,7 @@ async fn get_chat(msg: &Message) -> Result<String, AppError> {
     let chat = ChatCmd::try_parse_from(getor(&msg).unwrap().split_whitespace())?;
     let request_body = format!(
         r#"{{"contents":[{{"parts":[{{"text":"{}"}}]}}]}}"#,
-        chat.content
+        chat.content.join(" ")
     );
     let res = CLIENT
         .post(&*API_URL)
