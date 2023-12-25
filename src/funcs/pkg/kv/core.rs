@@ -16,10 +16,11 @@ impl GroupFuncSwitch {
             .insert(func_name.to_string(), func_desc.to_string());
     }
 
-    pub fn update_status(&self, group_id: i64, func_name: String, status: bool) {
+    pub async fn update_status(&self, group_id: i64, func_name: String, status: bool) {
         self.map.get(&group_id).unwrap().insert(func_name, status);
         self.pstorer
-            .insert(group_id, self.map.get(&group_id).unwrap().clone());
+            .insert(group_id, self.map.get(&group_id).unwrap().clone())
+            .await;
     }
 
     fn init(&self, group_id: i64) {
@@ -48,7 +49,7 @@ impl GroupFuncSwitch {
         let pstorer = self.pstorer.clone();
         let map = self.map.get(&group_id).unwrap().clone();
         tokio::spawn(async move {
-            pstorer.insert(group_id, map);
+            pstorer.insert(group_id, map).await;
         });
         return true;
     }

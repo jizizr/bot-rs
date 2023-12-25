@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut dispatcher = Dispatcher::builder(BOT.clone(), handler)
         .enable_ctrlc_handler()
-        .distribution_function(|_| None::<std::convert::Infallible>)
+        .distribution_function(|_| None::<()>)
         .build();
 
     cron::run("0 0 10,14,18,22 * * ?", pkg::wcloud::cron::wcloud).await;

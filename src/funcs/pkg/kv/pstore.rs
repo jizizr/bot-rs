@@ -1,7 +1,7 @@
 use super::*;
 use sled::Db;
-use std::{collections::HashMap, sync::RwLock};
-use tokio::time;
+use std::collections::HashMap;
+use tokio::{sync::RwLock, time};
 
 struct DashLock {
     pub map: DashMap<i64, DashMap<String, bool>>,
@@ -23,7 +23,8 @@ impl Sled {
         }
     }
 
-    pub fn insert(&self, group_id: i64, config: DashMap<String, bool>) {
+    pub async fn insert(&self, group_id: i64, config: DashMap<String, bool>) {
+        let _ = self.queue.lock.read().await;
         self.queue.map.insert(group_id, config);
     }
     pub fn load(&self) -> DashMap<i64, FuncSwitch> {
@@ -41,7 +42,7 @@ impl Sled {
         loop {
             {
                 {
-                    let _lock = self.queue.lock.write();
+                    let _lock = self.queue.lock.write().await;
                     let key2remove = self
                         .queue
                         .map

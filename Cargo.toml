@@ -12,7 +12,7 @@ lazy_static = "1.4.0"
 regex = "1.9.0"
 clap = { version = "4.3.11", features = ["derive"] }
 thiserror = "1.0.43"
-teloxide = { version = "0.12", features = ["macros", "full"] }
+teloxide = { version = "0.12.2", features = ["macros", "full"] }
 log = "0.4"
 pretty_env_logger = "0.5.0"
 tokio = { version = "1.29.1", features = ["rt-multi-thread", "macros", "full"] }
