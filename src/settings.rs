@@ -22,10 +22,16 @@ pub struct Mysql {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct Gemini {
+    pub key: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct Settings {
     pub bot: Bot,
     pub url: Url,
     pub mysql: Mysql,
+    pub gemini: Gemini,
 }
 
 impl Default for Settings {
