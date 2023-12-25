@@ -32,7 +32,6 @@ impl ConnBufBuilder {
     pub fn build(&mut self) -> ConnBuf {
         self.buffer.pop();
         self.buffer = format!("{}{}{}", self.begin, self.buffer, self.end);
-        println!("{}", self.buffer);
         ConnBuf {
             conn: self.conn.clone(),
             buffer: &self.buffer,
@@ -61,7 +60,6 @@ impl ConnBuf<'_> {
 macro_rules! exec {
     // Handle the case where only the query string is provided
     ($conn:expr,$query:expr) => {
-        println!("{}", $query);
         let _ = ConnBuf{
             conn: $conn,
             buffer: $query,
