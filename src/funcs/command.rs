@@ -5,12 +5,13 @@ use dashmap::DashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use teloxide::types::{
-    InlineKeyboardButton, InlineKeyboardButtonKind::CallbackData, InlineKeyboardMarkup,
+    ChatKind, InlineKeyboardButton, InlineKeyboardButtonKind::CallbackData, InlineKeyboardMarkup,
     InlineQueryResult, InlineQueryResultArticle, InputFile, InputMediaAudio, InputMessageContent,
     InputMessageContentText, Message, ParseMode,
 };
 use thiserror::Error;
 
+pub mod chat;
 pub mod coin;
 pub mod config;
 pub mod curl;
@@ -106,8 +107,20 @@ pub enum Cmd {
     Music,
     #[command(description = "功能开关")]
     Config,
+    #[command(description = "Ai聊天")]
+    Chat,
     #[command(description = "测试")]
     Test,
+}
+
+async fn auth(bot: &Bot, msg: &Message, user_id: UserId) -> Result<bool, BotError> {
+    match msg.chat.kind {
+        ChatKind::Private { .. } => Ok(true),
+        _ => {
+            let mconfig = bot.get_chat_member(msg.chat.id, user_id).await?;
+            Ok(mconfig.is_administrator() || mconfig.is_privileged())
+        }
+    }
 }
 
 fn hashing(s: &str) -> u64 {
@@ -179,6 +192,7 @@ pub async fn command_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
         Ok(Cmd::Curl) => curl::curl(bot, msg).await?,
         Ok(Cmd::Music) => music::music(bot, msg).await?,
         Ok(Cmd::Config) => config::config(bot, msg).await?,
+        Ok(Cmd::Chat) => chat::chat(bot, msg).await?,
         Ok(Cmd::Test) => test::test(bot, msg).await?,
         Err(e) => {
             log::error!("Error in handler: {}", e);
