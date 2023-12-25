@@ -13,7 +13,7 @@ lazy_static! {
         .unwrap();
     static ref USAGE: String = ChatCmd::command().render_help().to_string();
     static ref API_URL: String = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={}",
+        "https://generativelanguage.googleapis.774.gs/proxy?key={}",
         settings::SETTINGS.gemini.key
     );
 }
@@ -53,8 +53,10 @@ struct Part {
 
 pub async fn chat(bot: Bot, msg: Message) -> BotResult {
     match get_chat(&msg).await {
-        Ok(text) => bot.send_message(msg.chat.id, text),
-        Err(e) => bot.send_message(msg.chat.id, format!("{e}")),
+        Ok(text) => bot
+            .send_message(msg.chat.id, pkg::escape::markdown::escape_markdown(&text))
+            .parse_mode(ParseMode::MarkdownV2),
+        Err(e) => bot.send_message(msg.chat.id, format!("{e}").replace(&*API_URL, "")),
     }
     .disable_web_page_preview(true)
     .reply_to_message_id(msg.id)
