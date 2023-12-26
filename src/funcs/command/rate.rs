@@ -3,16 +3,14 @@ use reqwest::Client;
 use scraper::{Html, Selector};
 
 lazy_static! {
-    static ref USAGE: String = RateCmd::command().render_help().to_string();
     static ref CLIENT: Client = reqwest::Client::new();
 }
 
-error_fmt!(USAGE);
-
-command_gen!(
+cmd!(
     "/rate",
     "获取实时汇率",
-    struct RateCmd {
+    RateCmd,
+    {
         ///原货币
         from: String,
         ///目标货币

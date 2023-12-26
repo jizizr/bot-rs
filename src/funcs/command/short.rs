@@ -6,17 +6,15 @@ use serde_json::json;
 use teloxide::types::InputFile;
 
 lazy_static! {
-    static ref USAGE: String = ShortCmd::command().render_help().to_string();
     static ref MATCH: Regex = Regex::new(r#"(\s|^|https?://)([^:\./\s]+\.)+[^\d\./:\s\\"]{2,}(:(\d{1,4}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(/\S*)*(\s|$)"#).unwrap();
     static ref CLIENT:reqwest::Client = reqwest::Client::new();
 }
 
-error_fmt!(USAGE);
-
-command_gen!(
+cmd!(
     "/short",
     "缩短长链接",
-    struct ShortCmd {
+    ShortCmd,
+    {
         ///长链接
         url: Option<String>,
         ///短链后缀

@@ -4,16 +4,14 @@ use teloxide::{payloads::EditMessageReplyMarkupSetters, RequestError};
 use tokio::task::JoinHandle;
 
 lazy_static! {
-    static ref USAGE: String = MusicCmd::command().render_help().to_string();
     static ref CLIENT: Client = Client::new();
 }
 
-error_fmt!(USAGE);
-
-command_gen!(
+cmd!(
     "/music",
     "获取音乐",
-    struct MusicCmd {
+    MusicCmd ,
+    {
         ///音乐名
         url: Vec<String>,
     }

@@ -10,7 +10,6 @@ use tokio_native_tls::{native_tls, TlsConnector};
 use x509_parser::parse_x509_certificate;
 
 lazy_static! {
-    static ref USAGE: String = CurlCmd::command().render_help().to_string();
     static ref CLIENT: Client = ClientBuilder::use_rustls_tls(ClientBuilder::new()).build().unwrap();
     static ref PASTE :Client = Client::builder().default_headers({
         let mut headers = HeaderMap::new();
@@ -24,10 +23,11 @@ lazy_static! {
     static ref CONNECTOR:TlsConnector = TlsConnector::from(native_tls::TlsConnector::new().unwrap());
 }
 
-command_gen!(
+cmd!(
     "/curl",
     "获取网页信息",
-    struct CurlCmd {
+    CurlCmd,
+    {
         ///网址
         #[arg(value_parser = fixer)]
         url: String,

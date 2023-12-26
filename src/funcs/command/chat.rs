@@ -11,19 +11,17 @@ lazy_static! {
         })
         .build()
         .unwrap();
-    static ref USAGE: String = ChatCmd::command().render_help().to_string();
     static ref API_URL: String = format!(
         "https://generativelanguage.googleapis.774.gs/proxy?key={}",
         settings::SETTINGS.gemini.key
     );
 }
 
-error_fmt!(USAGE);
-
-command_gen!(
+cmd!(
     "/chat",
     "Ai聊天",
-    struct ChatCmd {
+    ChatCmd ,
+    {
         ///聊天内容
         #[arg(required = true)]
         content: Vec<String>,

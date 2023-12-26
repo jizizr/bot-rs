@@ -1,5 +1,5 @@
 use super::*;
-use crate::{command_gen, error_fmt};
+use crate::{cmd, command_gen, error_fmt};
 use clap::{CommandFactory, Parser};
 use dashmap::DashSet;
 use std::collections::hash_map::DefaultHasher;
@@ -23,6 +23,7 @@ pub mod short;
 pub mod start;
 pub mod test;
 pub mod today;
+pub mod translate;
 pub mod wcloud;
 pub mod wiki;
 
@@ -71,6 +72,17 @@ macro_rules! command_gen {
                             disable_help_flag = true
                         )]
         $struct_def
+    };
+}
+
+#[macro_export]
+macro_rules! cmd {
+    ($name:expr, $about:expr, $struct_name:ident, { $($field:tt)* }) => {
+        lazy_static!{
+            static ref USAGE: String = $struct_name::command().render_help().to_string();
+        }
+        error_fmt!(USAGE);
+        command_gen!($name, $about, struct $struct_name { $($field)* });
     };
 }
 

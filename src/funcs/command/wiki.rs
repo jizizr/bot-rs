@@ -1,17 +1,15 @@
 use super::*;
 use regex::Regex;
 
-error_fmt!(USAGE);
-
 lazy_static! {
-    static ref USAGE: String = WikiCmd::command().render_help().to_string();
     static ref MATCH: Regex = Regex::new(r#"<span class="searchmatch">|</span>"#).unwrap();
 }
 
-command_gen!(
+cmd!(
     "/wiki",
     "在中文维基百科中搜索词条",
-    struct WikiCmd {
+    WikiCmd,
+    {
         ///词条名
         #[arg(required = true)]
         search: Vec<String>,

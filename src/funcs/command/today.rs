@@ -5,15 +5,13 @@ lazy_static! {
     static ref HIS_MATCH: Regex = Regex::new(r#"</em>\.(.*?)</dt>"#).unwrap();
     static ref LINK_MATCH: Regex =
         Regex::new(r#"<a href="(.*?)" target="_blank" class="read-btn">阅读全文</a>"#).unwrap();
-    static ref USAGE: String = TodayCmd::command().render_help().to_string();
 }
 
-error_fmt!(USAGE);
-
-command_gen!(
+cmd!(
     "/today",
     "获取历史上的今天",
-    struct TodayCmd {
+    TodayCmd,
+    {
         /// 月
         month: Option<u8>,
         /// 日
