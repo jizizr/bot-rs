@@ -1,10 +1,10 @@
+use crate::funcs::BotError;
 use chrono::Local;
-use std::error::Error;
 use std::future::Future;
 use std::str::FromStr;
 
 pub trait TaskFunc: Send + Sync + 'static {
-    type Fut: Future<Output = Result<(), Vec<Box<dyn Error + Send + Sync>>>> + Send;
+    type Fut: Future<Output = Result<(), Vec<BotError>>> + Send;
 
     fn call(&self) -> Self::Fut;
 }
@@ -12,7 +12,7 @@ pub trait TaskFunc: Send + Sync + 'static {
 impl<F, Fut> TaskFunc for F
 where
     F: Fn() -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Result<(), Vec<Box<dyn Error + Send + Sync>>>> + Send,
+    Fut: Future<Output = Result<(), Vec<BotError>>> + Send,
 {
     type Fut = Fut;
 
@@ -31,7 +31,7 @@ pub async fn run(exp: &'static str, f: impl TaskFunc) {
             tokio::time::sleep(wait_time).await;
             if let Err(err) = f.call().await {
                 for e in err {
-                    log::error!("词云生成失败：{}", e);
+                    log::error!("任务执行失败：{}", e);
                 }
             }
         }
