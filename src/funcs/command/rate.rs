@@ -1,9 +1,8 @@
 use super::*;
-use reqwest::Client;
 use scraper::{Html, Selector};
 
 lazy_static! {
-    static ref CLIENT: Client = reqwest::Client::new();
+    static ref CLIENT: ClientWithMiddleware = retry_client(reqwest::Client::new(), 2);
 }
 
 cmd!(

@@ -10,15 +10,15 @@ use tokio_native_tls::{native_tls, TlsConnector};
 use x509_parser::parse_x509_certificate;
 
 lazy_static! {
-    static ref CLIENT: Client = ClientBuilder::use_rustls_tls(ClientBuilder::new()).build().unwrap();
-    static ref PASTE :Client = Client::builder().default_headers({
+    static ref CLIENT: ClientWithMiddleware = retry_client(ClientBuilder::use_rustls_tls(ClientBuilder::new()).build().unwrap(),2);
+    static ref PASTE :ClientWithMiddleware = retry_client(Client::builder().default_headers({
         let mut headers = HeaderMap::new();
         headers.insert(
             "Content-Type",
             HeaderValue::from_static("text/html"),
         );
         headers
-    }).build().unwrap();
+    }).build().unwrap(),2);
     static ref MATCH: Regex = Regex::new(r#"(\s|^|https?://)(([^:\./\s]+\.)+[^\d\./:\s\\"]{2,}|((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?))(:\d{1,5})?(/\S*)*(\s|$)"#).unwrap();
     static ref CONNECTOR:TlsConnector = TlsConnector::from(native_tls::TlsConnector::new().unwrap());
 }

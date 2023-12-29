@@ -3,14 +3,17 @@ use crate::settings;
 use super::*;
 
 lazy_static! {
-    static ref CLIENT: reqwest::Client = reqwest::Client::builder()
-        .default_headers({
-            let mut headers = reqwest::header::HeaderMap::new();
-            headers.insert("Content-Type", "application/json".parse().unwrap());
-            headers
-        })
-        .build()
-        .unwrap();
+    static ref CLIENT: ClientWithMiddleware = retry_client(
+        reqwest::Client::builder()
+            .default_headers({
+                let mut headers = reqwest::header::HeaderMap::new();
+                headers.insert("Content-Type", "application/json".parse().unwrap());
+                headers
+            })
+            .build()
+            .unwrap(),
+        2
+    );
     static ref API_URL: String = format!(
         "https://generativelanguage.googleapis.774.gs/proxy?key={}",
         settings::SETTINGS.gemini.key

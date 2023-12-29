@@ -50,12 +50,16 @@ macro_rules! error_fmt {
         pub enum AppError {
             #[error("API请求失败: {0}")]
             RequestError(#[from] reqwest::Error),
+            #[error("API请求失败: {0}")]
+            RetryError(#[from] reqwest_middleware::Error),
             #[error("{}",clap_fmt(.0))]
             ClapError(#[from] clap::error::Error),
             #[error("{}",custom_fmt(.0))]
             CustomError(String),
             #[error("{}",.0)]
             SendError(#[from] teloxide::RequestError),
+            #[error("{}", .0)]
+            DynamicError(BotError),
         }
     };
 }
@@ -121,6 +125,8 @@ pub enum Cmd {
     Config,
     #[command(description = "Ai聊天")]
     Chat,
+    #[command(description = "翻译")]
+    Translate,
     #[command(description = "测试")]
     Test,
 }
@@ -205,6 +211,7 @@ pub async fn command_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
         Ok(Cmd::Music) => music::music(bot, msg).await?,
         Ok(Cmd::Config) => config::config(bot, msg).await?,
         Ok(Cmd::Chat) => chat::chat(bot, msg).await?,
+        Ok(Cmd::Translate) => translate::translate(bot, msg).await?,
         Ok(Cmd::Test) => test::test(bot, msg).await?,
         Err(e) => {
             log::error!("Error in handler: {}", e);

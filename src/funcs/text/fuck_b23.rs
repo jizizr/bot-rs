@@ -2,7 +2,7 @@ use super::*;
 use regex::Regex;
 lazy_static! {
     static ref MATCH: Regex = Regex::new(r#"(https?://)?b23.tv/\w+"#).unwrap();
-    static ref CLIENT: reqwest::Client = reqwest::Client::new();
+    static ref CLIENT: ClientWithMiddleware = retry_client(reqwest::Client::new(), 2);
 }
 
 pub async fn fuck_b23(bot: &Bot, msg: &Message) -> BotResult {
