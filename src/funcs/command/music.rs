@@ -4,7 +4,7 @@ use teloxide::{payloads::EditMessageReplyMarkupSetters, RequestError};
 use tokio::task::JoinHandle;
 
 lazy_static! {
-    static ref CLIENT: Client = Client::new();
+    static ref CLIENT: ClientWithMiddleware = retry_client(Client::new(), 2);
 }
 
 cmd!(
@@ -238,7 +238,7 @@ pub async fn music(bot: Bot, msg: Message) -> BotResult {
         .reply_markup(link2gui_menu(music.cover, name))
         .caption(format!(
             "演唱者:「{}」\n歌曲链接：{}",
-            music.singer, music.song
+            music.singer, music.link
         ))
         .send(),
         handle_first_msg(bot_clone, jhandle)
