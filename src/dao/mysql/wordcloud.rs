@@ -4,7 +4,7 @@ use super::*;
 use lazy_static::lazy_static;
 
 lazy_static! {
-    pub static ref WORD_POOL: Pool = init_mysql(&settings::SETTINGS.mysql.url.clone());
+    pub static ref WORD_POOL: Pool = init_mysql(&settings::SETTINGS.mysql.url);
 }
 
 #[derive(Debug, PartialEq, Eq)]

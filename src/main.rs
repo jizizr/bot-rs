@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     if mode == "r" {
         let addr = ([127, 0, 0, 1], 12345).into();
-        let url = settings::SETTINGS.url.url.clone();
+        let url = &settings::SETTINGS.url.url;
         let url = url.parse().unwrap();
         let listener = webhooks::axum(BOT.clone(), webhooks::Options::new(addr, url))
             .await

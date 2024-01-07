@@ -5,7 +5,7 @@ use teloxide::prelude::*;
 use teloxide::Bot;
 mod settings;
 lazy_static! {
-    pub static ref BOT: Bot = Bot::new(settings::SETTINGS.bot.token.clone());
+    pub static ref BOT: Bot = Bot::new(&settings::SETTINGS.bot.token);
 }
 
 pub fn getor(msg: &Message) -> Option<&str> {
