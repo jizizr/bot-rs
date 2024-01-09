@@ -138,7 +138,7 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), AppError> 
             None => return Ok(()),
             Some(msg) => msg,
         };
-        lock!((msg.chat.id, msg.id));
+        let _guard = lock!((msg.chat.id, msg.id));
         match music.next() {
             Some("gui") => get_music_gui(bot, msg, music.next().unwrap()).await?,
             Some("cover") => get_music_cover(bot, msg, music.next().unwrap()).await,

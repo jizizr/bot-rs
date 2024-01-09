@@ -85,7 +85,7 @@ pub async fn coin_callback(bot: Bot, q: CallbackQuery) -> BotResult {
                 .reply_markup(function_menu(&coin_type))
                 .await?;
         } else if let Some(id) = q.inline_message_id {
-            lock!(&id);
+            let _guard = lock!(&id);
             if coin_type == "back" {
                 let _ = bot
                     .edit_message_text_inline(&id, "选择您要查询的虚拟货币")
