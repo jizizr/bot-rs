@@ -90,21 +90,25 @@ pub async fn repeat(bot: &Bot, msg: &Message) -> BotResult {
         .to_string(),
     };
     let m = MessageConfig::new(m, msg.from().unwrap().id.0);
-    match MESSAGE_MAP.get_mut(&msg.chat.id.0) {
+    let should_forward = match MESSAGE_MAP.get_mut(&msg.chat.id.0) {
         Some(mut mc) => {
-            if search(mc.value_mut(), &m) {
-                bot.forward_message(msg.chat.id, msg.chat.id, msg.id)
-                    .send()
-                    .await?;
-            } else {
+            let result = search(mc.value_mut(), &m);
+            if !result {
                 mc.value_mut().push(m);
             }
+            result
         }
         None => {
             let mut vd: FixedQueue<MessageConfig> = FixedQueue::new(5);
             vd.push(m);
             MESSAGE_MAP.insert(msg.chat.id.0, vd);
+            false
         }
+    };
+    if should_forward {
+        bot.forward_message(msg.chat.id, msg.chat.id, msg.id)
+            .send()
+            .await?;
     }
     Ok(())
 }
