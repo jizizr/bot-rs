@@ -1,15 +1,15 @@
 use super::*;
-use std::collections::HashMap;
+use dashmap::DashMap;
 
-macro_rules! hashmaps {
+macro_rules! dashmaps {
     ($($key:expr => $value:expr),*) => {
         {
-            let mut original_map = HashMap::new();
+            let mut original_map = DashMap::new();
             $(
                 original_map.insert($key, $value);
             )*
 
-            let mut swapped_map = HashMap::new();
+            let swapped_map = DashMap::new();
             $(
                 swapped_map.insert($value, $key);
             )*
@@ -21,7 +21,7 @@ macro_rules! hashmaps {
 }
 
 lazy_static! {
-    static ref FIX_MAP: HashMap<char, char> = hashmaps![
+    static ref FIX_MAP: DashMap<char, char> = dashmaps![
         ')' => '(',
         ']' => '[',
         '}' => '{',
@@ -64,7 +64,8 @@ pub async fn fix(bot: &Bot, msg: &Message) -> BotResult {
     let mut buffer = String::with_capacity(4);
     for c in getor(msg).unwrap().chars() {
         if let Some(ch) = FIX_MAP.get(&c) {
-            extend(&mut buffer, *ch, c)
+            let ch = *ch; // 解引用
+            extend(&mut buffer, ch, c)
         }
     }
     let t: String = buffer.chars().filter(|&c| c != '\0').collect();
