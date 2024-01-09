@@ -53,10 +53,7 @@ pub async fn config_callback(bot: Bot, q: CallbackQuery) -> BotResult {
                     .send()
                     .await
             });
-            let guard = Guard::new(&LIMITER_Q, (msg.chat.id, msg.id));
-            if guard.is_running {
-                return Ok(());
-            }
+            lock!((msg.chat.id, msg.id));
             let mut func_cfg = config.splitn(2, " ");
             SWITCH
                 .update_status(

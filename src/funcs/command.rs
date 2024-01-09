@@ -1,9 +1,12 @@
 use super::*;
-use crate::{cmd, command_gen, error_fmt};
+use crate::{cmd, command_gen, error_fmt, lock};
 use clap::{CommandFactory, Parser};
 use dashmap::DashSet;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    ops::Deref,
+};
 use teloxide::types::{
     ChatKind, InlineKeyboardButton, InlineKeyboardButtonKind::CallbackData, InlineKeyboardMarkup,
     InlineQueryResult, InlineQueryResultArticle, InputFile, InputMediaAudio, InputMessageContent,
@@ -28,8 +31,7 @@ pub mod wcloud;
 pub mod wiki;
 
 lazy_static! {
-    static ref LIMITER_Q: BottomLocker<(ChatId, MessageId)> = BottomLocker(DashSet::new());
-    static ref LIMITER_I: BottomLocker<u64> = BottomLocker(DashSet::new());
+    static ref LIMITER: BottomLocker = BottomLocker(DashSet::new());
 }
 
 #[macro_export]
@@ -141,55 +143,56 @@ async fn auth(bot: &Bot, msg: &Message, user_id: UserId) -> Result<bool, BotErro
     }
 }
 
-fn hashing(s: &str) -> u64 {
+fn hashing<T: Hash>(s: T) -> u64 {
     let mut hasher = DefaultHasher::new();
     s.hash(&mut hasher);
     hasher.finish()
 }
 
-struct BottomLocker<T>(DashSet<T>);
+struct BottomLocker(DashSet<u64>);
 
-impl<T> BottomLocker<T>
-where
-    T: Eq + Hash,
-{
-    fn is_running(&self, flag: T) -> bool {
-        !self.0.insert(flag)
-    }
-    fn over(&self, flag: T) {
-        self.0.remove(&flag);
+impl Deref for BottomLocker {
+    type Target = DashSet<u64>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
-struct Guard<'a, T>
-where
-    T: Hash + Eq + Copy,
-{
-    locker: &'a BottomLocker<T>,
-    flag: T,
-    is_running: bool,
-}
-
-impl<'a, T> Guard<'a, T>
-where
-    T: Eq + Hash + Copy,
-{
-    fn new(locker: &'a BottomLocker<T>, flag: T) -> Self {
-        Guard {
-            locker,
-            flag,
-            is_running: locker.is_running(flag),
-        }
+impl BottomLocker {
+    fn is_running(&self, flag: u64) -> bool {
+        !self.insert(flag)
+    }
+    fn over(&self, flag: u64) {
+        self.remove(&flag);
     }
 }
 
-impl<'a, T> Drop for Guard<'a, T>
-where
-    T: Hash + Eq + Copy,
-{
+struct Guard<'a> {
+    locker: &'a BottomLocker,
+    flag: u64,
+}
+
+impl<'a> Guard<'a> {
+    fn new(locker: &'a BottomLocker, flag: u64) -> Self {
+        Guard { locker, flag }
+    }
+}
+
+impl<'a> Drop for Guard<'a> {
     fn drop(&mut self) {
         self.locker.over(self.flag);
     }
+}
+
+#[macro_export]
+macro_rules! lock {
+    ($conf:expr) => {{
+        let h = hashing($conf);
+        if LIMITER.is_running(h) {
+            return Ok(());
+        }
+        Guard::new(&LIMITER, h)
+    }};
 }
 
 pub async fn command_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
