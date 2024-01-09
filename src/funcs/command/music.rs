@@ -65,10 +65,33 @@ async fn music2vec(url: &str) -> Result<Vec<u8>, AppError> {
     Ok(buf)
 }
 
-async fn get_music(msg: &Message) -> Result<(MusicData, String), AppError> {
+async fn get_music(
+    bot: Arc<Bot>,
+    msg: &Message,
+    jhandle: JoinHandle<Result<Message, RequestError>>,
+) -> Result<Message, AppError> {
     let music = MusicCmd::try_parse_from(getor(&msg).unwrap().split_whitespace())?;
     let name = music.url.join(" ");
-    Ok((get_music_data(&name, "1").await?, name))
+    let music = get_music_data(&name, "1").await?;
+    let (audio, cover) = get_music_info(&music).await?;
+    let bot_clone = bot.clone();
+    let err = tokio::join!(
+        bot.send_audio(
+            msg.chat.id,
+            InputFile::memory(audio).file_name(music.song.clone()),
+        )
+        .thumb(InputFile::memory(cover))
+        .reply_to_message_id(msg.id)
+        .reply_markup(link2gui_menu(music.cover, name))
+        .caption(format!(
+            "演唱者:「{}」\n歌曲链接：{}",
+            music.singer, music.link
+        ))
+        .send(),
+        handle_first_msg(bot_clone, jhandle)
+    );
+    err.0?;
+    Ok(err.1?)
 }
 
 async fn get_music_gui(bot: Bot, msg: Message, search: &str) -> Result<(), AppError> {
@@ -85,28 +108,29 @@ async fn get_music_gui(bot: Bot, msg: Message, search: &str) -> Result<(), AppEr
     Ok(())
 }
 
-async fn get_music_cover(bot: Bot, msg: Message, search: &str) {
-    let _ = tokio::try_join!(
-        bot.send_photo(
-            msg.chat.id,
-            InputFile::url(
-                Url::parse(&format!("https://y.qq.com/music/photo_new/{}", search)).unwrap(),
+async fn get_music_cover(bot: Bot, msg: Message, search: &str) -> Result<(), AppError> {
+    bot.send_photo(
+        msg.chat.id,
+        InputFile::url(
+            Url::parse(&format!("https://y.qq.com/music/photo_new/{}", search)).unwrap(),
+        ),
+    )
+    .reply_to_message_id(msg.id)
+    .send()
+    .await?;
+    bot.edit_message_reply_markup(msg.chat.id, msg.id)
+        .reply_markup(InlineKeyboardMarkup::new([[
+            InlineKeyboardButton::callback(
+                "搜索更多🔍",
+                match &msg.reply_markup().unwrap().inline_keyboard[0][1].kind {
+                    CallbackData(data) => data,
+                    _ => return Err(AppError::CustomError("Unknown Error".to_string())),
+                },
             ),
-        )
-        .reply_to_message_id(msg.id)
-        .send(),
-        bot.edit_message_reply_markup(msg.chat.id, msg.id)
-            .reply_markup(InlineKeyboardMarkup::new([[
-                InlineKeyboardButton::callback(
-                    "搜索更多🔍",
-                    match &msg.reply_markup().unwrap().inline_keyboard[0][1].kind {
-                        CallbackData(data) => data,
-                        _ => return,
-                    },
-                ),
-            ]]))
-            .send()
-    );
+        ]]))
+        .send()
+        .await?;
+    Ok(())
 }
 
 async fn get_callback_music(bot: Bot, msg: Message, id: &str, name: &str) -> Result<(), AppError> {
@@ -141,7 +165,7 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), AppError> 
         let _guard = lock!((msg.chat.id, msg.id));
         match music.next() {
             Some("gui") => get_music_gui(bot, msg, music.next().unwrap()).await?,
-            Some("cover") => get_music_cover(bot, msg, music.next().unwrap()).await,
+            Some("cover") => get_music_cover(bot, msg, music.next().unwrap()).await?,
             Some(music_name) => {
                 get_callback_music(bot, msg, music_name, music.next().unwrap()).await?
             }
@@ -222,28 +246,18 @@ pub async fn music(bot: Bot, msg: Message) -> BotResult {
             .send()
             .await
     });
-    let (music, name) = get_music(&msg).await?;
-    let (audio, cover) = get_music_info(&music).await?;
-    let bot_clone = bot.clone();
-    let err = tokio::join!(
-        bot.send_audio(
-            msg.chat.id,
-            InputFile::memory(audio).file_name(music.song.clone()),
-        )
-        .thumb(InputFile::memory(cover))
-        .reply_to_message_id(msg.id)
-        .reply_markup(link2gui_menu(music.cover, name))
-        .caption(format!(
-            "演唱者:「{}」\n歌曲链接：{}",
-            music.singer, music.link
-        ))
-        .send(),
-        handle_first_msg(bot_clone, jhandle)
-    );
-    err.0?;
-    bot.clone()
-        .delete_message(msg.chat.id, err.1?.id)
-        .send()
-        .await?;
+    match get_music(bot.clone(), &msg, jhandle).await {
+        Ok(msg) => {
+            bot.clone()
+                .delete_message(msg.chat.id, msg.id)
+                .send()
+                .await?;
+        }
+        Err(e) => {
+            bot.edit_message_text(msg.chat.id, msg.id, format!("{e}"))
+                .send()
+                .await?;
+        }
+    }
     Ok(())
 }
