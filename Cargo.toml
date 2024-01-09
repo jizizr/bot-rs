@@ -18,11 +18,11 @@ pretty_env_logger = "0.5.0"
 tokio = { version = "1.29.1", features = ["rt-multi-thread", "macros", "full"] }
 rand = "0.8.5"
 serde_json = "1.0.104"
-fast_qr = { version = "0.10.4", features = ["image"] }
+fast_qr = { version = "0.11.0", features = ["image"] }
 mysql_async = "0.33.0"
 async-trait = "0.1.73"
 scraper = "0.18.0"
-cached = { version = "0.46.0", features = ["async"] }
+cached = { version = "0.47.0", features = ["async"] }
 chrono = "0.4.29"
 dashmap = "5.5.3"
 image = "0.24.7"
