@@ -8,11 +8,13 @@ lazy_static! {
 pub async fn fuck_b23(bot: &Bot, msg: &Message) -> BotResult {
     if let Some(s) = MATCH.find(getor(msg).unwrap()) {
         let r = CLIENT.get(s.as_str()).send().await?.error_for_status()?;
+        let u = r.url();
         bot.send_message(
             msg.chat.id,
             format!(
-                "已经帮你去除b23的跟踪链接：\nhttps://www.bilibili.com{}",
-                r.url().path()
+                "已经帮你去除b23的跟踪链接：\nhttps://{}{}",
+                u.host().unwrap(),
+                u.path()
             ),
         )
         .send()
