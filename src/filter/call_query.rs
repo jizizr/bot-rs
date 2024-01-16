@@ -1,5 +1,5 @@
 use super::*;
-use crate::funcs::command::{coin, config, music};
+use crate::funcs::command::{coin, config, music, translate};
 use std::error::Error;
 
 pub async fn call_query_handler(
@@ -15,6 +15,10 @@ pub async fn call_query_handler(
         return music::music_callback(bot, q).await.map_err(|e| e.into());
     } else if "config" == data[0] {
         return config::config_callback(bot, q).await;
+    } else if "trans" == data[0] {
+        return translate::translate_callback(bot, q)
+            .await
+            .map_err(|e| e.into());
     }
     Ok(())
 }

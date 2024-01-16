@@ -10,7 +10,7 @@ use std::{
 use teloxide::types::{
     ChatKind, InlineKeyboardButton, InlineKeyboardButtonKind::CallbackData, InlineKeyboardMarkup,
     InlineQueryResult, InlineQueryResultArticle, InputFile, InputMediaAudio, InputMessageContent,
-    InputMessageContentText, Message, ParseMode,
+    InputMessageContentText, MediaKind, Message, MessageId, MessageKind, ParseMode,
 };
 use thiserror::Error;
 
