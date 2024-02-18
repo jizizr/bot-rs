@@ -7,10 +7,14 @@ use std::{
     hash::{Hash, Hasher},
     ops::Deref,
 };
-use teloxide::types::{
-    ChatKind, InlineKeyboardButton, InlineKeyboardButtonKind::CallbackData, InlineKeyboardMarkup,
-    InlineQueryResult, InlineQueryResultArticle, InputFile, InputMediaAudio, InputMessageContent,
-    InputMessageContentText, MediaKind, Message, MessageId, MessageKind, ParseMode,
+use teloxide::{
+    types::{
+        ChatKind, InlineKeyboardButton, InlineKeyboardButtonKind::CallbackData,
+        InlineKeyboardMarkup, InlineQueryResult, InlineQueryResultArticle, InputFile,
+        InputMediaAudio, InputMessageContent, InputMessageContentText, MediaKind, Message,
+        MessageId, MessageKind, ParseMode,
+    },
+    utils::command::ParseError,
 };
 use thiserror::Error;
 
@@ -195,30 +199,44 @@ macro_rules! lock {
     }};
 }
 
+macro_rules! cmd_match {
+    ($cmd:expr, $bot:expr, $msg:expr,$($stat:ident => $func:expr),+ $(,)?) => {
+        match $cmd {
+            Ok(Cmd::Help) => {
+                $bot.send_message($msg.chat.id, Cmd::descriptions().to_string())
+                    .await?;
+            }
+            $(
+                Ok(Cmd::$stat) => $func($bot, $msg).await?,
+            )+
+            Err(e) => {
+                log::error!("Error in handler: {}", e);
+            }
+        }
+    };
+}
+
 pub async fn command_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
-    match BotCommands::parse(getor(&msg).unwrap(), me.username()) {
-        Ok(Cmd::Help) => {
-            bot.send_message(msg.chat.id, Cmd::descriptions().to_string())
-                .await?;
-        }
-        Ok(Cmd::Start) => start::start(bot, msg).await?,
-        Ok(Cmd::My) => quote::quote(bot, msg).await?,
-        Ok(Cmd::Coin) => coin::coin(bot, msg).await?,
-        Ok(Cmd::Id) => id::id(bot, msg).await?,
-        Ok(Cmd::Today) => today::today(bot, msg).await?,
-        Ok(Cmd::Wiki) => wiki::wiki(bot, msg).await?,
-        Ok(Cmd::Short) => short::short(bot, msg).await?,
-        Ok(Cmd::Rate) => rate::rate(bot, msg).await?,
-        Ok(Cmd::Wcloud) => wcloud::wcloud(bot, msg).await?,
-        Ok(Cmd::Curl) => curl::curl(bot, msg).await?,
-        Ok(Cmd::Music) => music::music(bot, msg).await?,
-        Ok(Cmd::Config) => config::config(bot, msg).await?,
-        Ok(Cmd::Chat) => chat::chat(bot, msg).await?,
-        Ok(Cmd::Translate) => translate::translate(bot, msg).await?,
-        Ok(Cmd::Test) => test::test(bot, msg).await?,
-        Err(e) => {
-            log::error!("Error in handler: {}", e);
-        }
-    }
+    let cmd: Result<Cmd, ParseError> = BotCommands::parse(getor(&msg).unwrap(), me.username());
+    cmd_match!(
+        cmd,
+        bot,
+        msg,
+        Start => start::start,
+        My => quote::quote,
+        Coin => coin::coin,
+        Id => id::id,
+        Today => today::today,
+        Wiki => wiki::wiki,
+        Short => short::short,
+        Rate => rate::rate,
+        Wcloud => wcloud::wcloud,
+        Curl => curl::curl,
+        Music => music::music,
+        Config => config::config,
+        Chat => chat::chat,
+        Translate => translate::translate,
+        Test => test::test
+    );
     Ok(())
 }
