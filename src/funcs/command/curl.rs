@@ -1,3 +1,5 @@
+use std::collections::{hash_set, HashSet};
+
 use super::*;
 use regex::Regex;
 use reqwest::{
@@ -176,9 +178,13 @@ async fn get_resp(url: &str) -> Result<Response, BotError> {
 
 async fn get_header(resp: &Response) -> Result<String, BotError> {
     let mut header = String::new();
+    let mut hash_set = HashSet::new();
     resp.headers().iter().for_each(|(k, v)| {
         let hn = k.as_str();
         if hn.contains("cookie") {
+            return;
+        }
+        if !hash_set.insert(hn) {
             return;
         }
         header.push_str(&format!(
