@@ -1,4 +1,4 @@
-use std::collections::{hash_set, HashSet};
+use std::collections::HashSet;
 
 use super::*;
 use regex::Regex;
