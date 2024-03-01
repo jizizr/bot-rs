@@ -1,10 +1,11 @@
-use super::{pkg::kv::GroupFuncSwitch, *};
+use super::{*, pkg::kv::GroupFuncSwitch};
 
 mod fix;
 mod fuck_b23;
 mod pretext;
 mod repeat;
 mod six;
+mod guozao;
 
 lazy_static! {
     pub static ref SWITCH: GroupFuncSwitch = GroupFuncSwitch::new();
@@ -50,6 +51,8 @@ macro_rules! impl_tuple {
 
 impl_tuple!(0 A, 1 B, 2 C, 3 D,4 E);
 
+impl_tuple!(0 A);
+
 macro_rules! with_switch {
     ($func:expr,$bot:expr, $msg:expr) => {
         async {
@@ -82,7 +85,8 @@ pub fn init() {
         fix::fix => "补括号",
         six::six => "6",
         repeat::repeat => "复读机",
-        fuck_b23::fuck_b23 => "去除b站短链跟踪参数"
+        fuck_b23::fuck_b23 => "去除b站短链跟踪参数",
+        guozao::guozao => "play的一环"
     );
     tokio::spawn(async { SWITCH.pstorer.pool().await });
 }
@@ -99,6 +103,15 @@ pub async fn text_handler(bot: Bot, msg: Message) -> BotResult {
                 repeat::repeat,
                 pretext::pretext,
                 fuck_b23::fuck_b23
+            );
+            if let Some(err) = e.fmt() {
+                log::error!("{}", err);
+            }
+        } else {
+            let e = join_with_switch!(
+                &bot,
+                &msg,
+                guozao::guozao
             );
             if let Some(err) = e.fmt() {
                 log::error!("{}", err);

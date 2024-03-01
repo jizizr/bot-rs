@@ -1,8 +1,8 @@
 /target
 /.vscode
 /bot_derive
-TOKEN
 URL
 /data/conf.toml
 /data/func_switch
 .DS_Store
+/.idea
