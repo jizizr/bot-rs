@@ -7,7 +7,7 @@ pub async fn call_query_handler(
     mut q: CallbackQuery,
 ) -> std::result::Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     let binding = q.data.unwrap();
-    let data: Vec<&str> = binding.splitn(2, " ").collect();
+    let data: Vec<&str> = binding.splitn(2, ' ').collect();
     q.data = Some(data[1].to_string());
     if "coin" == data[0] {
         return coin::coin_callback(bot, q).await;

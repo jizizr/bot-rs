@@ -15,7 +15,7 @@ fn get_name(u: &User) -> String {
     }
     if let Some(last_name) = &u.last_name {
         name.push(' ');
-        name.push_str(&last_name);
+        name.push_str(last_name);
     }
     name
 }
@@ -39,12 +39,12 @@ pub async fn guozao(bot: &Bot, msg: &Message) -> BotResult {
         None => format!("[自己](tg://user?id={})", msg.from().unwrap().id),
     };
     let text = if args.len() == 1 {
-        format!("{} {}了 {}", me, args[0][1..].to_string(), play_with)
+        format!("{} {}了 {}", me, &args[0][1..], play_with)
     } else {
         format!(
             "{} {}了 {} {}",
             me,
-            args[0][1..].to_string(),
+            &args[0][1..],
             play_with,
             args[1..].join(" ")
         )

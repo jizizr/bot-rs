@@ -51,7 +51,7 @@ impl Sled {
                         .collect::<Vec<i64>>();
                     {
                         for group_id in key2remove.iter() {
-                            let config = self.queue.map.get(&group_id).unwrap();
+                            let config = self.queue.map.get(group_id).unwrap();
                             let config_hashmap: HashMap<String, bool> = config
                                 .iter()
                                 .map(|x| (x.key().to_string(), *x.value()))

@@ -72,7 +72,7 @@ async fn get_short(msg: &Message) -> Result<String, AppError> {
         .json()
         .await?;
     if post_result.code == 200.to_string() {
-        return Ok(format!("https://774.gs/{}", post_result.shorturl));
+        Ok(format!("https://774.gs/{}", post_result.shorturl))
     } else if post_result.code == 2003.to_string() {
         return Err(AppError::CustomError("指定的短域已被占用".to_string()));
     } else {

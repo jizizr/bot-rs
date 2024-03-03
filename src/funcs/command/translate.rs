@@ -20,13 +20,13 @@ cmd!(
 fn extract_data(json_data: Value) -> Result<Vec<(String, String)>, AppError> {
     let extracted = json_data
         .as_array()
-        .and_then(|array| array.get(0)?.as_array())
+        .and_then(|array| array.first()?.as_array())
         .map(|first_element| {
             first_element
                 .iter()
                 .filter_map(|item| {
                     if let Value::Array(inner_array) = item {
-                        let first = inner_array.get(0)?.as_str()?;
+                        let first = inner_array.first()?.as_str()?;
                         let second = inner_array.get(1)?.as_str()?;
                         Some((first.to_string(), second.to_string()))
                     } else {
@@ -63,7 +63,7 @@ async fn translate_req(tl: &str, text: &str, is_compare: bool) -> Result<String,
                 .collect::<Vec<String>>()
         } else {
             data_iter
-                .map(|(a, _)| format!("{}", a))
+                .map(|(a, _)| a.to_string())
                 .collect::<Vec<String>>()
         }
         .join("\n")
@@ -73,7 +73,7 @@ async fn translate_req(tl: &str, text: &str, is_compare: bool) -> Result<String,
 pub async fn translate_callback(bot: Bot, q: CallbackQuery) -> Result<(), AppError> {
     if let Some(translate) = q.data {
         bot.answer_callback_query(q.id).await?;
-        let mut translate = translate.splitn(2, " ");
+        let mut translate = translate.splitn(2, ' ');
         let msg = match q.message {
             None => return Ok(()),
             Some(msg) => msg,
@@ -127,7 +127,7 @@ async fn get_translate(
     is_callback: bool,
 ) -> Result<(String, MessageId), AppError> {
     let (translate, mid) =
-        match TranslateCmd::try_parse_from(getor(&msg).unwrap().split_whitespace()) {
+        match TranslateCmd::try_parse_from(getor(msg).unwrap().split_whitespace()) {
             Ok(translate) => (translate, msg.id),
             Err(e) => (
                 TranslateCmd::try_parse_from(
@@ -137,7 +137,7 @@ async fn get_translate(
                             extract_text(msg)
                         } else {
                             msg.reply_to_message()
-                                .and_then(|msg| msg.text().and_then(|text| Some(text)))
+                                .and_then(|msg| msg.text().and_then(Some))
                         }
                         .ok_or(e)?,
                     ]
@@ -160,12 +160,12 @@ fn translate_menu(is_compare: bool) -> InlineKeyboardMarkup {
     if is_compare {
         InlineKeyboardMarkup::new([[InlineKeyboardButton::callback(
             "普通翻译模式",
-            format!("trans one"),
+            "trans one".to_string(),
         )]])
     } else {
         InlineKeyboardMarkup::new([[InlineKeyboardButton::callback(
             "对照翻译模式",
-            format!("trans two"),
+            "trans two".to_string(),
         )]])
     }
 }

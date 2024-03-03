@@ -56,7 +56,7 @@ fn popular_coins_menu() -> InlineKeyboardMarkup {
 
 fn function_menu(coin_type: &str) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new([[
-        InlineKeyboardButton::callback("返回🔙", format!("coin back")),
+        InlineKeyboardButton::callback("返回🔙", "coin back".to_string()),
         InlineKeyboardButton::callback("刷新🔁", format!("coin {}", coin_type)),
         InlineKeyboardButton::switch_inline_query_current_chat("其他货币", ""),
     ]])
@@ -103,7 +103,7 @@ pub async fn coin_callback(bot: Bot, q: CallbackQuery) -> BotResult {
 }
 
 async fn inline_coin_handle(coin_type: &str) -> String {
-    if coin_type == "" {
+    if coin_type.is_empty() {
         return "以下是热门虚拟货币查询\n如果不在下面的列表中，请点击\"其他\"并输入想要查找货币查询".to_string();
     } else if !COINS_SET.contains(coin_type) {
         return "不支持的虚拟货币".to_string();
@@ -113,9 +113,9 @@ async fn inline_coin_handle(coin_type: &str) -> String {
 
 fn inline_keyboard(coin_type: &str) -> InlineKeyboardMarkup {
     if !COINS_SET.contains(coin_type) {
-        return popular_coins_menu();
+        popular_coins_menu()
     } else {
-        return function_menu(coin_type);
+        function_menu(coin_type)
     }
 }
 

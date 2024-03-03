@@ -94,7 +94,7 @@ pub fn init() {
 pub async fn text_handler(bot: Bot, msg: Message) -> BotResult {
     println!("{:#?}", msg);
     if getor(&msg).is_some() {
-        if !getor(&msg).unwrap().starts_with("/") {
+        if !getor(&msg).unwrap().starts_with('/') {
             let e = join_with_switch!(
                 &bot,
                 &msg,

@@ -11,12 +11,12 @@ fn config_menu(group_id: i64) -> InlineKeyboardMarkup {
         row.push(InlineKeyboardButton::callback(
             format!(
                 "{} {}",
-                entry.value().to_string(),
+                entry.value(),
                 if flag { "✅" } else { "❌" }
             ),
             format!(
                 "config {} {}",
-                entry.key().to_string(),
+                entry.key(),
                 if flag { "t" } else { "f" }
             ),
         ));
@@ -54,7 +54,7 @@ pub async fn config_callback(bot: Bot, q: CallbackQuery) -> BotResult {
                     .await
             });
             let _guard = lock!((msg.chat.id, msg.id));
-            let mut func_cfg = config.splitn(2, " ");
+            let mut func_cfg = config.splitn(2, ' ');
             SWITCH
                 .update_status(
                     msg.chat.id.0,

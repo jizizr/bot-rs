@@ -17,7 +17,7 @@ pub async fn pretext(_bot: &Bot, msg: &Message) -> BotResult {
             WCLOUD_END,
         )
         .await?;
-    let text = getor(&msg).unwrap();
+    let text = getor(msg).unwrap();
     let words = text_cut(text);
     if words.is_empty() {
         return Ok(());

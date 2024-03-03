@@ -92,7 +92,7 @@ async fn get_music(
         handle_first_msg(bot_clone, jhandle)
     );
     err.0?;
-    Ok(err.1?)
+    err.1
 }
 
 async fn get_music_gui(bot: Bot, msg: Message, search: &str) -> Result<(), AppError> {
@@ -158,7 +158,7 @@ async fn get_callback_music(bot: Bot, msg: Message, id: &str, name: &str) -> Res
 pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), AppError> {
     if let Some(music) = q.data {
         bot.answer_callback_query(q.id).await?;
-        let mut music = music.splitn(2, " ");
+        let mut music = music.splitn(2, ' ');
         let msg = match q.message {
             None => return Ok(()),
             Some(msg) => msg,
@@ -221,13 +221,13 @@ async fn handle_first_msg(
 ) -> Result<Message, AppError> {
     if let Ok(result) = jhandle.await {
         let msg = result?;
-        return Ok(bot
+        Ok(bot
             .edit_message_text(msg.chat.id, msg.id, "获取成功🎉！")
             .send()
             .await
-            .unwrap_or(msg));
+            .unwrap_or(msg))
     } else {
-        return Err(AppError::CustomError("Join Task Error".to_string()));
+        Err(AppError::CustomError("Join Task Error".to_string()))
     }
 }
 

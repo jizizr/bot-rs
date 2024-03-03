@@ -81,7 +81,7 @@ fn search(mc: &mut FixedQueue<MessageConfig>, msg: &MessageConfig) -> bool {
 }
 
 pub async fn repeat(bot: &Bot, msg: &Message) -> BotResult {
-    let m: String = match getor(&msg) {
+    let m: String = match getor(msg) {
         Some(m) => m.to_string(),
         None => match msg.sticker() {
             Some(sticker) => &sticker.file.unique_id,

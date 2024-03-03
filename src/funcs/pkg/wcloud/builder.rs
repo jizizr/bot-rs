@@ -22,7 +22,7 @@ lazy_static! {
             "white",
             "./data/font.ttf",
             "./data/mask.png",
-            vec!["#10357B", "#A6BEEC", "#6C81B0", "#092F70", "#A7AAD3", "#758BC4",]
+            ["#10357B", "#A6BEEC", "#6C81B0", "#092F70", "#A7AAD3", "#758BC4"]
                 .iter()
                 .map(|s| s.to_string())
                 .collect(),
@@ -54,7 +54,7 @@ fn generate_wordcloud(
         let kwargs = [("width", width), ("height", height)].into_py_dict(py);
         kwargs.set_item("background_color", background_color)?;
         kwargs.set_item("font_path", font_path)?;
-        kwargs.set_item("mask", &mk)?;
+        kwargs.set_item("mask", mk)?;
         kwargs.set_item("colormap", colormap)?;
         kwargs.set_item("scale", scale)?;
         let wc = wordcloud_module

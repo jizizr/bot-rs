@@ -32,7 +32,7 @@ async fn coin_exchange(from: &str, to: &str) -> Result<String, AppError> {
         let html = Html::parse_document(&html);
         let selector = Selector::parse("#yDmH0d > c-wiz.zQTmif.SSPGKf.u5wqUe > div > div.e1AOyf > div > main > div.Gfxi4 > div.yWOrNb > div.VfPpkd-WsjYwc.VfPpkd-WsjYwc-OWXEXe-INsAgc.KC1dQ.Usd1Ac.AaN0Dd.QZMA8b > c-wiz > div > div:nth-child(1) > div > div.rPF6Lc > div > div:nth-child(1) > div > span > div").unwrap();
         let got = html.select(&selector).collect::<Vec<_>>();
-        if got.len() == 0 {
+        if got.is_empty() {
             return Err(AppError::CustomError("不支持的货币单位".to_string()));
         }
         let rate = format!("{:?}", got[0].text().next().unwrap());
@@ -58,13 +58,13 @@ async fn coin_exchange(from: &str, to: &str) -> Result<String, AppError> {
 async fn get_rate(msg: &Message) -> Result<String, AppError> {
     let rate = RateCmd::try_parse_from(getor(msg).unwrap().to_uppercase().split_whitespace())
         .map_err(AppError::from)?;
-    Ok(coin_exchange(&rate.from, &rate.to).await?)
+    coin_exchange(&rate.from, &rate.to).await
 }
 
-fn parse<'a>(raw: &'a str) -> Result<(f64, &'a str), AppError> {
-    let mut iter = raw.chars().enumerate().peekable();
-    while let Some((i, c)) = iter.next() {
-        if !c.is_digit(10) && c != '.' {
+fn parse(raw: &str) -> Result<(f64, &str), AppError> {
+    let iter = raw.chars().enumerate().peekable();
+    for (i, c) in iter {
+        if !c.is_ascii_digit() && c != '.' {
             if i == 0 {
                 return Ok((1.0, raw));
             } else {

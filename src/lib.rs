@@ -13,10 +13,10 @@ pub fn getor(msg: &Message) -> Option<&str> {
 }
 
 pub fn load_json<T: DeserializeOwned>(path: &str) -> T {
-    let mut file = File::open(path).expect(&format!("找不到 {path}"));
+    let mut file = File::open(path).unwrap_or_else(|_| panic!("找不到 {path}"));
     let mut json_data = String::new();
     file.read_to_string(&mut json_data)
-        .expect(&format!("读取 {path} 失败"));
+        .unwrap_or_else(|_| panic!("读取 {path} 失败"));
     // 解析 JSON 文件
     serde_json::from_str(&json_data).expect("JSON 数据解析失败")
 }

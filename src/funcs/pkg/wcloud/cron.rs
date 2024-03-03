@@ -7,7 +7,7 @@ pub async fn wcloud() -> Result<(), Vec<Box<dyn std::error::Error + Send + Sync>
         match gen::wcloud(&BOT, group).await {
             Ok(_) => {}
             Err(e) => {
-                err_vec.push(e.into());
+                err_vec.push(e);
             }
         }
     }
@@ -24,7 +24,7 @@ pub async fn wcloud_then_clear() -> Result<(), Vec<Box<dyn std::error::Error + S
         match gen::wcloud(&BOT, group.clone()).await {
             Ok(_) => {}
             Err(e) => {
-                err_vec.push(e.into());
+                err_vec.push(e);
             }
         }
         match delete_table(&group).await {

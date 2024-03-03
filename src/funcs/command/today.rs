@@ -21,7 +21,7 @@ cmd!(
 
 async fn get_today(msg: &Message) -> Result<String, AppError> {
     let base_url = "http://hao.360.com/histoday/".to_string();
-    let today = TodayCmd::try_parse_from(getor(&msg).unwrap().split_whitespace())
+    let today = TodayCmd::try_parse_from(getor(msg).unwrap().split_whitespace())
         .map_err(AppError::from)?;
     let his = if today.month.is_some() {
         if today.day.is_some() {
@@ -40,7 +40,7 @@ async fn get_today(msg: &Message) -> Result<String, AppError> {
             )
             .await?
         } else {
-            Err(AppError::CustomError(format!("日期不完整\n")))?
+            Err(AppError::CustomError("日期不完整\n".to_string()))?
         }
     } else {
         get_history(base_url, None).await?

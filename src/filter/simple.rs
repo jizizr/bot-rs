@@ -9,7 +9,7 @@ pub struct Contain<'a>(&'a str);
 
 impl Contain<'_> {
     #[allow(dead_code)]
-    pub fn new<'a>(text: &'a str) -> Box<Contain<'a>> {
+    pub fn new(text: &str) -> Box<Contain<'_>> {
         Box::new(Contain(text))
     }
 }

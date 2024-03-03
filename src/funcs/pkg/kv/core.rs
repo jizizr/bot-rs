@@ -51,7 +51,7 @@ impl GroupFuncSwitch {
         tokio::spawn(async move {
             pstorer.insert(group_id, map).await;
         });
-        return true;
+        true
     }
 
     pub fn get_template(&self) -> &DashMap<String, String> {

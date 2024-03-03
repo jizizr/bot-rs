@@ -66,13 +66,13 @@ fn fixer(url: &str) -> Result<String, String> {
     if MATCH.is_match(&url) {
         Ok(url)
     } else {
-        Err(format!("不符合规则的URL\n\n{}", USAGE.to_string()))
+        Err(format!("不符合规则的URL\n\n{}", USAGE.as_str()))
     }
 }
 
 fn get_title(body: &String) -> Option<String> {
     // 使用 scraper 解析HTML响应
-    let document = Html::parse_document(&body);
+    let document = Html::parse_document(body);
     // 使用 CSS 选择器选择 <title> 标签
     let title_selector = Selector::parse("title").unwrap();
     if let Some(title_element) = document.select(&title_selector).next() {
@@ -208,7 +208,7 @@ async fn post_paste(text: String) -> Result<String, BotError> {
 }
 
 async fn get_curl(msg: &Message) -> Result<String, BotError> {
-    let curl = CurlCmd::try_parse_from(getor(&msg).unwrap().split_whitespace())?;
+    let curl = CurlCmd::try_parse_from(getor(msg).unwrap().split_whitespace())?;
     let url = curl.url;
     let resp = get_resp(&url).await?;
     let ip = &resp.remote_addr().unwrap().ip().to_string();
@@ -223,11 +223,11 @@ async fn get_curl(msg: &Message) -> Result<String, BotError> {
     let (ssl, ip_info, paste_url) = if url.scheme() == "https" {
         tokio::join!(
             get_ssl(url.host_str().unwrap()),
-            get_ip_info(&ip),
+            get_ip_info(ip),
             post_paste(body)
         )
     } else {
-        let temp = tokio::join!(get_ip_info(&ip), post_paste(body));
+        let temp = tokio::join!(get_ip_info(ip), post_paste(body));
         (Ok("".to_string()), temp.0, temp.1)
     };
     let result = format!(
@@ -247,9 +247,9 @@ async fn get_curl(msg: &Message) -> Result<String, BotError> {
 
 *▼ Body:*
 {}",
-        markdown::escape(&url.to_string()),
+        markdown::escape(url.as_ref()),
         ssl.unwrap_or_else(|e| e.to_string()),
-        markdown::escape(&ip),
+        markdown::escape(ip),
         paste_url.unwrap_or_else(|e| e.to_string()),
     );
     Ok(result)

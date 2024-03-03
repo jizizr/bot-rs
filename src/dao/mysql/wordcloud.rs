@@ -57,9 +57,9 @@ pub async fn active_group() -> std::result::Result<Vec<String>, mysql_async::Err
 }
 
 pub async fn delete_table(table_name: &str) -> std::result::Result<(), mysql_async::Error> {
-    Ok(WORD_POOL
+    WORD_POOL
         .get_conn()
         .await?
         .query_drop(&DELETE_TABLE.replacen("{}", table_name, 1))
-        .await?)
+        .await
 }
