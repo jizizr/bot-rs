@@ -33,7 +33,7 @@ async fn coin_exchange(from: &str, to: &str) -> Result<String, AppError> {
         let selector = Selector::parse("#yDmH0d > c-wiz.zQTmif.SSPGKf.u5wqUe > div > div.e1AOyf > div > main > div.Gfxi4 > div.yWOrNb > div.VfPpkd-WsjYwc.VfPpkd-WsjYwc-OWXEXe-INsAgc.KC1dQ.Usd1Ac.AaN0Dd.QZMA8b > c-wiz > div > div:nth-child(1) > div > div.rPF6Lc > div > div:nth-child(1) > div > span > div").unwrap();
         let got = html.select(&selector).collect::<Vec<_>>();
         if got.is_empty() {
-            return Err(AppError::CustomError("不支持的货币单位".to_string()));
+            return Err(AppError::Custom("不支持的货币单位".to_string()));
         }
         let rate = format!("{:?}", got[0].text().next().unwrap());
         exchange_rate = rate[1..rate.len() - 1].parse().unwrap_or(0.0);
@@ -72,7 +72,7 @@ fn parse(raw: &str) -> Result<(f64, &str), AppError> {
             }
         }
     }
-    Err(AppError::CustomError("解析错误".to_string()))
+    Err(AppError::Custom("解析错误".to_string()))
 }
 
 pub async fn rate(bot: Bot, msg: Message) -> BotResult {

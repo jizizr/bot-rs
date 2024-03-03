@@ -46,6 +46,7 @@ struct Ip {
     message: Option<String>,
 }
 
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Deserialize)]
 struct ASN {
     asn: i32,
@@ -70,7 +71,7 @@ fn fixer(url: &str) -> Result<String, String> {
     }
 }
 
-fn get_title(body: &String) -> Option<String> {
+fn get_title(body: &str) -> Option<String> {
     // 使用 scraper 解析HTML响应
     let document = Html::parse_document(body);
     // 使用 CSS 选择器选择 <title> 标签

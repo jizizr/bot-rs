@@ -55,17 +55,17 @@ macro_rules! error_fmt {
         #[derive(Error, Debug)]
         pub enum AppError {
             #[error("API请求失败: {0}")]
-            RequestError(#[from] reqwest::Error),
+            Request(#[from] reqwest::Error),
             #[error("API请求失败: {0}")]
-            RetryError(#[from] reqwest_middleware::Error),
+            Retry(#[from] reqwest_middleware::Error),
             #[error("{}",clap_fmt(.0))]
-            ClapError(#[from] clap::error::Error),
+            Clap(#[from] clap::error::Error),
             #[error("{}",custom_fmt(.0))]
-            CustomError(String),
+            Custom(String),
             #[error("{}",.0)]
-            SendError(#[from] teloxide::RequestError),
+            Send(#[from] teloxide::RequestError),
             #[error("{}", .0)]
-            DynamicError(BotError),
+            Dynamic(BotError),
         }
     };
 }

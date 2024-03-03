@@ -1,6 +1,6 @@
 use bot_rs::BOT;
 use filter::call_query::*;
-use funcs::{command::*, pkg, pkg::cron::cron, text::*};
+use funcs::{command::*, pkg, pkg::cron, text::*};
 use std::error::Error;
 use teloxide::{prelude::*, update_listeners::webhooks};
 

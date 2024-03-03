@@ -25,15 +25,16 @@ pub async fn pretext(_bot: &Bot, msg: &Message) -> BotResult {
     for w in words.iter() {
         add_word(&mut conn, w);
     }
-    if let Err(e) = conn.build().run().await {
-        if let mysql_async::Error::Server(mysql_err) = e {
-            if mysql_err.code == 1146 {
-                create_table(&mut conn, &msg.chat.id.to_string()).await;
-                conn.run().await;
-            } else {
-                return Err(Box::new(mysql_err));
-            }
+    match conn.build().run().await {
+        Err(mysql_async::Error::Server(mysql_err)) if mysql_err.code == 1146 => {
+            create_table(&mut conn, &msg.chat.id.to_string()).await;
+            conn.run().await;
         }
+        Err(mysql_async::Error::Server(mysql_err)) => {
+            return Err(Box::new(mysql_err));
+        }
+        _ => {}
     }
+    
     Ok(())
 }

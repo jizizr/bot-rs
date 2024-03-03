@@ -125,7 +125,7 @@ async fn get_music_cover(bot: Bot, msg: Message, search: &str) -> Result<(), App
                 "搜索更多🔍",
                 match &msg.reply_markup().unwrap().inline_keyboard[0][1].kind {
                     CallbackData(data) => data,
-                    _ => return Err(AppError::CustomError("Unknown Error".to_string())),
+                    _ => return Err(AppError::Custom("Unknown Error".to_string())),
                 },
             ),
         ]]))
@@ -171,7 +171,7 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), AppError> 
                 get_callback_music(bot, msg, music_name, music.next().unwrap()).await?
             }
             None => {
-                return Err(AppError::CustomError(
+                return Err(AppError::Custom(
                     "Unknown Error in [Music music_callback]".to_string(),
                 ))
             }
@@ -227,7 +227,7 @@ async fn handle_first_msg(
             .await
             .unwrap_or(msg))
     } else {
-        Err(AppError::CustomError("Join Task Error".to_string()))
+        Err(AppError::Custom("Join Task Error".to_string()))
     }
 }
 

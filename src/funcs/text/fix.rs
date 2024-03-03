@@ -45,8 +45,8 @@ fn clear(input: &mut String, target_char: char) -> Option<()> {
         .map(|(i, _)| (i, target_char.len_utf8()))
     {
         let bytes = unsafe { input.as_mut_vec() };
-        for i in index..(index + char_len) {
-            bytes[i] = 0;
+        for item in bytes.iter_mut().skip(index).take(char_len) {
+            *item = 0;
         }
         Some(())
     } else {

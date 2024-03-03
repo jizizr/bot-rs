@@ -35,7 +35,7 @@ fn extract_data(json_data: Value) -> Result<Vec<(String, String)>, AppError> {
                 })
                 .collect()
         })
-        .ok_or(AppError::CustomError("Invalid structure".to_string()))?;
+        .ok_or(AppError::Custom("Invalid structure".to_string()))?;
 
     Ok(extracted)
 }
@@ -88,7 +88,7 @@ pub async fn translate_callback(bot: Bot, q: CallbackQuery) -> Result<(), AppErr
                 is_compare = true;
             }
             _ => {
-                return Err(AppError::CustomError(
+                return Err(AppError::Custom(
                     "Unknown Error in [Translate translate_callback]".to_string(),
                 ))
             }
@@ -136,8 +136,7 @@ async fn get_translate(
                         if is_callback {
                             extract_text(msg)
                         } else {
-                            msg.reply_to_message()
-                                .and_then(|msg| msg.text().and_then(Some))
+                            msg.reply_to_message().and_then(|msg| msg.text())
                         }
                         .ok_or(e)?,
                     ]

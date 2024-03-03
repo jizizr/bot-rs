@@ -82,9 +82,9 @@ async fn get_chat(msg: &Message) -> Result<String, AppError> {
     let content = res
         .candidates
         .first()
-        .ok_or(AppError::CustomError("未知错误".to_string()))?;
+        .ok_or(AppError::Custom("未知错误".to_string()))?;
     if content.finish_reason != "STOP" {
-        return Err(AppError::CustomError(content.finish_reason.to_string()));
+        return Err(AppError::Custom(content.finish_reason.to_string()));
     }
     Ok(content
         .content

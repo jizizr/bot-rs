@@ -1,5 +1,6 @@
 use super::*;
 use regex::Regex;
+use std::fmt::Write;
 
 lazy_static! {
     static ref HIS_MATCH: Regex = Regex::new(r#"</em>\.(.*?)</dt>"#).unwrap();
@@ -21,8 +22,8 @@ cmd!(
 
 async fn get_today(msg: &Message) -> Result<String, AppError> {
     let base_url = "http://hao.360.com/histoday/".to_string();
-    let today = TodayCmd::try_parse_from(getor(msg).unwrap().split_whitespace())
-        .map_err(AppError::from)?;
+    let today =
+        TodayCmd::try_parse_from(getor(msg).unwrap().split_whitespace()).map_err(AppError::from)?;
     let his = if today.month.is_some() {
         if today.day.is_some() {
             get_history(
@@ -40,7 +41,7 @@ async fn get_today(msg: &Message) -> Result<String, AppError> {
             )
             .await?
         } else {
-            Err(AppError::CustomError("日期不完整\n".to_string()))?
+            Err(AppError::Custom("日期不完整\n".to_string()))?
         }
     } else {
         get_history(base_url, None).await?
@@ -61,7 +62,7 @@ pub async fn today(bot: Bot, msg: Message) -> BotResult {
 async fn get_history(url: String, time: Option<String>) -> Result<String, AppError> {
     let req = reqwest::get(url).await?;
     if req.status() == reqwest::StatusCode::NOT_FOUND {
-        return Err(AppError::CustomError("日期范围错误".to_string()));
+        return Err(AppError::Custom("日期范围错误".to_string()));
     }
     let rstring = req.text().await?;
     Ok(format!(
@@ -71,12 +72,15 @@ async fn get_history(url: String, time: Option<String>) -> Result<String, AppErr
             .captures_iter(&rstring)
             .zip(LINK_MATCH.captures_iter(&rstring))
             .enumerate()
-            .map(|(i, (text, link))| format!(
-                "{}\\. [{}]({})\n",
-                i + 1,
-                markdown::escape(&text[1]),
-                markdown::escape_link_url(&link[1])
-            ))
-            .collect::<String>()
+            .fold(String::new(), |mut acc, (i, (text, link))| {
+                let _ = writeln!(
+                    acc,
+                    "{}\\. [{}]({})",
+                    i + 1,
+                    markdown::escape(&text[1]),
+                    markdown::escape_link_url(&link[1])
+                );
+                acc
+            })
     ))
 }

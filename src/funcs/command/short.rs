@@ -38,7 +38,6 @@ pub fn fix_start(u: String) -> String {
 
 async fn get_short(msg: &Message) -> Result<String, AppError> {
     let short = ShortCmd::try_parse_from(getor(msg).unwrap().split_whitespace())?;
-    let request_body;
     let surl;
     let mut url: String = match (short.surl, msg.reply_to_message(), &short.url) {
         (Some(s), _, _) => {
@@ -53,17 +52,17 @@ async fn get_short(msg: &Message) -> Result<String, AppError> {
             surl = None;
             url_value.to_string()
         }
-        _ => return Err(AppError::CustomError("用法详解：".to_string())),
+        _ => return Err(AppError::Custom("用法详解：".to_string())),
     };
     url = MATCH
         .find(&url)
-        .ok_or_else(|| AppError::CustomError("匹配不到符合规则的URL".to_string()))?
+        .ok_or_else(|| AppError::Custom("匹配不到符合规则的URL".to_string()))?
         .as_str()
         .to_string();
-    match surl {
-        None => request_body = json!({"url":fix_start(url)}),
-        Some(s) => request_body = json!({"url":fix_start(url),"shorturl":s}),
-    }
+    let request_body = match surl {
+        None => json!({"url":fix_start(url)}),
+        Some(s) => json!({"url":fix_start(url),"shorturl":s}),
+    };
     let post_result: Short = CLIENT
         .post("https://774.gs/api.php")
         .form(&request_body)
@@ -74,9 +73,9 @@ async fn get_short(msg: &Message) -> Result<String, AppError> {
     if post_result.code == 200.to_string() {
         Ok(format!("https://774.gs/{}", post_result.shorturl))
     } else if post_result.code == 2003.to_string() {
-        return Err(AppError::CustomError("指定的短域已被占用".to_string()));
+        return Err(AppError::Custom("指定的短域已被占用".to_string()));
     } else {
-        return Err(AppError::CustomError("未知错误".to_string()));
+        return Err(AppError::Custom("未知错误".to_string()));
     }
 }
 

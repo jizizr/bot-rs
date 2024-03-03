@@ -25,7 +25,7 @@ pub struct Equal(String);
 
 impl Equal {
     #[allow(dead_code)]
-    pub fn new<'a>(text: &str) -> Box<Equal> {
+    pub fn new(text: &str) -> Box<Equal> {
         Box::new(Equal(text.to_string()))
     }
 }
