@@ -88,7 +88,7 @@ pub fn init() {
         fuck_b23::fuck_b23 => "去除b站短链跟踪参数",
         guozao::guozao => "play的一环"
     );
-    tokio::spawn(async { SWITCH.pstorer.pool().await });
+    tokio::spawn(SWITCH.pstorer.pool());
 }
 
 pub async fn text_handler(bot: Bot, msg: Message) -> BotResult {

@@ -4,7 +4,6 @@ use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use serde::Deserialize;
 use std::error::Error;
-use std::sync::Arc;
 
 use teloxide::{
     prelude::*,

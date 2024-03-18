@@ -257,14 +257,7 @@ async fn get_curl(msg: &Message) -> Result<String, BotError> {
 }
 
 pub async fn curl(bot: Bot, msg: Message) -> BotResult {
-    let bot = Arc::new(bot);
-    let bot_clone = bot.clone();
-
-    tokio::spawn(async move {
-        bot_clone
-            .send_chat_action(msg.chat.id, ChatAction::Typing)
-            .await
-    });
+    tokio::spawn(bot.send_chat_action(msg.chat.id, ChatAction::Typing).send());
     match get_curl(&msg).await {
         Ok(text) => {
             bot.send_message(msg.chat.id, text)

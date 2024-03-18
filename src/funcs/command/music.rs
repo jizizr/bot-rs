@@ -46,10 +46,13 @@ struct MusicList {
 
 async fn get_music_data(name: &str, num: &str) -> Result<MusicData, AppError> {
     let url = if num == "1" {
-        format!("https://api.vkeys.cn/API/QQ_Music?word={}&n=1&q=7", name)
+        format!(
+            "https://api.vkeys.cn/V1/Music/Tencent?word={}&n=1&q=7",
+            name
+        )
     } else {
         format!(
-            "https://api.vkeys.cn/API/QQ_Music?word={}&id={}&q=7",
+            "https://api.vkeys.cn/V1/Music/Tencent?word={}&id={}&q=7",
             name, num
         )
     };
@@ -67,7 +70,7 @@ async fn music2vec(url: &str) -> Result<Vec<u8>, AppError> {
 }
 
 async fn get_music(
-    bot: Arc<Bot>,
+    bot: &Bot,
     music: MusicCmd,
     msg: &Message,
     jhandle: JoinHandle<Result<Message, RequestError>>,
@@ -75,7 +78,6 @@ async fn get_music(
     let name = music.url.join(" ");
     let music = get_music_data(&name, "1").await?;
     let (audio, cover) = get_music_info(&music).await?;
-    let bot_clone = bot.clone();
     let err = tokio::join!(
         bot.send_audio(
             msg.chat.id,
@@ -89,7 +91,7 @@ async fn get_music(
             music.singer, music.link
         ))
         .send(),
-        handle_first_msg(bot_clone, jhandle)
+        handle_first_msg(bot, jhandle)
     );
     err.0?;
     err.1
@@ -97,7 +99,7 @@ async fn get_music(
 
 async fn get_music_gui(bot: Bot, msg: Message, search: &str) -> Result<(), AppError> {
     let music_datas: MusicList = get(&format!(
-        "https://api.vkeys.cn/API/QQ_Music?word={}",
+        "https://api.vkeys.cn/V1/Music/Tencent?word={}",
         search
     ))
     .await?;
@@ -216,7 +218,7 @@ async fn get_music_info(music: &MusicData) -> Result<(Vec<u8>, Vec<u8>), AppErro
 }
 
 async fn handle_first_msg(
-    bot: Arc<Bot>,
+    bot: &Bot,
     jhandle: JoinHandle<Result<Message, RequestError>>,
 ) -> Result<Message, AppError> {
     if let Ok(result) = jhandle.await {
@@ -232,14 +234,7 @@ async fn handle_first_msg(
 }
 
 pub async fn music(bot: Bot, msg: Message) -> BotResult {
-    let bot = Arc::new(bot);
-
-    let bot_clone = bot.clone();
-    tokio::spawn(async move {
-        bot_clone
-            .send_chat_action(msg.chat.id, ChatAction::Typing)
-            .await
-    });
+    tokio::spawn(bot.send_chat_action(msg.chat.id, ChatAction::Typing).send());
 
     let music = match MusicCmd::try_parse_from(getor(&msg).unwrap().split_whitespace()) {
         Ok(music) => music,
@@ -252,21 +247,15 @@ pub async fn music(bot: Bot, msg: Message) -> BotResult {
         }
     };
 
-    let bot_clone = bot.clone();
-    let jhandle = tokio::spawn(async move {
-        bot_clone
-            .send_message(msg.chat.id, "正在获取音乐...")
+    let jhandle = tokio::spawn(
+        bot.send_message(msg.chat.id, "正在获取音乐...")
             .reply_to_message_id(msg.id)
-            .send()
-            .await
-    });
+            .send(),
+    );
 
-    match get_music(bot.clone(), music, &msg, jhandle).await {
+    match get_music(&bot, music, &msg, jhandle).await {
         Ok(msg) => {
-            bot.clone()
-                .delete_message(msg.chat.id, msg.id)
-                .send()
-                .await?;
+            bot.delete_message(msg.chat.id, msg.id).send().await?;
         }
         Err(e) => {
             bot.edit_message_text(msg.chat.id, msg.id, format!("{e}"))
