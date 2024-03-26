@@ -1,9 +1,13 @@
 use lazy_static::lazy_static;
 use serde::de::DeserializeOwned;
-use std::{fs::File, io::Read};
+use std::{error::Error, fs::File, io::Read};
 use teloxide::prelude::*;
 use teloxide::Bot;
 mod settings;
+
+pub type BotError = Box<dyn Error + Send + Sync>;
+pub type BotResult = Result<(), BotError>;
+
 lazy_static! {
     pub static ref BOT: Bot = Bot::new(&settings::SETTINGS.bot.token);
 }

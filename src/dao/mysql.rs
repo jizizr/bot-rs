@@ -1,12 +1,12 @@
-use std::sync::Arc;
-
-use crate::exec;
+use super::*;
 use async_trait::async_trait;
 use mysql_async::{prelude::Queryable, *};
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub mod wordcloud;
 
+#[allow(dead_code)]
 pub struct ConnBufBuilder {
     begin: String,
     end: String,
@@ -14,6 +14,7 @@ pub struct ConnBufBuilder {
     buffer: String,
 }
 
+#[allow(dead_code)]
 impl ConnBufBuilder {
     pub fn exec(&mut self, sql: String) {
         self.buffer.push_str(&sql)
@@ -39,11 +40,13 @@ impl ConnBufBuilder {
     }
 }
 
+#[allow(dead_code)]
 pub struct ConnBuf<'a> {
     conn: Arc<Mutex<Conn>>,
     buffer: &'a str,
 }
 
+#[allow(dead_code)]
 impl ConnBuf<'_> {
     pub async fn run(&mut self) -> Result<()> {
         self.conn
