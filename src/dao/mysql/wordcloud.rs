@@ -1,10 +1,9 @@
 use crate::settings;
 
 use super::*;
-use lazy_static::lazy_static;
 
 lazy_static! {
-    static ref WORD_POOL: Pool = init_mysql(&settings::SETTINGS.mysql.url);
+    static ref WORD_POOL: Pool = init_mysql(&settings::SETTINGS.db.mysql.url);
 }
 
 #[derive(Debug, PartialEq, Eq)]

@@ -5,6 +5,13 @@ use std::{fs::File, io::Read};
 lazy_static! {
     pub static ref SETTINGS: Settings = Settings::default();
 }
+#[derive(Debug, Deserialize)]
+pub struct Settings {
+    pub bot: Bot,
+    pub url: Url,
+    pub db: DB,
+    pub gemini: Gemini,
+}
 
 #[derive(Debug, Deserialize)]
 pub struct Bot {
@@ -17,21 +24,24 @@ pub struct Url {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct DB {
+    pub mysql: Mysql,
+    pub redis: Redis,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct Mysql {
+    pub url: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Redis {
     pub url: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Gemini {
     pub key: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Settings {
-    pub bot: Bot,
-    pub url: Url,
-    pub mysql: Mysql,
-    pub gemini: Gemini,
 }
 
 impl Default for Settings {

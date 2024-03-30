@@ -3,7 +3,6 @@ use async_trait::async_trait;
 use mysql_async::{prelude::Queryable, *};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-
 pub mod wordcloud;
 
 #[allow(dead_code)]
