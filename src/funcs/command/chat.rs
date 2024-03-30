@@ -1,5 +1,3 @@
-use crate::settings;
-
 use super::*;
 
 lazy_static! {
@@ -16,7 +14,7 @@ lazy_static! {
     );
     static ref API_URL: String = format!(
         "https://generativelanguage.googleapis.774.gs/proxy?key={}",
-        settings::SETTINGS.gemini.key
+        SETTINGS.gemini.key
     );
 }
 

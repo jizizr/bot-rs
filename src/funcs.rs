@@ -1,3 +1,4 @@
+use crate::settings::SETTINGS;
 use bot_rs::{get, getor, BotError, BotResult};
 use lazy_static::lazy_static;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};

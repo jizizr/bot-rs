@@ -1,15 +1,16 @@
+use crate::settings::SETTINGS;
 use lazy_static::lazy_static;
 use serde::de::DeserializeOwned;
 use std::{error::Error, fs::File, io::Read};
 use teloxide::prelude::*;
 use teloxide::Bot;
-mod settings;
+pub mod settings;
 
 pub type BotError = Box<dyn Error + Send + Sync>;
 pub type BotResult = Result<(), BotError>;
 
 lazy_static! {
-    pub static ref BOT: Bot = Bot::new(&settings::SETTINGS.bot.token);
+    pub static ref BOT: Bot = Bot::new(&SETTINGS.bot.token);
 }
 
 pub fn getor(msg: &Message) -> Option<&str> {
