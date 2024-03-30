@@ -15,6 +15,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+    - name: Cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
     - uses: actions/checkout@v3
     - name: Build
-      run: cargo build -r --verbose
+      run: cargo build -r
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: compiled-binary
+        path: target/release/bot-rs
