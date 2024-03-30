@@ -42,16 +42,16 @@ fn generate_wordcloud(
     scale: i32,
 ) -> PyResult<PyObject> {
     Python::with_gil(|py| {
-        let matplotlib_module = PyModule::import(py, "matplotlib.colors")?;
-        let py_color_list = PyList::new(py, &color_list);
+        let matplotlib_module = PyModule::import_bound(py, "matplotlib.colors")?;
+        let py_color_list = PyList::new_bound(py, &color_list);
         let colormap = matplotlib_module
             .getattr("ListedColormap")?
             .call1((py_color_list,))?;
 
-        let wordcloud_module = PyModule::import(py, "wordcloud")?;
-        let imageio_module = PyModule::import(py, "imageio")?;
+        let wordcloud_module = PyModule::import_bound(py, "wordcloud")?;
+        let imageio_module = PyModule::import_bound(py, "imageio")?;
         let mk = imageio_module.getattr("imread")?.call1((mask_path,))?;
-        let kwargs = [("width", width), ("height", height)].into_py_dict(py);
+        let kwargs = [("width", width), ("height", height)].into_py_dict_bound(py);
         kwargs.set_item("background_color", background_color)?;
         kwargs.set_item("font_path", font_path)?;
         kwargs.set_item("mask", mk)?;
@@ -59,7 +59,7 @@ fn generate_wordcloud(
         kwargs.set_item("scale", scale)?;
         let wc = wordcloud_module
             .getattr("WordCloud")?
-            .call((), Some(kwargs))?;
+            .call((), Some(&kwargs))?;
         Ok(wc.to_object(py))
     })
 }
@@ -67,7 +67,7 @@ fn generate_wordcloud(
 pub fn build(mut png_bytes: &mut Vec<u8>, words: HashMap<String, i32>) -> Result<(), AppError> {
     Python::with_gil(|py| -> Result<(), AppError> {
         let image =
-            WCLOUD.call_method1(py, "generate_from_frequencies", (words.into_py_dict(py),))?;
+            WCLOUD.call_method1(py, "generate_from_frequencies", (words.into_py_dict_bound(py),))?;
         let pil_image = image.call_method0(py, "to_image")?;
 
         let pil_pixels = pil_image
@@ -85,7 +85,7 @@ pub fn build(mut png_bytes: &mut Vec<u8>, words: HashMap<String, i32>) -> Result
             &rgb_image.into_raw(),
             width,
             height,
-            image::ColorType::Rgb8,
+            image::ColorType::Rgb8.into(),
         )?;
         Ok(())
     })
