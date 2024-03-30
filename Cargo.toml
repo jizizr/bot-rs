@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-reqwest = { version = "0.11.18", features = ["rustls-tls"] }
+reqwest = { version = "0.12.2", features = ["rustls-tls"] }
 serde = { version = "1.0.164", features = ["derive"] }
 lazy_static = "1.4.0"
 regex = "1.9.0"
@@ -18,26 +18,26 @@ pretty_env_logger = "0.5.0"
 tokio = { version = "1.29.1", features = ["full"] }
 rand = "0.8.5"
 serde_json = "1.0.104"
-fast_qr = { version = "0.11.0", features = ["image"] }
-mysql_async = "0.33.0"
+fast_qr = { version = "0.12.1", features = ["image"] }
+mysql_async = "0.34.1"
 async-trait = "0.1.73"
-scraper = "0.18.0"
-cached = { version = "0.47.0", features = ["async"] }
+scraper = "0.19.0"
+cached = { version = "0.49.2", features = ["async"] }
 chrono = "0.4.29"
 dashmap = "5.5.3"
-image = "0.24.7"
+image = "0.25.0"
 jieba-rs = "0.6.8"
 cron = "0.12.0"
 tokio-native-tls = "0.3.1"
-x509-parser = "0.15.1"
+x509-parser = "0.16.0"
 toml = "0.8.8"
 sled = "0.34.7"
 urlencoding = "2.1.3"
 reqwest-middleware = "0.2.4"
-reqwest-retry = "0.3.0"
+reqwest-retry = "0.4.0"
 redis = { version = "0.25.2", features = ["tokio-comp"] }
 [dependencies.pyo3]
-version = "0.20.0"
+version = "0.21.0"
 features = ["auto-initialize"]
 [profile.release]
 lto = true
