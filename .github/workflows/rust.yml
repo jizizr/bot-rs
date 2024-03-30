@@ -22,14 +22,12 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-
+        key: ${{ runner.os }}-cargo-bot-rs
     - uses: actions/checkout@v3
     - name: Build
       run: cargo build -r
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
-        name: compiled-binary
+        name: bot-rs
         path: target/release/bot-rs
