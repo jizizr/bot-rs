@@ -12,6 +12,12 @@ pub struct Word {
     pub frequency: i32,
 }
 
+pub struct UserFrequency {
+    pub user_id: u64,
+    pub name: String,
+    pub frequency: i32,
+}
+
 pub async fn add_words(group_id: i64, words: Vec<String>) -> BotResult {
     let repeat = format!("({},?,1)", group_id);
     let values_str = vec![repeat; words.len()].join(", ");
@@ -20,8 +26,6 @@ pub async fn add_words(group_id: i64, words: Vec<String>) -> BotResult {
         "INSERT INTO `words` (group_id, word, count) VALUES {} ON DUPLICATE KEY UPDATE count = count + 1",
         values_str
     );
-
-    // 使用参数执行批量操作
     WORD_POOL.get_conn().await?.exec_drop(sql, params).await?;
     Ok(())
 }
@@ -41,7 +45,7 @@ pub async fn get_words(group_id: i64) -> Result<Vec<Word>> {
         .unwrap_or(vec![]))
 }
 
-pub async fn active_group() -> std::result::Result<Vec<i64>, mysql_async::Error> {
+pub async fn active_group() -> Result<Vec<i64>> {
     Ok(WORD_POOL
         .get_conn()
         .await?
@@ -57,3 +61,30 @@ pub async fn clear_words() -> BotResult {
         .await?;
     Ok(())
 }
+
+pub async fn add_user(group_id: i64, name: String, user_id: u64) -> BotResult {
+    let sql = "INSERT INTO `users` (group_id, user_id, name, count) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE count = count + 1";
+    let params = Params::Positional(vec![group_id.into(), user_id.into(), name.into(), 1.into()]);
+    WORD_POOL.get_conn().await?.exec_drop(sql, params).await?;
+    Ok(())
+}
+
+pub async fn get_users(group_id: i64) -> Result<Vec<UserFrequency>> {
+    Ok(WORD_POOL
+        .get_conn()
+        .await?
+        .query_map(
+            format!(
+                "SELECT user_id, name, count FROM `users` WHERE group_id = {}",
+                group_id
+            ),
+            |(user_id, name, frequency)| UserFrequency {
+                user_id,
+                name,
+                frequency,
+            },
+        )
+        .await
+        .unwrap_or(vec![]))
+}
+

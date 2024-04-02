@@ -8,9 +8,25 @@ pub async fn pretext(_bot: &Bot, msg: &Message) -> BotResult {
     }
     let text = getor(msg).unwrap();
     let words = text_cut(text);
-    let (e1, e2) = tokio::join!(
-        add_words(msg.chat.id.0, words),
-        wc_switch(msg.chat.id.0, true)
+    if words.is_empty() {
+        return Ok(());
+    }
+    let group_id = msg.chat.id.0;
+    let user = msg.from().unwrap();
+    let mut name = get_name(user);
+    if name.chars().take(5).count() == 6 {
+        name = name.splitn(2, "|").next().unwrap().to_string();
+    }
+    if name.chars().take(5).count() >= 6 {
+        name = name.splitn(2, " ").next().unwrap().to_string();
+    }
+    if name.chars().take(5).count() >= 6 {
+        name = name.chars().take(5).collect();
+    }
+    let (e1, e2, e3) = tokio::join!(
+        add_words(group_id, words),
+        wc_switch(group_id, true),
+        add_user(group_id, name, user.id.0)
     );
-    e1.and(e2)
+    e1.and(e2).and(e3)
 }

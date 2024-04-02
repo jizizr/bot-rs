@@ -123,6 +123,8 @@ pub enum Cmd {
     Rate,
     #[command(description = "生成词云")]
     Wcloud,
+    #[command(description = "用户发言统计")]
+    UserFreq,
     #[command(description = "curl")]
     Curl,
     #[command(description = "音乐")]
@@ -231,6 +233,7 @@ pub async fn command_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
         Short => short::short,
         Rate => rate::rate,
         Wcloud => wcloud::wcloud,
+        UserFreq => wcloud::user_freq,
         Curl => curl::curl,
         Music => music::music,
         Config => config::config,

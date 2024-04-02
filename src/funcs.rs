@@ -6,7 +6,7 @@ use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use serde::Deserialize;
 use teloxide::{
     prelude::*,
-    types::{ChatAction, Me},
+    types::{ChatAction, Me, User},
     utils::{command::BotCommands, markdown},
 };
 pub mod command;
@@ -18,4 +18,24 @@ fn retry_client(client: reqwest::Client, times: u32) -> ClientWithMiddleware {
     ClientBuilder::new(client)
         .with(RetryTransientMiddleware::new_with_policy(retry_policy))
         .build()
+}
+
+fn get_name(u: &User) -> String {
+    let mut name = String::new();
+    if !u.first_name.is_empty() {
+        name.push_str(&u.first_name);
+    }
+    if let Some(last_name) = &u.last_name {
+        name.push(' ');
+        name.push_str(last_name);
+    }
+    name
+}
+
+fn fmt_at(msg: &Message) -> String {
+    format!(
+        "[{}](tg://user?id={})",
+        markdown::escape(&get_name(msg.from().unwrap())),
+        msg.from().unwrap().id
+    )
 }

@@ -488,7 +488,6 @@ dependencies = [
  "mysql_async",
  "pretty_env_logger",
  "pyo3",
- "rand",
  "redis 0.25.2",
  "regex",
  "reqwest",

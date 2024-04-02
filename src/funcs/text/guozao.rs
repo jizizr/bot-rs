@@ -1,4 +1,4 @@
-use teloxide::types::{ParseMode, User};
+use teloxide::types::ParseMode;
 
 use super::*;
 
@@ -6,26 +6,6 @@ fn contains_chinese(text: &str) -> bool {
     text.chars()
         .skip(1)
         .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
-}
-
-fn get_name(u: &User) -> String {
-    let mut name = String::new();
-    if !u.first_name.is_empty() {
-        name.push_str(&u.first_name);
-    }
-    if let Some(last_name) = &u.last_name {
-        name.push(' ');
-        name.push_str(last_name);
-    }
-    name
-}
-
-fn fmt_at(msg: &Message) -> String {
-    format!(
-        "[{}](tg://user?id={})",
-        markdown::escape(&get_name(msg.from().unwrap())),
-        msg.from().unwrap().id
-    )
 }
 
 pub async fn guozao(bot: &Bot, msg: &Message) -> BotResult {

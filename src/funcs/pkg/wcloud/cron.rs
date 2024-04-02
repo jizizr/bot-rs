@@ -24,6 +24,9 @@ pub async fn wcloud() -> Result<(), Vec<Box<dyn std::error::Error + Send + Sync>
                 err_vec.push(e);
             }
         }
+        if let Err(e) = gen::user_freq(&BOT, group).await {
+            err_vec.push(e);
+        }
     }
     if err_vec.is_empty() {
         Ok(())
@@ -33,12 +36,12 @@ pub async fn wcloud() -> Result<(), Vec<Box<dyn std::error::Error + Send + Sync>
 }
 
 pub async fn wcloud_then_clear() -> Result<(), Vec<Box<dyn std::error::Error + Send + Sync>>> {
-    let mut err_vec: Vec<Box<dyn std::error::Error + Send + Sync>> = vec![];
-    for group in active_group().await.map_err(|e| vec![e.into()])? {
-        gen::wcloud(&BOT, group.clone())
-            .await
-            .unwrap_or_else(|e| err_vec.push(e));
-    }
+    let mut err_vec = match wcloud().await {
+        Ok(_) => {
+            vec![]
+        }
+        Err(e) => e,
+    };
     clear_words().await.unwrap_or_else(|e| err_vec.push(e));
     if err_vec.is_empty() {
         Ok(())
