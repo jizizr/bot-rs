@@ -5,9 +5,9 @@ pub enum SwitchType {
     WordCloud,
 }
 
-impl Into<usize> for SwitchType {
-    fn into(self) -> usize {
-        match self {
+impl From<SwitchType> for usize {
+    fn from(val: SwitchType) -> Self {
+        match val {
             SwitchType::WordCloud => 0,
         }
     }

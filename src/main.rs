@@ -2,7 +2,7 @@ use bot_rs::BOT;
 use filter::call_query::*;
 use funcs::{command::*, pkg, pkg::cron, text::*};
 use std::error::Error;
-use teloxide::{prelude::*, update_listeners::webhooks};
+use teloxide::{prelude::*, update_listeners::webhooks, utils::command::BotCommands};
 
 mod dao;
 mod filter;
@@ -40,6 +40,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mode = std::env::var("MODE").unwrap_or_default();
 
     if mode == "r" {
+        BOT.set_my_commands(Cmd::bot_commands())
+            .await
+            .expect("Couldn't set commands");
         let addr = ([127, 0, 0, 1], 12345).into();
         let url = &settings::SETTINGS.url.url;
         let url = url.parse().unwrap();

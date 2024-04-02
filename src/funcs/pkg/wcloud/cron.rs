@@ -8,10 +8,11 @@ use bot_rs::BOT;
 pub async fn wcloud() -> Result<(), Vec<Box<dyn std::error::Error + Send + Sync>>> {
     let mut err_vec: Vec<Box<dyn std::error::Error + Send + Sync>> = vec![];
     for group in active_group().await.map_err(|e| vec![e.into()])? {
-        if !get_flag(group).await.unwrap_or_else(|e| {
+        let flag = get_flag(group).await.unwrap_or_else(|e| {
             err_vec.push(e);
             true
-        }) {
+        });
+        if !flag {
             continue;
         }
         match gen::wcloud(&BOT, group).await {

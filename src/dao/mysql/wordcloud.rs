@@ -46,11 +46,11 @@ pub async fn get_words(group_id: i64) -> Result<Vec<Word>> {
 }
 
 pub async fn active_group() -> Result<Vec<i64>> {
-    Ok(WORD_POOL
+    WORD_POOL
         .get_conn()
         .await?
         .query("SELECT DISTINCT group_id FROM words")
-        .await?)
+        .await
 }
 
 pub async fn clear_words() -> BotResult {

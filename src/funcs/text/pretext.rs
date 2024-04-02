@@ -15,10 +15,10 @@ pub async fn pretext(_bot: &Bot, msg: &Message) -> BotResult {
     let user = msg.from().unwrap();
     let mut name = get_name(user);
     if name.chars().take(5).count() == 6 {
-        name = name.splitn(2, "|").next().unwrap().to_string();
+        name = name.split('|').next().unwrap().to_string();
     }
     if name.chars().take(5).count() >= 6 {
-        name = name.splitn(2, " ").next().unwrap().to_string();
+        name = name.split(' ').next().unwrap().to_string();
     }
     if name.chars().take(5).count() >= 6 {
         name = name.chars().take(5).collect();
