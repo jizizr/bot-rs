@@ -8,8 +8,6 @@ on:
   workflow_dispatch:
 env:
   CARGO_TERM_COLOR: always
-  SCCACHE_GHA_ENABLED: "true"
-  RUSTC_WRAPPER: "sccache"
 jobs:
   build:
 
@@ -17,8 +15,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    - name: Setup sccache
-      uses: mozilla-actions/sccache-action@v0.0.3
+    - uses: Swatinem/rust-cache@v2
     - name: Build
       run: cargo build -r
     - name: Upload
@@ -26,5 +23,3 @@ jobs:
       with:
         name: bot-rs
         path: target/release/bot-rs
-    - name: sccache statistics
-      run: sccache --show-stats
