@@ -1,6 +1,6 @@
 use super::gen;
 use crate::dao::{
-    mysql::wordcloud::{active_group, clear_words},
+    mysql::wordcloud::{active_group, clear},
     rdb::wordcloud::*,
 };
 use bot_rs::BOT;
@@ -43,7 +43,7 @@ pub async fn wcloud_then_clear() -> Result<(), Vec<Box<dyn std::error::Error + S
         }
         Err(e) => e,
     };
-    clear_words().await.unwrap_or_else(|e| err_vec.push(e));
+    clear().await.unwrap_or_else(|e| err_vec.push(e));
     if err_vec.is_empty() {
         Ok(())
     } else {

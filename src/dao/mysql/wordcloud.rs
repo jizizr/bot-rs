@@ -53,7 +53,7 @@ pub async fn active_group() -> Result<Vec<i64>> {
         .await
 }
 
-pub async fn clear_words() -> BotResult {
+async fn clear_words() -> BotResult {
     WORD_POOL
         .get_conn()
         .await?
@@ -75,7 +75,7 @@ pub async fn get_users(group_id: i64) -> Result<Vec<UserFrequency>> {
         .await?
         .query_map(
             format!(
-                "SELECT user_id, name, count FROM `users` WHERE group_id = {}",
+                "SELECT user_id, name, count FROM `users` WHERE group_id = {} ORDER BY count DESC LIMIT 5",
                 group_id
             ),
             |(user_id, name, frequency)| UserFrequency {
@@ -88,3 +88,16 @@ pub async fn get_users(group_id: i64) -> Result<Vec<UserFrequency>> {
         .unwrap_or(vec![]))
 }
 
+async fn clear_users() -> BotResult {
+    WORD_POOL
+        .get_conn()
+        .await?
+        .query_drop("TRUNCATE TABLE users")
+        .await?;
+    Ok(())
+}
+
+pub async fn clear() -> BotResult {
+    let (e1, e2) = tokio::join!(clear_words(), clear_users());
+    e1.and(e2)
+}
