@@ -13,9 +13,15 @@ pub async fn guozao(bot: &Bot, msg: &Message) -> BotResult {
     if args.is_empty() || !contains_chinese(args[0]) {
         return Ok(());
     }
-    let me = fmt_at(msg);
+    let me = {
+        let u = msg.from().unwrap();
+        fmt_at(&get_name(u), u.id.0)
+    };
     let play_with = match msg.reply_to_message() {
-        Some(m) => fmt_at(m),
+        Some(m) => {
+            let u = m.from().unwrap();
+            fmt_at(&get_name(u), u.id.0)
+        }
         None => format!("[自己](tg://user?id={})", msg.from().unwrap().id),
     };
     let text = if args.len() == 1 {

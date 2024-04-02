@@ -32,10 +32,6 @@ fn get_name(u: &User) -> String {
     name
 }
 
-fn fmt_at(msg: &Message) -> String {
-    format!(
-        "[{}](tg://user?id={})",
-        markdown::escape(&get_name(msg.from().unwrap())),
-        msg.from().unwrap().id
-    )
+fn fmt_at(name: &str, user_id: u64) -> String {
+    format!("[{}](tg://user?id={})", markdown::escape(name), user_id)
 }

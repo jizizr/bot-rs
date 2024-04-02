@@ -66,7 +66,6 @@ async fn clear_words() -> BotResult {
 }
 
 pub async fn add_user(group_id: i64, name: String, user_id: u64) -> BotResult {
-    println!("{name}");
     let sql = "INSERT INTO `users` (group_id, user_id, name, count) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE count = count + 1,name = VALUES(name)";
     let params = Params::Positional(vec![group_id.into(), user_id.into(), name.into(), 1.into()]);
     WORD_POOL.get_conn().await?.exec_drop(sql, params).await?;
