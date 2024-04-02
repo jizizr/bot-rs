@@ -15,17 +15,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Cache
-      uses: actions/cache@v4
-      with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
     - uses: actions/checkout@v3
+    - name: Setup sccache
+      uses: mozilla-actions/sccache-action@v0.0.3
+    - name: Set Rust caching env vars
+      run: |
+        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
     - name: Build
       run: cargo build -r
     - name: Upload
@@ -33,3 +29,5 @@ jobs:
       with:
         name: bot-rs
         path: target/release/bot-rs
+    - name: sccache statistics
+      run: sccache --show-stats
