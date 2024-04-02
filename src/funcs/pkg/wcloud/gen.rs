@@ -40,7 +40,7 @@ pub async fn user_freq(
     let time = chrono::Local::now().format("%m-%d %H:%M").to_string();
     let users_str = users
         .iter()
-        .map(|u| format!("{} 发言: `{}` 句", fmt_at(&u.name, u.user_id), u.frequency))
+        .map(|u| format!("*{}* 发言: `{}` 句", markdown::escape(&u.name), u.frequency))
         .collect::<Vec<String>>()
         .join("\n");
     bot.send_message(
