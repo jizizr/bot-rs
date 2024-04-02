@@ -19,6 +19,9 @@ pub struct UserFrequency {
 }
 
 pub async fn add_words(group_id: i64, words: Vec<String>) -> BotResult {
+    if words.is_empty() {
+        return Ok(());
+    }
     let repeat = format!("({},?,1)", group_id);
     let values_str = vec![repeat; words.len()].join(", ");
     let params = Params::Positional(words.into_iter().map(Into::into).collect());
@@ -63,7 +66,8 @@ async fn clear_words() -> BotResult {
 }
 
 pub async fn add_user(group_id: i64, name: String, user_id: u64) -> BotResult {
-    let sql = "INSERT INTO `users` (group_id, user_id, name, count) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE count = count + 1";
+    println!("{name}");
+    let sql = "INSERT INTO `users` (group_id, user_id, name, count) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE count = count + 1,name = VALUES(name)";
     let params = Params::Positional(vec![group_id.into(), user_id.into(), name.into(), 1.into()]);
     WORD_POOL.get_conn().await?.exec_drop(sql, params).await?;
     Ok(())
