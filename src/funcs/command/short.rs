@@ -1,7 +1,6 @@
 use super::*;
 use fast_qr::convert::{image::ImageBuilder, Builder, Shape};
 use fast_qr::qr::QRBuilder;
-use regex::Regex;
 use serde_json::json;
 use teloxide::types::InputFile;
 

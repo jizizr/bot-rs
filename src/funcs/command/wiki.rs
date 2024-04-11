@@ -1,5 +1,4 @@
 use super::*;
-use regex::Regex;
 
 lazy_static! {
     static ref MATCH: Regex = Regex::new(r#"<span class="searchmatch">|</span>"#).unwrap();

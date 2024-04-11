@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
 use super::*;
-use regex::Regex;
 use reqwest::{
     header::{HeaderMap, HeaderValue},
     Client, ClientBuilder, Response, Version,

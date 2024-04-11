@@ -1,5 +1,4 @@
 use crate::dao::mysql::wordcloud;
-use crate::funcs::fmt_at;
 use std::collections::HashMap;
 use teloxide::prelude::*;
 use teloxide::types::{ChatId, InputFile, ParseMode};

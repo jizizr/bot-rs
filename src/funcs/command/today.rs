@@ -1,5 +1,4 @@
 use super::*;
-use regex::Regex;
 use std::fmt::Write;
 
 lazy_static! {

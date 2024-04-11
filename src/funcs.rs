@@ -1,6 +1,7 @@
 use crate::settings::SETTINGS;
 use bot_rs::{get, getor, BotError, BotResult};
 use lazy_static::lazy_static;
+use regex::Regex;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use serde::Deserialize;
@@ -9,6 +10,7 @@ use teloxide::{
     types::{ChatAction, Me, User},
     utils::{command::BotCommands, markdown},
 };
+
 pub mod command;
 pub mod pkg;
 pub mod text;
