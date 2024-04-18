@@ -1,8 +1,10 @@
 use crate::dao::mysql::wordcloud;
 use std::collections::HashMap;
-use teloxide::prelude::*;
-use teloxide::types::{ChatId, InputFile, ParseMode};
-use teloxide::utils::markdown;
+use teloxide::{
+    prelude::*,
+    types::{ChatId, InputFile, ParseMode},
+    utils::markdown,
+};
 
 pub async fn wcloud(bot: &Bot, group: i64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut png = Vec::new();

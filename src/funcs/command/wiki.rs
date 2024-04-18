@@ -37,7 +37,11 @@ struct Page {
 
 async fn get_wiki(msg: &Message) -> Result<String, AppError> {
     let search = WikiCmd::try_parse_from(getor(msg).unwrap().split_whitespace())?;
-    let result: SearchResult = get(&format!("https://zh.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit=1&srsearch={}",search.search.join(" "))).await?;
+    let result: SearchResult = get(&format!(
+        "https://zh.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit=1&srsearch={}",
+        search.search.join(" ")
+    ))
+    .await?;
     if result.query.searchinfo.totalhits == 0 {
         return Ok(format!(
             "❌未查找到词条 `{}`",

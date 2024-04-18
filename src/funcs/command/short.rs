@@ -1,6 +1,8 @@
 use super::*;
-use fast_qr::convert::{image::ImageBuilder, Builder, Shape};
-use fast_qr::qr::QRBuilder;
+use fast_qr::{
+    convert::{image::ImageBuilder, Builder, Shape},
+    qr::QRBuilder,
+};
 use serde_json::json;
 use teloxide::types::InputFile;
 

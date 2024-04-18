@@ -1,11 +1,11 @@
-use super::{*, pkg::kv::GroupFuncSwitch};
+use super::{pkg::kv::GroupFuncSwitch, *};
 
 mod fix;
 mod fuck_b23;
+mod guozao;
 mod pretext;
 mod repeat;
 mod six;
-mod guozao;
 
 lazy_static! {
     pub static ref SWITCH: GroupFuncSwitch = GroupFuncSwitch::new();
@@ -108,11 +108,7 @@ pub async fn text_handler(bot: Bot, msg: Message) -> BotResult {
                 log::error!("{}", err);
             }
         } else {
-            let e = join_with_switch!(
-                &bot,
-                &msg,
-                guozao::guozao
-            );
+            let e = join_with_switch!(&bot, &msg, guozao::guozao);
             if let Some(err) = e.fmt() {
                 log::error!("{}", err);
             }

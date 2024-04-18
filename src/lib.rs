@@ -2,8 +2,7 @@ use crate::settings::SETTINGS;
 use lazy_static::lazy_static;
 use serde::de::DeserializeOwned;
 use std::{error::Error, fs::File, io::Read};
-use teloxide::prelude::*;
-use teloxide::Bot;
+use teloxide::{prelude::*, Bot};
 pub mod settings;
 
 pub type BotError = Box<dyn Error + Send + Sync>;

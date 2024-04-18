@@ -1,10 +1,10 @@
 use super::*;
-use image::codecs::png::PngEncoder;
-use image::{ImageEncoder, ImageError, RgbImage};
-use pyo3::prelude::*;
-use pyo3::types::{IntoPyDict, PyList};
-use std::collections::HashMap;
-use std::sync::Arc;
+use image::{codecs::png::PngEncoder, ImageEncoder, ImageError, RgbImage};
+use pyo3::{
+    prelude::*,
+    types::{IntoPyDict, PyList},
+};
+use std::{collections::HashMap, sync::Arc};
 
 #[derive(Error, Debug)]
 pub enum AppError {
@@ -22,10 +22,12 @@ lazy_static! {
             "white",
             "./data/font.ttf",
             "./data/mask.png",
-            ["#10357B", "#A6BEEC", "#6C81B0", "#092F70", "#A7AAD3", "#758BC4"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
+            [
+                "#10357B", "#A6BEEC", "#6C81B0", "#092F70", "#A7AAD3", "#758BC4"
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
             5,
         )
         .unwrap()
@@ -66,8 +68,11 @@ fn generate_wordcloud(
 
 pub fn build(mut png_bytes: &mut Vec<u8>, words: HashMap<String, i32>) -> Result<(), AppError> {
     Python::with_gil(|py| -> Result<(), AppError> {
-        let image =
-            WCLOUD.call_method1(py, "generate_from_frequencies", (words.into_py_dict_bound(py),))?;
+        let image = WCLOUD.call_method1(
+            py,
+            "generate_from_frequencies",
+            (words.into_py_dict_bound(py),),
+        )?;
         let pil_image = image.call_method0(py, "to_image")?;
 
         let pil_pixels = pil_image

@@ -37,8 +37,7 @@ pub async fn config_callback(bot: Bot, q: CallbackQuery) -> BotResult {
                 return Ok(());
             }
             tokio::spawn(
-                bot
-                    .answer_callback_query(&q.id)
+                bot.answer_callback_query(&q.id)
                     .text("正在处理，请稍后")
                     .send(),
             );

@@ -127,7 +127,9 @@ async fn get_music_cover(bot: Bot, msg: Message, search: &str) -> Result<(), App
                 "搜索更多🔍",
                 match &msg.reply_markup().unwrap().inline_keyboard[0][1].kind {
                     CallbackData(data) => data,
-                    _ => return Err(AppError::Custom("Unknown Error".to_string())),
+                    _ => {
+                        return Err(AppError::Custom("Unknown Error".to_string()));
+                    }
                 },
             ),
         ]]))
@@ -175,7 +177,7 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), AppError> 
             None => {
                 return Err(AppError::Custom(
                     "Unknown Error in [Music music_callback]".to_string(),
-                ))
+                ));
             }
         }
     }

@@ -28,10 +28,12 @@ async fn coin_price(coin_type: String) -> Result<f64, reqwest::Error> {
 
 async fn coin_handle(coin_type: &str) -> String {
     match coin_price(coin_type.to_string()).await {
-        Ok(price) => format!(
-            "1.0 {coin_type} = {price} USDT\n最后更新于：{}",
-            Local::now().format("%Y-%m-%d %H:%M:%S%.3f")
-        ),
+        Ok(price) => {
+            format!(
+                "1.0 {coin_type} = {price} USDT\n最后更新于：{}",
+                Local::now().format("%Y-%m-%d %H:%M:%S%.3f")
+            )
+        }
         Err(_) => "Api 请求异常".to_string(),
     }
 }

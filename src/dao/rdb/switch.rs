@@ -1,6 +1,5 @@
 use super::*;
-use std::convert::Into;
-use std::time::Duration;
+use std::{convert::Into, time::Duration};
 pub enum SwitchType {
     WordCloud,
 }

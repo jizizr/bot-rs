@@ -90,7 +90,7 @@ pub async fn translate_callback(bot: Bot, q: CallbackQuery) -> Result<(), AppErr
             _ => {
                 return Err(AppError::Custom(
                     "Unknown Error in [Translate translate_callback]".to_string(),
-                ))
+                ));
             }
         }
         match &msg.reply_to_message() {

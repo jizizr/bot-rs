@@ -1,7 +1,6 @@
 use crate::funcs::BotError;
 use chrono::Local;
-use std::future::Future;
-use std::str::FromStr;
+use std::{future::Future, str::FromStr};
 
 pub trait TaskFunc: Send + Sync + 'static {
     type Fut: Future<Output = Result<(), Vec<BotError>>> + Send;

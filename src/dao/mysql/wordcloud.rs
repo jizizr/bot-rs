@@ -81,11 +81,7 @@ pub async fn get_users(group_id: i64) -> Result<Vec<UserFrequency>> {
                 "SELECT user_id, name, count FROM `users` WHERE group_id = {} ORDER BY count DESC LIMIT 5",
                 group_id
             ),
-            |(user_id, name, frequency)| UserFrequency {
-                user_id,
-                name,
-                frequency,
-            },
+            |(user_id, name, frequency)| UserFrequency { user_id, name, frequency },
         )
         .await
         .unwrap_or(vec![]))
