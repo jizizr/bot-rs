@@ -14,7 +14,7 @@ cmd!(
         ///翻译内容
         #[arg(required = true)]
         content: Vec<String>,
-    }
+    },
 );
 
 fn extract_data(json_data: Value) -> Result<Vec<(String, String)>, AppError> {

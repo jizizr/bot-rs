@@ -20,7 +20,7 @@ cmd!(
         url: Option<String>,
         ///短链后缀
         surl: Option<String>,
-    }
+    },
 );
 
 #[derive(Deserialize)]

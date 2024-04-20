@@ -12,7 +12,7 @@ cmd!(
         ///词条名
         #[arg(required = true)]
         search: Vec<String>,
-    }
+    },
 );
 
 #[derive(Deserialize)]

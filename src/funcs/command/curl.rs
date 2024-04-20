@@ -32,7 +32,7 @@ cmd!(
         ///网址
         #[arg(value_parser = fixer)]
         url: String,
-    }
+    },
 );
 
 #[derive(Deserialize)]

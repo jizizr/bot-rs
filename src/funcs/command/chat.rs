@@ -26,7 +26,7 @@ cmd!(
         ///聊天内容
         #[arg(required = true)]
         content: Vec<String>,
-    }
+    },
 );
 
 #[derive(Deserialize)]

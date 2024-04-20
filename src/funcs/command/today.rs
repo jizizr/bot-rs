@@ -16,7 +16,7 @@ cmd!(
         month: Option<u8>,
         /// 日
         day: Option<u8>,
-    }
+    },
 );
 
 async fn get_today(msg: &Message) -> Result<String, AppError> {

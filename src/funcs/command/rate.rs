@@ -15,7 +15,7 @@ cmd!(
         ///目标货币
         #[arg(default_value_t = String::from("CNY"))]
         to: String,
-    }
+    },
 );
 
 //This function code was contributed by @Misaka_master

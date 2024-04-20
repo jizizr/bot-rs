@@ -1,6 +1,6 @@
 use lazy_static::lazy_static;
 use serde::Deserialize;
-use std::{fs::File, io::Read};
+use std::{collections::HashMap, fs::File, io::Read};
 
 lazy_static! {
     pub static ref SETTINGS: Settings = Settings::default();
@@ -11,6 +11,7 @@ pub struct Settings {
     pub url: Url,
     pub db: DB,
     pub gemini: Gemini,
+    pub ping_server: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]

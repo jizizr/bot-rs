@@ -15,7 +15,7 @@ cmd!(
         ///音乐名
         #[arg(required = true)]
         url: Vec<String>,
-    }
+    },
 );
 
 #[derive(Deserialize)]

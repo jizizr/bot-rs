@@ -41,7 +41,7 @@ lazy_static! {
 
 #[macro_export]
 macro_rules! error_fmt {
-    ($usage:ident) => {
+    ($usage:ident, $($variant:ident($error_type:ty),)*) => {
         fn clap_fmt(err: &clap::error::Error) -> String {
             format!(
                 "{}\n{}",
@@ -65,8 +65,10 @@ macro_rules! error_fmt {
             Custom(String),
             #[error("{}",.0)]
             Send(#[from] teloxide::RequestError),
-            #[error("{}", .0)]
-            Dynamic(BotError),
+            $(
+            #[error("{}",.0)]
+            $variant(#[from] $error_type),
+            )*
         }
     };
 }
@@ -88,56 +90,13 @@ macro_rules! command_gen {
 
 #[macro_export]
 macro_rules! cmd {
-    ($name:expr, $about:expr, $struct_name:ident, { $($field:tt)* }) => {
+    ($name:expr, $about:expr, $struct_name:ident, { $($field:tt)* }, $($variant:ident($error_type:ty),)*) => {
         lazy_static!{
             static ref USAGE: String = $struct_name::command().render_help().to_string();
         }
-        error_fmt!(USAGE);
+        error_fmt!(USAGE, $($variant($error_type),)*);
         command_gen!($name, $about, struct $struct_name { $($field)* });
     };
-}
-
-#[derive(BotCommands)]
-#[command(
-    rename_rule = "lowercase",
-    description = "These commands are supported:"
-)]
-
-pub enum Cmd {
-    #[command(description = "获取帮助信息")]
-    Help,
-    #[command(description = "发送这个了解我")]
-    Start,
-    #[command(description = "名人名言")]
-    My,
-    #[command(description = "获取实时虚拟货币价格")]
-    Coin,
-    #[command(description = "获取自己的id")]
-    Id,
-    #[command(description = "历史上的今天")]
-    Today,
-    #[command(description = "维基一下")]
-    Wiki,
-    #[command(description = "生成短链接")]
-    Short,
-    #[command(description = "查询实时汇率")]
-    Rate,
-    #[command(description = "生成词云")]
-    Wcloud,
-    #[command(description = "用户发言统计")]
-    UserFreq,
-    #[command(description = "curl")]
-    Curl,
-    #[command(description = "音乐")]
-    Music,
-    #[command(description = "功能开关")]
-    Config,
-    #[command(description = "Ai聊天")]
-    Chat,
-    #[command(description = "翻译")]
-    Translate,
-    #[command(description = "测试")]
-    Test,
 }
 
 async fn auth(bot: &Bot, msg: &Message, user_id: UserId) -> Result<bool, BotError> {
@@ -219,6 +178,51 @@ macro_rules! cmd_match {
     };
 }
 
+#[derive(BotCommands)]
+#[command(
+    rename_rule = "lowercase",
+    description = "These commands are supported:"
+)]
+
+pub enum Cmd {
+    #[command(description = "获取帮助信息")]
+    Help,
+    #[command(description = "发送这个了解我")]
+    Start,
+    #[command(description = "名人名言")]
+    My,
+    #[command(description = "获取实时虚拟货币价格")]
+    Coin,
+    #[command(description = "获取自己的id")]
+    Id,
+    #[command(description = "历史上的今天")]
+    Today,
+    #[command(description = "维基一下")]
+    Wiki,
+    #[command(description = "生成短链接")]
+    Short,
+    #[command(description = "查询实时汇率")]
+    Rate,
+    #[command(description = "生成词云")]
+    Wcloud,
+    #[command(description = "用户发言统计")]
+    UserFreq,
+    #[command(description = "curl")]
+    Curl,
+    #[command(description = "音乐")]
+    Music,
+    #[command(description = "功能开关")]
+    Config,
+    #[command(description = "Ai聊天")]
+    Chat,
+    #[command(description = "翻译")]
+    Translate,
+    #[command(description = "Ping")]
+    Ping,
+    #[command(description = "测试")]
+    Test,
+}
+
 pub async fn command_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
     let cmd: Result<Cmd, ParseError> = BotCommands::parse(getor(&msg).unwrap(), me.username());
     cmd_match!(
@@ -240,6 +244,7 @@ pub async fn command_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
         Config => config::config,
         Chat => chat::chat,
         Translate => translate::translate,
+        Ping => ping::ping,
         Test => test::test
     );
     Ok(())
