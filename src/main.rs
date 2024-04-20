@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     cron::run("0 0 10,14,18,22 * * ?", pkg::wcloud::cron::wcloud).await;
     cron::run("0 0 4 * * ?", pkg::wcloud::cron::wcloud_then_clear).await;
     let mode = std::env::var("MODE").unwrap_or_default();
-
+    tokio::spawn(funcs::command::ping::init());
     if mode == "r" {
         BOT.set_my_commands(Cmd::bot_commands())
             .await
