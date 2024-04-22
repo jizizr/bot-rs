@@ -219,8 +219,8 @@ pub enum Cmd {
     Translate,
     #[command(description = "Ping")]
     Ping,
-    #[command(description = "测试")]
-    Test,
+    // #[command(description = "测试")]
+    // Test,
 }
 
 pub async fn command_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
@@ -245,7 +245,6 @@ pub async fn command_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
         Chat => chat::chat,
         Translate => translate::translate,
         Ping => ping::ping,
-        Test => test::test
     );
     Ok(())
 }
