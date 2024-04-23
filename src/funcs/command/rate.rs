@@ -1,9 +1,10 @@
 use super::*;
-use scraper::{Html, Selector};
 
 lazy_static! {
     static ref CLIENT: ClientWithMiddleware = retry_client(reqwest::Client::new(), 2);
 }
+
+const RATE_API: &str = "https://wise.com/rates/live";
 
 cmd!(
     "/rate",
@@ -18,26 +19,28 @@ cmd!(
     },
 );
 
-//This function code was contributed by @Misaka_master
+#[derive(Deserialize)]
+struct RateResponse {
+    value: f64,
+}
+
+async fn get_exchange_rate(from: &str, to: &str) -> Result<f64, AppError> {
+    if from == to {
+        return Ok(1.0);
+    }
+    let rate: RateResponse = CLIENT
+        .get(RATE_API)
+        .query(&[("source", from), ("target", to)])
+        .send()
+        .await?
+        .json()
+        .await?;
+    Ok(rate.value)
+}
+
 async fn coin_exchange(from: &str, to: &str) -> Result<String, AppError> {
     let (num, from) = parse(from)?;
-    let exchange_rate: f64;
-    if from == to {
-        exchange_rate = 1.0;
-    } else {
-        let r = CLIENT.get(format!("https://www.google.com/finance/quote/{from}-{to}?hl=zh")).header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
-    .send()
-    .await?;
-        let html = r.text().await.unwrap();
-        let html = Html::parse_document(&html);
-        let selector = Selector::parse("#yDmH0d > c-wiz.zQTmif.SSPGKf.u5wqUe > div > div.e1AOyf > div > main > div.Gfxi4 > div.yWOrNb > div.VfPpkd-WsjYwc.VfPpkd-WsjYwc-OWXEXe-INsAgc.KC1dQ.Usd1Ac.AaN0Dd.QZMA8b > c-wiz > div > div:nth-child(1) > div > div.rPF6Lc > div > div:nth-child(1) > div > span > div").unwrap();
-        let got = html.select(&selector).collect::<Vec<_>>();
-        if got.is_empty() {
-            return Err(AppError::Custom("不支持的货币单位".to_string()));
-        }
-        let rate = format!("{:?}", got[0].text().next().unwrap());
-        exchange_rate = rate[1..rate.len() - 1].parse().unwrap_or(0.0);
-    }
+    let exchange_rate = get_exchange_rate(from, to).await?;
     let mut answer = String::new();
     answer.push_str(&format!(
         "*`1`* {} \\= *`{:.4}`* {}\n",
