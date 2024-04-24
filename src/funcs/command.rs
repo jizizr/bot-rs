@@ -215,12 +215,12 @@ pub enum Cmd {
     Config,
     #[command(description = "Ai聊天")]
     Chat,
-    #[command(description = "翻译")]
+    #[command(description = "翻译", aliases = ["t"])]
     Translate,
     #[command(description = "Ping")]
     Ping,
-    // #[command(description = "测试")]
-    // Test,
+    #[command(hide)]
+    Test,
 }
 
 pub async fn command_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
@@ -245,6 +245,7 @@ pub async fn command_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
         Chat => chat::chat,
         Translate => translate::translate,
         Ping => ping::ping,
+        Test => test::test,
     );
     Ok(())
 }
