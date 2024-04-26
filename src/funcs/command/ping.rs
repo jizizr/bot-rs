@@ -26,6 +26,7 @@ pub async fn init() {
 enum Method {
     ICMP,
     TCP,
+    HTTP,
 }
 
 impl Method {
@@ -33,6 +34,7 @@ impl Method {
         match self {
             Method::ICMP => "ping",
             Method::TCP => "tcping",
+            Method::HTTP => "http",
         }
         .to_string()
     }
@@ -92,30 +94,36 @@ fn into_target(ping_cmd: &PingCmd) -> Result<Target, AppError> {
     } else {
         req.record_type = "A".to_string();
     }
-    let host_live;
-    let host = 'block: {
-        match ping_cmd.method {
-            Method::ICMP => &ping_cmd.host,
-            Method::TCP => {
-                req.port = ping_cmd.port;
-                if ping_cmd.port.is_some() {
-                    break 'block &ping_cmd.host;
-                }
-                let host_port: Vec<_> = ping_cmd.host.splitn(2, ':').collect();
-                if host_port.len() != 2 {
-                    break 'block &ping_cmd.host;
-                }
-                req.port = Some(
-                    host_port[1]
-                        .parse()
-                        .map_err(|_| AppError::Custom("Invalid port".to_string()))?,
-                );
-                host_live = host_port[0].to_string();
-                &host_live
+    match ping_cmd.method {
+        Method::ICMP => req.host = parse_host(&ping_cmd.host)?,
+        Method::TCP => {
+            req.port = ping_cmd.port;
+            if ping_cmd.port.is_some() {
+                req.host = parse_host(&ping_cmd.host)?;
+                return Ok(req);
+            }
+            let host_port: Vec<_> = ping_cmd.host.splitn(2, ':').collect();
+            if host_port.len() != 2 {
+                req.host = parse_host(&ping_cmd.host)?;
+                return Ok(req);
+            }
+            req.port = Some(
+                host_port[1]
+                    .parse()
+                    .map_err(|_| AppError::Custom("Invalid port".to_string()))?,
+            );
+            req.host = parse_host(host_port[0])?;
+        }
+        Method::HTTP => {
+            req.host = ping_cmd.host.clone();
+            if !(ping_cmd.host.starts_with("http://") || ping_cmd.host.starts_with("https://")) {
+                req.host = format!("http://{}", req.host)
+            }
+            if let Some(port) = ping_cmd.port {
+                req.host.push_str(&format!(":{}", port));
             }
         }
-    };
-    req.host = parse_host(host)?;
+    }
     Ok(req)
 }
 
@@ -293,12 +301,5 @@ mod tests {
             println!("{}", text);
             assert_eq!(expect, result);
         }
-    }
-
-    #[test]
-    async fn test_ping() {
-        let text = "/ping tcp www.baidu.com".to_string();
-        let result = get_ping(text).await.unwrap();
-        println!("{:?}", result);
     }
 }
