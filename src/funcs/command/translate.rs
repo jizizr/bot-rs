@@ -6,6 +6,9 @@ lazy_static! {
         retry_client(reqwest::Client::builder().build().unwrap(), 2);
 }
 
+const CN: &str = "zh-CN";
+const EN: &str = "EN";
+
 cmd!(
     "/translate",
     "翻译",
@@ -70,6 +73,42 @@ async fn translate_req(tl: &str, text: &str, is_compare: bool) -> Result<String,
     })
 }
 
+fn compare_info(msg: &Message) -> Result<bool, AppError> {
+    if let CallbackData(data) = &msg
+        .reply_markup()
+        .ok_or(AppError::Custom("No reply_markup".to_string()))?
+        .inline_keyboard[0][0]
+        .kind
+    {
+        if data == "trans one" {
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    } else {
+        Err(AppError::Custom(
+            "Unknown Error in [Translate compare_info]".to_string(),
+        ))
+    }
+}
+
+fn tl_info(msg: &Message) -> Result<&str, AppError> {
+    if let CallbackData(data) = &msg
+        .reply_markup()
+        .ok_or(AppError::Custom("No reply_markup".to_string()))?
+        .inline_keyboard[0][1]
+        .kind
+    {
+        Ok(data.splitn(2, ' ').last().ok_or(AppError::Custom(
+            "Unknown Error in [Translate tl_info]".to_string(),
+        ))?)
+    } else {
+        Err(AppError::Custom(
+            "Unknown Error in [Translate tl_info]".to_string(),
+        ))
+    }
+}
+
 pub async fn translate_callback(bot: Bot, q: CallbackQuery) -> Result<(), AppError> {
     if let Some(translate) = q.data {
         bot.answer_callback_query(q.id).await?;
@@ -80,12 +119,23 @@ pub async fn translate_callback(bot: Bot, q: CallbackQuery) -> Result<(), AppErr
         };
         let _guard = lock!((msg.chat.id, msg.id));
         let is_compare;
+        let tl;
         match translate.next() {
             Some("one") => {
                 is_compare = false;
+                tl = tl_info(&msg)?;
             }
             Some("two") => {
                 is_compare = true;
+                tl = tl_info(&msg)?;
+            }
+            Some(CN) => {
+                is_compare = compare_info(&msg)?;
+                tl = EN;
+            }
+            Some(EN) => {
+                is_compare = compare_info(&msg)?;
+                tl = CN;
             }
             _ => {
                 return Err(AppError::Custom(
@@ -98,9 +148,9 @@ pub async fn translate_callback(bot: Bot, q: CallbackQuery) -> Result<(), AppErr
                 bot.edit_message_text(
                     msg.chat.id,
                     msg.id,
-                    get_translate(m, is_compare, true).await?.0,
+                    get_translate(m, tl, is_compare, true).await?.0,
                 )
-                .reply_markup(translate_menu(is_compare))
+                .reply_markup(translate_menu(is_compare, tl))
                 .await?;
             }
             None => {
@@ -123,6 +173,7 @@ fn extract_text(message: &Message) -> Option<&str> {
 
 async fn get_translate(
     msg: &Message,
+    tl: &str,
     is_compare: bool,
     is_callback: bool,
 ) -> Result<(String, MessageId), AppError> {
@@ -150,31 +201,28 @@ async fn get_translate(
         };
 
     let text = translate.content.join(" ");
-    let tl = "zh-CN";
     let translated = translate_req(tl, &text, is_compare).await?;
     Ok((translated, mid))
 }
 
-fn translate_menu(is_compare: bool) -> InlineKeyboardMarkup {
-    if is_compare {
-        InlineKeyboardMarkup::new([[InlineKeyboardButton::callback(
-            "普通翻译模式",
-            "trans one".to_string(),
-        )]])
+fn translate_menu(is_compare: bool, tl: &str) -> InlineKeyboardMarkup {
+    let mut buttom = Vec::new();
+    buttom.push(if is_compare {
+        InlineKeyboardButton::callback("对照翻译模式", "trans one")
     } else {
-        InlineKeyboardMarkup::new([[InlineKeyboardButton::callback(
-            "对照翻译模式",
-            "trans two".to_string(),
-        )]])
-    }
+        InlineKeyboardButton::callback("普通翻译模式", "trans two")
+    });
+    buttom.push(InlineKeyboardButton::callback(tl, format!("trans {}", tl)));
+    InlineKeyboardMarkup::new(vec![buttom])
 }
 
 pub async fn translate(bot: Bot, msg: Message) -> BotResult {
     let is_compare = false;
-    match get_translate(&msg, is_compare, false).await {
+    let tl = CN;
+    match get_translate(&msg, tl, is_compare, false).await {
         Ok((text, mid)) => bot
             .send_message(msg.chat.id, text)
-            .reply_markup(translate_menu(is_compare))
+            .reply_markup(translate_menu(is_compare, CN))
             .reply_to_message_id(mid),
         Err(e) => bot
             .send_message(msg.chat.id, format!("{e}"))
