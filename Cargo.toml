@@ -38,6 +38,7 @@ redis = { version = "0.25", features = ["tokio-comp"] }
 ping-server-rs = { git = "https://github.com/jizizr/ping-server-rs" }
 async-once-cell = "0.5"
 futures = "0.3"
+lingua = "1.6"
 
 [dependencies.pyo3]
 version = "0.21"

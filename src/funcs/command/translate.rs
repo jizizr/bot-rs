@@ -1,12 +1,14 @@
 use super::*;
+use lingua::{Language, LanguageDetector, LanguageDetectorBuilder};
 use serde_json::Value;
-
 lazy_static! {
     static ref CLIENT: ClientWithMiddleware =
         retry_client(reqwest::Client::builder().build().unwrap(), 2);
+    static ref LANG: LanguageDetector =
+        LanguageDetectorBuilder::from_languages(&[Language::English, Language::Chinese]).build();
 }
 
-const CN: &str = "zh-CN";
+const CN: &str = "ZH";
 const EN: &str = "EN";
 
 cmd!(
@@ -148,7 +150,7 @@ pub async fn translate_callback(bot: Bot, q: CallbackQuery) -> Result<(), AppErr
                 bot.edit_message_text(
                     msg.chat.id,
                     msg.id,
-                    get_translate(m, tl, is_compare, true).await?.0,
+                    get_translate(m, Some(tl), is_compare, true).await?.0,
                 )
                 .reply_markup(translate_menu(is_compare, tl))
                 .await?;
@@ -171,12 +173,12 @@ fn extract_text(message: &Message) -> Option<&str> {
     None
 }
 
-async fn get_translate(
-    msg: &Message,
-    tl: &str,
+async fn get_translate<'a>(
+    msg: &'a Message,
+    tl: Option<&'a str>,
     is_compare: bool,
     is_callback: bool,
-) -> Result<(String, MessageId), AppError> {
+) -> Result<(String, MessageId, &'a str), AppError> {
     let (translate, mid) =
         match TranslateCmd::try_parse_from(getor(msg).unwrap().split_whitespace()) {
             Ok(translate) => (translate, msg.id),
@@ -199,10 +201,13 @@ async fn get_translate(
                 },
             ),
         };
-
     let text = translate.content.join(" ");
+    let tl = tl.unwrap_or_else(|| match LANG.detect_language_of(&text) {
+        Some(Language::Chinese) => EN,
+        _ => CN,
+    });
     let translated = translate_req(tl, &text, is_compare).await?;
-    Ok((translated, mid))
+    Ok((translated, mid, tl))
 }
 
 fn translate_menu(is_compare: bool, tl: &str) -> InlineKeyboardMarkup {
@@ -218,11 +223,10 @@ fn translate_menu(is_compare: bool, tl: &str) -> InlineKeyboardMarkup {
 
 pub async fn translate(bot: Bot, msg: Message) -> BotResult {
     let is_compare = false;
-    let tl = CN;
-    match get_translate(&msg, tl, is_compare, false).await {
-        Ok((text, mid)) => bot
+    match get_translate(&msg, None, is_compare, false).await {
+        Ok((text, mid, tl)) => bot
             .send_message(msg.chat.id, text)
-            .reply_markup(translate_menu(is_compare, CN))
+            .reply_markup(translate_menu(is_compare, tl))
             .reply_to_message_id(mid),
         Err(e) => bot
             .send_message(msg.chat.id, format!("{e}"))
