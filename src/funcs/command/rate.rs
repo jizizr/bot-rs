@@ -14,10 +14,18 @@ cmd!(
         ///原货币 [数量{defult:1}]+(货币单位)
         from: String,
         ///目标货币
-        #[arg(default_value_t = String::from("CNY"))]
+        #[arg(default_value_t = String::from("CNY"),value_parser  = is_alphabetic)]
         to: String,
     },
 );
+
+fn is_alphabetic(value: &str) -> Result<String, String> {
+    if value.chars().all(|c| c.is_alphabetic()) {
+        Ok(value.to_string())
+    } else {
+        Err(String::from("货币单位格式错误"))
+    }
+}
 
 #[derive(Deserialize)]
 struct RateResponse {
@@ -28,13 +36,15 @@ async fn get_exchange_rate(from: &str, to: &str) -> Result<f64, AppError> {
     if from == to {
         return Ok(1.0);
     }
-    let rate: RateResponse = CLIENT
+    let resp = CLIENT
         .get(RATE_API)
         .query(&[("source", from), ("target", to)])
         .send()
-        .await?
-        .json()
         .await?;
+    if !resp.status().is_success() {
+        return Err(AppError::Custom("不支持的货币".to_string()));
+    }
+    let rate: RateResponse = resp.json().await?;
     Ok(rate.value)
 }
 
