@@ -16,6 +16,7 @@ pub struct Settings {
 
 #[derive(Debug, Deserialize)]
 pub struct Bot {
+    pub owner: i64,
     pub token: String,
 }
 

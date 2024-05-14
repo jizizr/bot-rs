@@ -1,8 +1,10 @@
-use bot_rs::BOT;
+use bot_rs::{settings::SETTINGS, BOT};
 use filter::call_query::*;
 use funcs::{command::*, pkg, pkg::cron, text::*};
 use std::error::Error;
 use teloxide::{prelude::*, update_listeners::webhooks, utils::command::BotCommands};
+
+use crate::funcs::SendErrorHandler;
 
 mod dao;
 mod filter;
@@ -33,12 +35,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut dispatcher = Dispatcher::builder(BOT.clone(), handler)
         .enable_ctrlc_handler()
         .distribution_function(|_| None::<std::convert::Infallible>)
+        .error_handler(SendErrorHandler::new(
+            BOT.clone(),
+            ChatId(SETTINGS.bot.owner),
+        ))
         .build();
 
     cron::run("0 0 10,14,18,22 * * ?", pkg::wcloud::cron::wcloud).await;
     cron::run("0 0 4 * * ?", pkg::wcloud::cron::wcloud_then_clear).await;
     let mode = std::env::var("MODE").unwrap_or_default();
-    tokio::spawn(funcs::command::ping::init());
     if mode == "r" {
         BOT.set_my_commands(Cmd::bot_commands())
             .await

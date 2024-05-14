@@ -9,6 +9,7 @@ mod six;
 
 lazy_static! {
     pub static ref SWITCH: GroupFuncSwitch = GroupFuncSwitch::new();
+    static ref _T: Option<()> = init();
 }
 
 trait Display {
@@ -80,7 +81,7 @@ macro_rules! add_template {
     };
 }
 
-pub fn init() {
+pub fn init() -> Option<()> {
     add_template!(
         fix::fix => "补括号",
         six::six => "6",
@@ -89,6 +90,8 @@ pub fn init() {
         guozao::guozao => "play的一环"
     );
     tokio::spawn(SWITCH.pstorer.pool());
+    tokio::spawn(crate::funcs::command::ping::init());
+    Some(())
 }
 
 pub async fn text_handler(bot: Bot, msg: Message) -> BotResult {
