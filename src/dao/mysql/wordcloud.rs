@@ -9,7 +9,7 @@ lazy_static! {
 #[derive(Debug, PartialEq, Eq)]
 pub struct Word {
     pub word: String,
-    pub frequency: i32,
+    pub frequency: usize,
 }
 
 pub struct UserFrequency {

@@ -7,13 +7,11 @@ use teloxide::{
 };
 
 pub async fn wcloud(bot: &Bot, group: i64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut png = Vec::new();
-
     //转换为wordcloud需要的HashMap
-    let words: HashMap<String, i32> = wordcloud::get_words(group)
-        .await?
-        .into_iter()
-        .map(|w| (w.word, w.frequency))
+    let word_vec = wordcloud::get_words(group).await?;
+    let words: HashMap<&str, usize> = word_vec
+        .iter()
+        .map(|w| (w.word.as_str(), w.frequency))
         .collect();
     //处理没有记录的情况
     let group = ChatId(group);
@@ -23,6 +21,7 @@ pub async fn wcloud(bot: &Bot, group: i64) -> Result<(), Box<dyn std::error::Err
         return Ok(());
     }
 
+    let mut png = Vec::new();
     //生成词云到内存
     super::builder::build(&mut png, words)?;
 
