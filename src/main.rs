@@ -1,4 +1,4 @@
-use bot_rs::{settings::SETTINGS, BOT};
+use bot_rs::{settings::SETTINGS, BotError, BOT};
 use filter::call_query::*;
 use funcs::{command::*, pkg, pkg::cron, text::*};
 use std::error::Error;
@@ -32,17 +32,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .branch(Update::filter_callback_query().endpoint(call_query_handler))
         .branch(Update::filter_inline_query().endpoint(coin::inline_query_handler));
 
+    let err_handler = SendErrorHandler::new(BOT.clone(), ChatId(SETTINGS.bot.owner));
+
     let mut dispatcher = Dispatcher::builder(BOT.clone(), handler)
         .enable_ctrlc_handler()
         .distribution_function(|_| None::<std::convert::Infallible>)
-        .error_handler(SendErrorHandler::new(
-            BOT.clone(),
-            ChatId(SETTINGS.bot.owner),
-        ))
+        .error_handler(err_handler.clone())
         .build();
 
-    cron::run("0 0 10,14,18,22 * * ?", pkg::wcloud::cron::wcloud).await;
-    cron::run("0 0 4 * * ?", pkg::wcloud::cron::wcloud_then_clear).await;
+    cron::run::<BotError>(
+        "0 0 10,14,18,22 * * ?",
+        pkg::wcloud::cron::wcloud,
+        err_handler.clone(),
+    )
+    .await;
+    cron::run::<BotError>(
+        "0 0 4 * * ?",
+        pkg::wcloud::cron::wcloud_then_clear,
+        err_handler.clone(),
+    )
+    .await;
+
     let mode = std::env::var("MODE").unwrap_or_default();
     if mode == "r" {
         BOT.set_my_commands(Cmd::bot_commands())

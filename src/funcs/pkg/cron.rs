@@ -1,7 +1,6 @@
-use crate::funcs::BotError;
+use crate::funcs::{BotError, ErrorHandler};
 use chrono::Local;
-use std::{future::Future, str::FromStr};
-
+use std::{future::Future, str::FromStr, sync::Arc};
 pub trait TaskFunc: Send + Sync + 'static {
     type Fut: Future<Output = Result<(), Vec<BotError>>> + Send;
 
@@ -20,7 +19,11 @@ where
     }
 }
 
-pub async fn run(exp: &'static str, f: impl TaskFunc) {
+pub async fn run<E>(
+    exp: &'static str,
+    f: impl TaskFunc,
+    handler: Arc<dyn ErrorHandler<BotError> + Send + Sync>,
+) {
     tokio::task::spawn(async move {
         let schedule = cron::Schedule::from_str(exp).unwrap();
         loop {
@@ -30,7 +33,7 @@ pub async fn run(exp: &'static str, f: impl TaskFunc) {
             tokio::time::sleep(wait_time).await;
             if let Err(err) = f.call().await {
                 for e in err {
-                    log::error!("任务执行失败：{}", e);
+                    handler.clone().handle_error(e).await;
                 }
             }
         }
