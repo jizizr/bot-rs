@@ -20,7 +20,6 @@ lazy_static! {
             .with_tokenizer(tokenizer)
             .with_word_rotate_chance(0.1)
             .with_font_from_path("./data/font.ttf".into())
-            .with_min_font_size(10.0)
     };
     static ref MASK: ImageBuffer<Luma<u8>, Vec<u8>> = {
         let mut file = File::open("./data/mask.png").expect("Unable to open mask file");
@@ -34,7 +33,9 @@ lazy_static! {
 }
 
 pub fn build(png_bytes: &mut Vec<u8>, words: HashMap<&str, usize>) -> Result<(), AppError> {
-    let rgb_image = WCLOUD.generate_from_map(words, WordCloudSize::FromMask(MASK.clone()), 1.0);
+    let start = std::time::Instant::now();
+    let rgb_image = WCLOUD.generate_from_map(words, WordCloudSize::FromMask(MASK.clone()), 5.0);
     rgb_image.write_to(&mut Cursor::new(png_bytes), ImageFormat::Png)?;
+    println!("生成词云耗时: {:?}", start.elapsed());
     Ok(())
 }
