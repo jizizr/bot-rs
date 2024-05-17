@@ -1,15 +1,13 @@
-use bot_rs::{settings::SETTINGS, BotError, BOT};
-use filter::call_query::*;
-use funcs::{command::*, pkg, pkg::cron, text::*};
+use bot_rs::{
+    filter::call_query::call_query_handler, funcs::{
+        command::{coin, command_handler, Cmd},
+        pkg::{self, cron},
+        text::{init, text_handler},
+        SendErrorHandler,
+    }, settings::{self, SETTINGS}, BotError, BOT
+};
 use std::error::Error;
 use teloxide::{prelude::*, update_listeners::webhooks, utils::command::BotCommands};
-
-use crate::funcs::SendErrorHandler;
-
-mod dao;
-mod filter;
-mod funcs;
-mod settings;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {

@@ -10,6 +10,9 @@ use tokio::{
     sync::Mutex,
     time::timeout,
 };
+pub mod dao;
+pub mod filter;
+pub mod funcs;
 pub mod settings;
 
 pub type BotError = Box<dyn Error + Send + Sync>;

@@ -3,7 +3,7 @@ use crate::dao::{
     mysql::wordcloud::{active_group, clear},
     rdb::wordcloud::*,
 };
-use bot_rs::{BotError, BOT};
+use crate::{BotError, BOT};
 use futures::{stream::FuturesUnordered, StreamExt};
 pub async fn wcloud() -> Result<(), Vec<BotError>> {
     let mut err_vec = Vec::new();

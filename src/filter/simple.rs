@@ -1,5 +1,5 @@
 use super::*;
-use bot_rs::getor;
+use crate::getor;
 trait MessageFilter {
     fn check_filter(&self, m: &Message) -> bool;
 }

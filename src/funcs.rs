@@ -1,5 +1,4 @@
-use crate::settings::SETTINGS;
-use bot_rs::{get, getor, BotError, BotResult};
+use crate::{get, getor, settings::SETTINGS, BotError, BotResult};
 use futures::future::BoxFuture;
 use lazy_static::lazy_static;
 use regex::Regex;

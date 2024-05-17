@@ -1,5 +1,5 @@
 use super::*;
-use bot_rs::load_json;
+use crate::load_json;
 use cached::proc_macro::cached;
 use chrono::prelude::*;
 use std::collections::HashSet;

@@ -1,6 +1,6 @@
 use super::*;
 use async_once_cell::OnceCell;
-use bot_rs::{ResilientTcpStream, TcpStreamPool};
+use crate::{ResilientTcpStream, TcpStreamPool};
 use clap::ValueEnum;
 use dashmap::DashMap;
 use futures::{stream::FuturesUnordered, StreamExt};
