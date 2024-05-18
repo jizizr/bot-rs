@@ -1,25 +1,24 @@
 use super::*;
 use crate::{ResilientTcpStream, TcpStreamPool};
-use async_once_cell::OnceCell;
 use clap::ValueEnum;
 use dashmap::DashMap;
 use futures::{stream::FuturesUnordered, StreamExt};
 use ping_server_rs::model::*;
 use std::{collections::HashMap, fmt::Write, sync::Arc};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::{
+    io::{AsyncBufReadExt, BufReader},
+    runtime::Runtime,
+};
 
-static PING_SERVER: OnceCell<HashMap<String, TcpStreamPool<ResilientTcpStream>>> = OnceCell::new();
-
-async fn init_hash_pool() -> HashMap<String, TcpStreamPool<ResilientTcpStream>> {
-    let mut hm = HashMap::new();
-    for (k, v) in SETTINGS.ping_server.iter() {
-        hm.insert(k.clone(), TcpStreamPool::new(v.clone(), 3).await);
-    }
-    hm
-}
-
-pub async fn init() {
-    PING_SERVER.get_or_init(init_hash_pool()).await;
+fn init_hash_pool() -> HashMap<String, TcpStreamPool<ResilientTcpStream>> {
+    let rt = Runtime::new().unwrap();
+    rt.block_on(async {
+        let mut hm = HashMap::new();
+        for (k, v) in SETTINGS.ping_server.iter() {
+            hm.insert(k.clone(), TcpStreamPool::new(v.clone(), 3).await);
+        }
+        hm
+    })
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -44,6 +43,7 @@ lazy_static! {
     static ref HOST_MATCH: Regex =
         Regex::new(r#"(https?://|\s|^)(([^\x20-\x2C\x2E-\x2F\x7B-\x7E]+\.)+([^:\./\s]+))(\s|$)"#)
             .unwrap();
+    static ref PING_SERVER: HashMap<String, TcpStreamPool<ResilientTcpStream>> = init_hash_pool();
 }
 
 cmd!(
@@ -163,17 +163,17 @@ async fn send_receive_json<'a, T: ?Sized + serde::Serialize, R: serde::Deseriali
     receive_json(client, buffer).await
 }
 
-async fn get_ping(text: String) -> Result<DashMap<&'static String, Answer>, AppError> {
+async fn get_ping(text: String) -> Result<DashMap<String, Answer>, AppError> {
     let ping_cmd = PingCmd::try_parse_from(text.to_lowercase().split_whitespace())?;
     let target = into_target(&ping_cmd)?;
     let mut futures = FuturesUnordered::new();
     let streams = Arc::new(DashMap::new());
 
     // 获取所有server的TcpStream
-    for (k, v) in PING_SERVER.get().unwrap().iter() {
+    for (k, v) in PING_SERVER.iter() {
         let streams = streams.clone();
         futures.push(tokio::spawn(async move {
-            streams.insert(k, v.get().await);
+            streams.insert(k.to_owned(), v.get().await);
         }));
     }
 

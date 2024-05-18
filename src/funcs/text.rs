@@ -90,7 +90,6 @@ pub fn init() -> Option<()> {
         guozao::guozao => "play的一环"
     );
     tokio::spawn(SWITCH.pstorer.pool());
-    tokio::spawn(crate::funcs::command::ping::init());
     Some(())
 }
 
