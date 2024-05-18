@@ -1,12 +1,12 @@
 use super::*;
-use async_once_cell::OnceCell;
 use crate::{ResilientTcpStream, TcpStreamPool};
+use async_once_cell::OnceCell;
 use clap::ValueEnum;
 use dashmap::DashMap;
 use futures::{stream::FuturesUnordered, StreamExt};
 use ping_server_rs::model::*;
-use std::{collections::HashMap, fmt::Write, sync::Arc, vec};
-use tokio::io::AsyncReadExt;
+use std::{collections::HashMap, fmt::Write, sync::Arc};
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 static PING_SERVER: OnceCell<HashMap<String, TcpStreamPool<ResilientTcpStream>>> = OnceCell::new();
 
@@ -139,21 +139,25 @@ async fn send_json<T: ?Sized + serde::Serialize>(
 
 async fn receive_json<'a, T: serde::Deserialize<'a>>(
     client: &mut ResilientTcpStream,
-    buffer: &'a mut Vec<u8>,
+    buffer: &'a mut String,
 ) -> Result<T, AppError> {
-    client
-        .stream
-        .read(buffer)
+    let mut reader = BufReader::new(&mut client.stream);
+
+    reader
+        .read_line(buffer)
         .await
         .map_err(|e| AppError::Custom(e.to_string()))?;
-    let buffer = buffer.split(|c| *c == b'\n').next().unwrap();
-    Ok(serde_json::from_slice(&buffer[..])?)
+
+    serde_json::from_str(buffer).map_err(|e| {
+        log::error!("{}", buffer);
+        e.into()
+    })
 }
 
 async fn send_receive_json<'a, T: ?Sized + serde::Serialize, R: serde::Deserialize<'a>>(
     client: &mut ResilientTcpStream,
     target: &T,
-    buffer: &'a mut Vec<u8>,
+    buffer: &'a mut String,
 ) -> Result<R, AppError> {
     send_json(client, target).await?;
     receive_json(client, buffer).await
@@ -187,7 +191,7 @@ async fn get_ping(text: String) -> Result<DashMap<&'static String, Answer>, AppE
     let mut futures = FuturesUnordered::new();
     let target = Arc::new(target);
     for (k, v) in streams.into_iter() {
-        let mut buffer = vec![0u8; 128];
+        let mut buffer = String::with_capacity(128);
         let mut client = v?;
         let target = target.clone();
         futures.push(tokio::spawn(async move {
@@ -219,8 +223,8 @@ pub async fn ping(bot: Bot, msg: Message) -> Result<(), AppError> {
     let text = match get_ping(getor(&msg).unwrap().to_string()).await {
         Ok(dm) => dm.into_iter().fold(String::new(), |mut acc, (k, v)| {
             acc.push_str(&match v.error {
-                None => format!("{:.2}: {:.2} ms, loss = {}% \n", k, v.avg_time, v.loss),
-                Some(ref e) => format!("{}: {}\n", k, e),
+                None => format!("{}: {:.2} ms, loss = {}% \n", k, v.avg_time, v.loss),
+                Some(e) => format!("{}: {}\n", k, e),
             });
             acc
         }),
