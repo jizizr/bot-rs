@@ -5,7 +5,7 @@ lazy_static! {
     static ref CLIENT: ClientWithMiddleware =
         retry_client(reqwest::Client::builder().build().unwrap(), 2);
     static ref LANG: LanguageDetector =
-        LanguageDetectorBuilder::from_languages(&[Language::English, Language::Chinese]).build();
+        LanguageDetectorBuilder::from_languages(&[Language::English, Language::Chinese]).with_preloaded_language_models().build();
 }
 
 const CN: &str = "ZH";
