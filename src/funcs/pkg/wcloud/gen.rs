@@ -25,7 +25,9 @@ pub async fn wcloud(bot: &Bot, group: i64) -> Result<(), Box<dyn std::error::Err
     //生成词云到内存
     super::builder::build(&mut png, words)?;
 
-    bot.send_photo(group, InputFile::memory(png)).await?;
+    bot.send_photo(group, InputFile::memory(png))
+        .disable_notification(true)
+        .await?;
     Ok(())
 }
 

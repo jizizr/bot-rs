@@ -525,6 +525,7 @@ dependencies = [
  "mysql_async",
  "ping-server-rs",
  "pretty_env_logger",
+ "rand",
  "redis 0.25.3",
  "regex",
  "reqwest 0.12.4",
