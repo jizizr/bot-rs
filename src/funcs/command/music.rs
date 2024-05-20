@@ -1,8 +1,6 @@
 use super::*;
 use reqwest::{Client, Url};
-use teloxide::{payloads::EditMessageReplyMarkupSetters, RequestError};
-use tokio::task::JoinHandle;
-
+use teloxide::payloads::EditMessageReplyMarkupSetters;
 lazy_static! {
     static ref CLIENT: ClientWithMiddleware = retry_client(Client::new(), 2);
 }
@@ -72,9 +70,9 @@ async fn music2vec(url: &str) -> Result<Vec<u8>, AppError> {
 async fn get_music(
     bot: &Bot,
     music: MusicCmd,
-    msg: &Message,
-    jhandle: JoinHandle<Result<Message, RequestError>>,
-) -> Result<Message, AppError> {
+    msg: Message,
+    msg_bot: &Message,
+) -> Result<(), AppError> {
     let name = music.url.join(" ");
     let music = get_music_data(&name, "1").await?;
     let (audio, cover) = get_music_info(&music).await?;
@@ -91,10 +89,12 @@ async fn get_music(
             music.singer, music.link
         ))
         .send(),
-        handle_first_msg(bot, jhandle)
+        bot.edit_message_text(msg_bot.chat.id, msg_bot.id, "获取成功🎉，正在上传，稍等...")
+            .send()
     );
     err.0?;
-    err.1
+    err.1?;
+    Ok(())
 }
 
 async fn get_music_gui(bot: Bot, msg: Message, search: &str) -> Result<(), AppError> {
@@ -140,18 +140,20 @@ async fn get_music_cover(bot: Bot, msg: Message, search: &str) -> Result<(), App
 
 async fn get_callback_music(bot: Bot, msg: Message, id: &str, name: &str) -> Result<(), AppError> {
     let music_data: MusicData = get_music_data(name, id).await?;
+    let (audio, cover) = get_music_info(&music_data).await?;
     bot.edit_message_media(
         msg.chat.id,
         msg.id,
-        teloxide::types::InputMedia::Audio(InputMediaAudio::caption(
-            InputMediaAudio::new(
-                InputFile::memory(music2vec(&music_data.url).await?).file_name(music_data.song),
-            ),
-            format!(
-                "演唱者:「{}」\n歌曲链接：{}",
-                music_data.singer, music_data.link,
-            ),
-        )),
+        teloxide::types::InputMedia::Audio(
+            InputMediaAudio::caption(
+                InputMediaAudio::new(InputFile::memory(audio).file_name(music_data.song)),
+                format!(
+                    "演唱者:「{}」\n歌曲链接：{}",
+                    music_data.singer, music_data.link,
+                ),
+            )
+            .thumb(InputFile::memory(cover)),
+        ),
     )
     .reply_markup(link2gui_menu(music_data.cover, name.to_string()))
     .send()
@@ -219,22 +221,6 @@ async fn get_music_info(music: &MusicData) -> Result<(Vec<u8>, Vec<u8>), AppErro
     Ok((audio?, cover?))
 }
 
-async fn handle_first_msg(
-    bot: &Bot,
-    jhandle: JoinHandle<Result<Message, RequestError>>,
-) -> Result<Message, AppError> {
-    if let Ok(result) = jhandle.await {
-        let msg = result?;
-        Ok(bot
-            .edit_message_text(msg.chat.id, msg.id, "获取成功🎉！")
-            .send()
-            .await
-            .unwrap_or(msg))
-    } else {
-        Err(AppError::Custom("Join Task Error".to_string()))
-    }
-}
-
 pub async fn music(bot: Bot, msg: Message) -> BotResult {
     tokio::spawn(bot.send_chat_action(msg.chat.id, ChatAction::Typing).send());
 
@@ -249,19 +235,17 @@ pub async fn music(bot: Bot, msg: Message) -> BotResult {
         }
     };
 
-    let jhandle = tokio::spawn(
-        bot.send_message(msg.chat.id, "正在获取音乐...")
-            .reply_to_message_id(msg.id)
-            .send(),
-    );
+    let msg_bot = bot
+        .send_message(msg.chat.id, "正在获取音乐...")
+        .reply_to_message_id(msg.id)
+        .await?;
 
-    match get_music(&bot, music, &msg, jhandle).await {
-        Ok(msg) => {
-            bot.delete_message(msg.chat.id, msg.id).send().await?;
+    match get_music(&bot, music, msg, &msg_bot).await {
+        Ok(()) => {
+            bot.delete_message(msg_bot.chat.id, msg_bot.id).await?;
         }
         Err(e) => {
-            bot.edit_message_text(msg.chat.id, msg.id, format!("{e}"))
-                .send()
+            bot.edit_message_text(msg_bot.chat.id, msg_bot.id, format!("{e}"))
                 .await?;
         }
     }
