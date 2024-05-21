@@ -25,7 +25,7 @@ pub mod curl;
 pub mod id;
 pub mod music;
 pub mod ping;
-pub mod quote;
+pub mod hitokoto;
 pub mod rate;
 pub mod short;
 pub mod start;
@@ -230,7 +230,7 @@ pub async fn command_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
         bot,
         msg,
         Start => start::start,
-        My => quote::quote,
+        My => hitokoto::hitokoto,
         Coin => coin::coin,
         Id => id::id,
         Today => today::today,
