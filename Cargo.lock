@@ -540,6 +540,7 @@ dependencies = [
  "tokio",
  "tokio-native-tls",
  "toml",
+ "url",
  "urlencoding",
  "wcloud",
  "x509-parser",

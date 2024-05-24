@@ -11,6 +11,7 @@ pub struct Settings {
     pub url: Url,
     pub db: DB,
     pub gemini: Gemini,
+    pub api: Api,
     pub ping_server: HashMap<String, String>,
 }
 
@@ -23,6 +24,11 @@ pub struct Bot {
 #[derive(Debug, Deserialize)]
 pub struct Url {
     pub url: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Api {
+    pub music: String,
 }
 
 #[derive(Debug, Deserialize)]

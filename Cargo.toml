@@ -45,6 +45,7 @@ lingua = { version = "1.6", default-features = false, features = [
 wcloud = { git = "https://github.com/jizizr/wcloud" }
 bytes = "1.6"
 rand = "0.8"
+url = "2.5"
 
 [profile.release]
 lto = true

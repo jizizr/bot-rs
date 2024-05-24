@@ -1,6 +1,8 @@
 use super::*;
-use reqwest::{Client, Url};
+use crate::settings::SETTINGS;
+use reqwest::Client;
 use teloxide::payloads::EditMessageReplyMarkupSetters;
+use url::Url;
 lazy_static! {
     static ref CLIENT: ClientWithMiddleware = retry_client(Client::new(), 2);
 }
@@ -14,6 +16,7 @@ cmd!(
         #[arg(required = true)]
         url: Vec<String>,
     },
+    UrlParseError(url::ParseError),
 );
 
 #[derive(Deserialize)]
@@ -44,20 +47,15 @@ struct MusicList {
 
 async fn get_music_data(name: &str, num: &str) -> Result<MusicData, AppError> {
     let url = if num == "1" {
-        format!(
-            "https://api.vkeys.cn/V1/Music/Tencent?word={}&n=1&q=7",
-            name
-        )
+        format!("{}={}&n=1", SETTINGS.api.music, name)
     } else {
-        format!(
-            "https://api.vkeys.cn/V1/Music/Tencent?word={}&id={}&q=7",
-            name, num
-        )
+        format!("{}={}&id={}", SETTINGS.api.music, name, num)
     };
     let music_data: Music = get(&url).await?;
     Ok(music_data.data)
 }
 
+#[allow(dead_code)]
 async fn music2vec(url: &str) -> Result<Vec<u8>, AppError> {
     let mut resp = CLIENT.get(url).send().await?;
     let mut buf = Vec::new();
@@ -75,13 +73,13 @@ async fn get_music(
 ) -> Result<(), AppError> {
     let name = music.url.join(" ");
     let music = get_music_data(&name, "1").await?;
-    let (audio, cover) = get_music_info(&music).await?;
+    let (audio, cover) = get_music_info(&music)?;
     let err = tokio::join!(
         bot.send_audio(
             msg.chat.id,
-            InputFile::memory(audio).file_name(music.song.clone()),
+            InputFile::url(audio).file_name(music.song.clone()),
         )
-        .thumb(InputFile::memory(cover))
+        .thumb(InputFile::url(cover))
         .reply_to_message_id(msg.id)
         .reply_markup(link2gui_menu(music.cover, name))
         .caption(format!(
@@ -98,11 +96,7 @@ async fn get_music(
 }
 
 async fn get_music_gui(bot: Bot, msg: Message, search: &str) -> Result<(), AppError> {
-    let music_datas: MusicList = get(&format!(
-        "https://api.vkeys.cn/V1/Music/Tencent?word={}",
-        search
-    ))
-    .await?;
+    let music_datas: MusicList = get(&format!("{}={}", SETTINGS.api.music, search)).await?;
 
     bot.edit_message_caption(msg.chat.id, msg.id)
         .caption("选择你的音乐")
@@ -140,19 +134,19 @@ async fn get_music_cover(bot: Bot, msg: Message, search: &str) -> Result<(), App
 
 async fn get_callback_music(bot: Bot, msg: Message, id: &str, name: &str) -> Result<(), AppError> {
     let music_data: MusicData = get_music_data(name, id).await?;
-    let (audio, cover) = get_music_info(&music_data).await?;
+    let (audio, cover) = get_music_info(&music_data)?;
     bot.edit_message_media(
         msg.chat.id,
         msg.id,
         teloxide::types::InputMedia::Audio(
             InputMediaAudio::caption(
-                InputMediaAudio::new(InputFile::memory(audio).file_name(music_data.song)),
+                InputMediaAudio::new(InputFile::url(audio).file_name(music_data.song)),
                 format!(
                     "演唱者:「{}」\n歌曲链接：{}",
                     music_data.singer, music_data.link,
                 ),
             )
-            .thumb(InputFile::memory(cover)),
+            .thumb(InputFile::url(cover)),
         ),
     )
     .reply_markup(link2gui_menu(music_data.cover, name.to_string()))
@@ -200,25 +194,20 @@ fn link2gui_menu(url: String, songname: String) -> InlineKeyboardMarkup {
 }
 
 fn gui_menu(music_datas: Vec<MusicListData>, search: &str) -> InlineKeyboardMarkup {
-    let mut keyboard: Vec<Vec<InlineKeyboardButton>> = vec![vec![]; 10];
-    music_datas.chunks(2).for_each(|data| {
-        let row = data
-            .iter()
-            .map(|music_data| {
-                InlineKeyboardButton::callback(
-                    format!("{}|{}", music_data.song, music_data.singer),
-                    format!("music {} {}", music_data.id, search),
-                )
-            })
-            .collect();
-        keyboard.push(row)
+    let mut keyboard: Vec<Vec<InlineKeyboardButton>> = vec![vec![]; 5];
+    music_datas.iter().take(5).for_each(|music_data| {
+        keyboard.push(vec![InlineKeyboardButton::callback(
+            format!("{}|{}", music_data.song, music_data.singer),
+            format!("music {} {}", music_data.id, search),
+        )])
     });
     InlineKeyboardMarkup::new(keyboard)
 }
 
-async fn get_music_info(music: &MusicData) -> Result<(Vec<u8>, Vec<u8>), AppError> {
-    let (audio, cover) = tokio::join!(music2vec(&music.url), music2vec(&music.cover));
-    Ok((audio?, cover?))
+fn get_music_info(music: &MusicData) -> Result<(Url, Url), AppError> {
+    let audio = Url::parse(&music.url)?;
+    let cover = Url::parse(&music.cover)?;
+    Ok((audio, cover))
 }
 
 pub async fn music(bot: Bot, msg: Message) -> BotResult {
