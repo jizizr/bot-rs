@@ -36,7 +36,7 @@ reqwest-middleware = "0.3"
 reqwest-retry = "0.5"
 redis = { version = "0.25", features = ["tokio-comp"] }
 ping-server-rs = { git = "https://github.com/jizizr/ping-server-rs" }
-async-once-cell = "0.5"
+async_once ="0.2"
 futures = "0.3"
 lingua = { version = "1.6", default-features = false, features = [
     "chinese",

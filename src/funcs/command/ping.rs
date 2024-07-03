@@ -1,5 +1,6 @@
 use super::*;
 use crate::{ResilientTcpStream, TcpStreamPool};
+use async_once::AsyncOnce;
 use clap::ValueEnum;
 use dashmap::DashMap;
 use futures::{stream::FuturesUnordered, StreamExt};
@@ -10,15 +11,12 @@ use tokio::{
     runtime::Runtime,
 };
 
-fn init_hash_pool() -> HashMap<String, TcpStreamPool<ResilientTcpStream>> {
-    let rt = Runtime::new().unwrap();
-    rt.block_on(async {
-        let mut hm = HashMap::new();
-        for (k, v) in SETTINGS.ping_server.iter() {
-            hm.insert(k.clone(), TcpStreamPool::new(v.clone(), 3).await);
-        }
-        hm
-    })
+async fn init_hash_pool() -> HashMap<String, TcpStreamPool<ResilientTcpStream>> {
+    let mut hm = HashMap::new();
+    for (k, v) in SETTINGS.ping_server.iter() {
+        hm.insert(k.clone(), TcpStreamPool::new(v.clone(), 3).await);
+    }
+    hm
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -43,7 +41,8 @@ lazy_static! {
     static ref HOST_MATCH: Regex =
         Regex::new(r#"(https?://|\s|^)(([^\x20-\x2C\x2E-\x2F\x7B-\x7E]+\.)+([^:\./\s]+))(\s|$)"#)
             .unwrap();
-    static ref PING_SERVER: HashMap<String, TcpStreamPool<ResilientTcpStream>> = init_hash_pool();
+    static ref PING_SERVER: AsyncOnce<HashMap<String, TcpStreamPool<ResilientTcpStream>>> =
+        AsyncOnce::new(init_hash_pool());
 }
 
 cmd!(
@@ -170,7 +169,7 @@ async fn get_ping(text: String) -> Result<DashMap<String, Answer>, AppError> {
     let streams = Arc::new(DashMap::new());
 
     // 获取所有server的TcpStream
-    for (k, v) in PING_SERVER.iter() {
+    for (k, v) in PING_SERVER.get().await.iter() {
         let streams = streams.clone();
         futures.push(tokio::spawn(async move {
             streams.insert(k.to_owned(), v.get().await);
