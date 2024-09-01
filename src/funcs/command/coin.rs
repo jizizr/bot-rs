@@ -76,14 +76,14 @@ pub async fn coin_callback(bot: Bot, q: CallbackQuery) -> BotResult {
         let text = coin_handle(&coin_type.to_uppercase()).await;
         bot.answer_callback_query(q.id).await?;
         if let Some(msg) = q.message {
-            let _guard = lock!((msg.chat.id, msg.id));
+            let _guard = lock!((msg.chat().id, msg.id()));
             if coin_type == "back" {
-                bot.edit_message_text(msg.chat.id, msg.id, "选择您要查询的虚拟货币")
+                bot.edit_message_text(msg.chat().id, msg.id(), "选择您要查询的虚拟货币")
                     .reply_markup(popular_coins_menu())
                     .await?;
                 return Ok(());
             }
-            bot.edit_message_text(msg.chat.id, msg.id, text)
+            bot.edit_message_text(msg.chat().id, msg.id(), text)
                 .reply_markup(function_menu(&coin_type))
                 .await?;
         } else if let Some(id) = q.inline_message_id {

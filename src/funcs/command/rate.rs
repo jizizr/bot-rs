@@ -93,7 +93,7 @@ pub async fn rate(bot: Bot, msg: Message) -> BotResult {
         .await
         .unwrap_or_else(|e| markdown::escape(&format!("{e}")));
     bot.send_message(msg.chat.id, text)
-        .reply_to_message_id(msg.id)
+        .reply_parameters(ReplyParameters::new(msg.id))
         .parse_mode(ParseMode::MarkdownV2)
         .send()
         .await?;

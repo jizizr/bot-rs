@@ -52,8 +52,14 @@ pub async fn today(bot: Bot, msg: Message) -> BotResult {
     let text = get_today(&msg).await.unwrap_or_else(|e| format!("{e}"));
     bot.send_message(msg.chat.id, text)
         .parse_mode(ParseMode::MarkdownV2)
-        .disable_web_page_preview(true)
-        .reply_to_message_id(msg.id)
+        .link_preview_options(LinkPreviewOptions {
+            is_disabled: true,
+            url: None,
+            prefer_small_media: false,
+            prefer_large_media: false,
+            show_above_text: false,
+        })
+        .reply_parameters(ReplyParameters::new(msg.id))
         .await?;
     Ok(())
 }

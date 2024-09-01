@@ -1,11 +1,14 @@
 use super::*;
 use lingua::{Language, LanguageDetector, LanguageDetectorBuilder};
 use serde_json::Value;
+use teloxide::types::MaybeInaccessibleMessage;
 lazy_static! {
     static ref CLIENT: ClientWithMiddleware =
         retry_client(reqwest::Client::builder().build().unwrap(), 2);
     static ref LANG: LanguageDetector =
-        LanguageDetectorBuilder::from_languages(&[Language::English, Language::Chinese]).with_preloaded_language_models().build();
+        LanguageDetectorBuilder::from_languages(&[Language::English, Language::Chinese])
+            .with_preloaded_language_models()
+            .build();
 }
 
 const CN: &str = "ZH";
@@ -115,9 +118,13 @@ pub async fn translate_callback(bot: Bot, q: CallbackQuery) -> Result<(), AppErr
     if let Some(translate) = q.data {
         bot.answer_callback_query(q.id).await?;
         let mut translate = translate.splitn(2, ' ');
-        let msg = match q.message {
+        let mbi_msg = match q.message {
             None => return Ok(()),
             Some(msg) => msg,
+        };
+        let msg = match mbi_msg {
+            MaybeInaccessibleMessage::Inaccessible(_) => return Ok(()),
+            MaybeInaccessibleMessage::Regular(msg) => msg,
         };
         let _guard = lock!((msg.chat.id, msg.id));
         let is_compare;
@@ -227,10 +234,10 @@ pub async fn translate(bot: Bot, msg: Message) -> BotResult {
         Ok((text, mid, tl)) => bot
             .send_message(msg.chat.id, text)
             .reply_markup(translate_menu(is_compare, tl))
-            .reply_to_message_id(mid),
+            .reply_parameters(ReplyParameters::new(mid)),
         Err(e) => bot
             .send_message(msg.chat.id, format!("{e}"))
-            .reply_to_message_id(msg.id),
+            .reply_parameters(ReplyParameters::new(msg.id)),
     }
     .await?;
     Ok(())

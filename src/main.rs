@@ -1,10 +1,13 @@
 use bot_rs::{
-    filter::call_query::call_query_handler, funcs::{
+    filter::call_query::call_query_handler,
+    funcs::{
         command::{coin, command_handler, Cmd},
         pkg::{self, cron},
         text::{init, text_handler},
         SendErrorHandler,
-    }, settings::{self, SETTINGS}, BotError, BOT
+    },
+    settings::{self, SETTINGS},
+    BotError, BOT,
 };
 use std::error::Error;
 use teloxide::{prelude::*, update_listeners::webhooks, utils::command::BotCommands};

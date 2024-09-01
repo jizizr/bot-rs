@@ -9,7 +9,7 @@ pub async fn pretext(_bot: &Bot, msg: &Message) -> BotResult {
     let text = getor(msg).unwrap();
     let words = text_cut(text);
     let group_id = msg.chat.id.0;
-    let user = msg.from().unwrap();
+    let user = msg.from.as_ref().unwrap();
     let mut name = get_name(user);
     if name.chars().take(6).count() == 6 {
         name = name.split('|').next().unwrap().to_string();

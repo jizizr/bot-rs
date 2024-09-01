@@ -1,7 +1,7 @@
 use super::*;
 use crate::settings::SETTINGS;
 use reqwest::Client;
-use teloxide::payloads::EditMessageReplyMarkupSetters;
+use teloxide::{payloads::EditMessageReplyMarkupSetters, types::MaybeInaccessibleMessage};
 use url::Url;
 lazy_static! {
     static ref CLIENT: ClientWithMiddleware = retry_client(Client::new(), 2);
@@ -47,7 +47,7 @@ struct MusicList {
 
 async fn get_music_data(name: &str, num: &str) -> Result<MusicData, AppError> {
     let url = if num == "1" {
-        format!("{}={}&n=1", SETTINGS.api.music, name)
+        format!("{}={}&choose=1", SETTINGS.api.music, name)
     } else {
         format!("{}={}&id={}", SETTINGS.api.music, name, num)
     };
@@ -79,8 +79,8 @@ async fn get_music(
             msg.chat.id,
             InputFile::url(audio).file_name(music.song.clone()),
         )
-        .thumb(InputFile::url(cover))
-        .reply_to_message_id(msg.id)
+        .thumbnail(InputFile::url(cover))
+        .reply_parameters(ReplyParameters::new(msg.id))
         .reply_markup(link2gui_menu(music.cover, name))
         .caption(format!(
             "演唱者:「{}」\n歌曲链接：{}",
@@ -112,7 +112,7 @@ async fn get_music_cover(bot: Bot, msg: Message, search: &str) -> Result<(), App
             Url::parse(&format!("https://y.qq.com/music/photo_new/{}", search)).unwrap(),
         ),
     )
-    .reply_to_message_id(msg.id)
+    .reply_parameters(ReplyParameters::new(msg.id))
     .send()
     .await?;
     bot.edit_message_reply_markup(msg.chat.id, msg.id)
@@ -146,7 +146,7 @@ async fn get_callback_music(bot: Bot, msg: Message, id: &str, name: &str) -> Res
                     music_data.singer, music_data.link,
                 ),
             )
-            .thumb(InputFile::url(cover)),
+            .thumbnail(InputFile::url(cover)),
         ),
     )
     .reply_markup(link2gui_menu(music_data.cover, name.to_string()))
@@ -161,7 +161,10 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), AppError> 
         let mut music = music.splitn(2, ' ');
         let msg = match q.message {
             None => return Ok(()),
-            Some(msg) => msg,
+            Some(mbi_msg) => match mbi_msg {
+                MaybeInaccessibleMessage::Inaccessible(_) => return Ok(()),
+                MaybeInaccessibleMessage::Regular(msg) => msg,
+            },
         };
         let _guard = lock!((msg.chat.id, msg.id));
         match music.next() {
@@ -217,7 +220,7 @@ pub async fn music(bot: Bot, msg: Message) -> BotResult {
         Ok(music) => music,
         Err(e) => {
             bot.send_message(msg.chat.id, format!("{}", AppError::from(e)))
-                .reply_to_message_id(msg.id)
+                .reply_parameters(ReplyParameters::new(msg.id))
                 .send()
                 .await?;
             return Ok(());
@@ -226,7 +229,7 @@ pub async fn music(bot: Bot, msg: Message) -> BotResult {
 
     let msg_bot = bot
         .send_message(msg.chat.id, "正在获取音乐...")
-        .reply_to_message_id(msg.id)
+        .reply_parameters(ReplyParameters::new(msg.id))
         .await?;
 
     match get_music(&bot, music, msg, &msg_bot).await {

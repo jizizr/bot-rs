@@ -260,15 +260,21 @@ pub async fn curl(bot: Bot, msg: Message) -> BotResult {
     match get_curl(&msg).await {
         Ok(text) => {
             bot.send_message(msg.chat.id, text)
-                .reply_to_message_id(msg.id)
-                .disable_web_page_preview(true)
+                .reply_parameters(ReplyParameters::new(msg.id))
+                .link_preview_options(LinkPreviewOptions {
+                    is_disabled: true,
+                    url: None,
+                    prefer_small_media: false,
+                    prefer_large_media: false,
+                    show_above_text: false,
+                })
                 .parse_mode(ParseMode::MarkdownV2)
                 .send()
                 .await?;
         }
         Err(e) => {
             bot.send_message(msg.chat.id, e.to_string())
-                .reply_to_message_id(msg.id)
+                .reply_parameters(ReplyParameters::new(msg.id))
                 .send()
                 .await?;
         }

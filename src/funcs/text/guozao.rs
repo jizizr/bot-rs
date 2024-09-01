@@ -14,15 +14,15 @@ pub async fn guozao(bot: &Bot, msg: &Message) -> BotResult {
         return Ok(());
     }
     let me = {
-        let u = msg.from().unwrap();
+        let u = msg.from.as_ref().unwrap();
         fmt_at(&get_name(u), u.id.0)
     };
     let play_with = match msg.reply_to_message() {
         Some(m) => {
-            let u = m.from().unwrap();
+            let u = m.from.as_ref().unwrap();
             fmt_at(&get_name(u), u.id.0)
         }
-        None => format!("[自己](tg://user?id={})", msg.from().unwrap().id),
+        None => format!("[自己](tg://user?id={})", msg.from.as_ref().unwrap().id),
     };
     let text = if args.len() == 1 {
         format!("{} {}了 {}", me, &args[0][1..], play_with)
@@ -37,7 +37,7 @@ pub async fn guozao(bot: &Bot, msg: &Message) -> BotResult {
     };
     let text = text.replace("$from", &me).replace("$to", &play_with);
     bot.send_message(msg.chat.id, text)
-        .reply_to_message_id(msg.id)
+        .reply_parameters(ReplyParameters::new(msg.id))
         .parse_mode(ParseMode::MarkdownV2)
         .await?;
     Ok(())

@@ -89,7 +89,7 @@ pub async fn repeat(bot: &Bot, msg: &Message) -> BotResult {
         }
         .to_string(),
     };
-    let m = MessageConfig::new(m, msg.from().unwrap().id.0);
+    let m = MessageConfig::new(m, msg.from.as_ref().unwrap().id.0);
     let should_forward = match MESSAGE_MAP.get_mut(&msg.chat.id.0) {
         Some(mut mc) => {
             let result = search(mc.value_mut(), &m);

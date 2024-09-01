@@ -6,10 +6,7 @@ use dashmap::DashMap;
 use futures::{stream::FuturesUnordered, StreamExt};
 use ping_server_rs::model::*;
 use std::{collections::HashMap, fmt::Write, sync::Arc};
-use tokio::{
-    io::{AsyncBufReadExt, BufReader},
-    runtime::Runtime,
-};
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 async fn init_hash_pool() -> HashMap<String, TcpStreamPool<ResilientTcpStream>> {
     let mut hm = HashMap::new();

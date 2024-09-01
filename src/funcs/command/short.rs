@@ -102,7 +102,7 @@ pub async fn short(bot: Bot, msg: Message) -> BotResult {
         }
         Err(e) => {
             bot.send_message(msg.chat.id, format!("{e}"))
-                .reply_to_message_id(msg.id)
+                .reply_parameters(ReplyParameters::new(msg.id))
                 .send()
                 .await?
         }

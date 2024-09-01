@@ -69,7 +69,7 @@ pub async fn wiki(bot: Bot, msg: Message) -> BotResult {
     };
     bot.send_message(msg.chat.id, &text)
         .parse_mode(ParseMode::MarkdownV2)
-        .reply_to_message_id(msg.id)
+        .reply_parameters(ReplyParameters::new(msg.id))
         .await?;
     Ok(())
 }

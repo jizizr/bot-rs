@@ -13,7 +13,7 @@ pub async fn hitokoto(bot: Bot, msg: Message) -> BotResult {
         Err(e) => {
             let error_message = format!("{:?}", e);
             bot.send_message(msg.chat.id, error_message)
-                .reply_to_message_id(msg.id)
+                .reply_parameters(ReplyParameters::new(msg.id))
                 .await?;
         }
         Ok(quote) => {
@@ -24,7 +24,7 @@ pub async fn hitokoto(bot: Bot, msg: Message) -> BotResult {
             };
             let message = format!("{}\n—— {}《{}》", quote.hitokoto, who, quote.from);
             bot.send_message(msg.chat.id, message)
-                .reply_to_message_id(msg.id)
+                .reply_parameters(ReplyParameters::new(msg.id))
                 .await?;
         }
     }
