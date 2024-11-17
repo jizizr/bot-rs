@@ -27,7 +27,7 @@ pub trait Stream {
     type Output;
     type Error;
 
-    async fn connect(addr: &String) -> Result<Self::Output, Self::Error>;
+    async fn connect(addr: &str) -> Result<Self::Output, Self::Error>;
 }
 
 pub struct ResilientTcpStream {
@@ -41,7 +41,7 @@ impl Stream for ResilientTcpStream {
     type Output = Self; // 使用Self代替ResilientTcpStream以简化
     type Error = io::Error;
 
-    async fn connect(addr: &String) -> Result<Self, io::Error> {
+    async fn connect(addr: &str) -> Result<Self, io::Error> {
         let stream = TcpStream::connect(addr).await?;
         Ok(Self {
             address: addr.to_string(),

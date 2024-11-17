@@ -18,17 +18,17 @@ async fn init_hash_pool() -> HashMap<String, TcpStreamPool<ResilientTcpStream>> 
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum Method {
-    ICMP,
-    TCP,
-    HTTP,
+    Icmp,
+    Tcp,
+    Http,
 }
 
 impl Method {
-    fn to_string(&self) -> String {
+    fn as_string(&self) -> String {
         match self {
-            Method::ICMP => "ping",
-            Method::TCP => "tcping",
-            Method::HTTP => "http",
+            Method::Icmp => "ping",
+            Method::Tcp => "tcping",
+            Method::Http => "http",
         }
         .to_string()
     }
@@ -70,7 +70,7 @@ cmd!(
 
 fn parse_host(host: &str) -> Result<String, AppError> {
     let host = HOST_MATCH
-        .captures(&host)
+        .captures(host)
         .ok_or(AppError::Custom("Invalid target".to_string()))?
         .get(2)
         .unwrap()
@@ -80,19 +80,21 @@ fn parse_host(host: &str) -> Result<String, AppError> {
 }
 
 fn into_target(ping_cmd: &PingCmd) -> Result<Target, AppError> {
-    let mut req = Target::default();
-
-    req.method = ping_cmd.method.to_string();
-
-    // 确定 dns 记录类型
-    if ping_cmd.v6 {
-        req.record_type = "AAAA".to_string();
+    let record_type = if ping_cmd.v6 {
+        "AAAA".to_string()
     } else {
-        req.record_type = "A".to_string();
-    }
+        "A".to_string()
+    };
+
+    let mut req = Target {
+        method: ping_cmd.method.as_string(),
+        record_type,
+        ..Target::default()
+    };
+
     match ping_cmd.method {
-        Method::ICMP => req.host = parse_host(&ping_cmd.host)?,
-        Method::TCP => {
+        Method::Icmp => req.host = parse_host(&ping_cmd.host)?,
+        Method::Tcp => {
             req.port = ping_cmd.port;
             if ping_cmd.port.is_some() {
                 req.host = parse_host(&ping_cmd.host)?;
@@ -110,7 +112,7 @@ fn into_target(ping_cmd: &PingCmd) -> Result<Target, AppError> {
             );
             req.host = parse_host(host_port[0])?;
         }
-        Method::HTTP => {
+        Method::Http => {
             req.host = ping_cmd.host.clone();
             if !(ping_cmd.host.starts_with("http://") || ping_cmd.host.starts_with("https://")) {
                 req.host = format!("http://{}", req.host)
@@ -128,7 +130,7 @@ async fn send_json<T: ?Sized + serde::Serialize>(
     target: &T,
 ) -> Result<(), AppError> {
     let mut buffer = String::with_capacity(256);
-    write!(buffer, "{}\n", serde_json::to_string(target)?)?;
+    writeln!(buffer, "{}", serde_json::to_string(target)?)?;
     client.write_all(buffer.as_bytes()).await?;
     Ok(())
 }
@@ -175,7 +177,7 @@ async fn get_ping(text: String) -> Result<DashMap<String, Answer>, AppError> {
 
     // 等待所有TcpStream获取完成
     while let Some(result) = futures.next().await {
-        if let Err(_) = result {
+        if result.is_err() {
             return Err(AppError::Custom("内部错误".to_string()));
         }
     }

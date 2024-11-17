@@ -1,5 +1,11 @@
 use super::*;
 
+impl Default for GroupFuncSwitch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GroupFuncSwitch {
     pub fn new() -> Self {
         let mut gs = Self {
