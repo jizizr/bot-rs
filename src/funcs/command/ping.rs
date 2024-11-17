@@ -3,7 +3,7 @@ use crate::{ResilientTcpStream, TcpStreamPool};
 use async_once::AsyncOnce;
 use clap::ValueEnum;
 use dashmap::DashMap;
-use futures::{stream::FuturesUnordered, StreamExt};
+use futures::{future::join_all, stream::FuturesUnordered, StreamExt};
 use ping_server_rs::model::*;
 use std::{collections::HashMap, fmt::Write, sync::Arc};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -174,43 +174,84 @@ async fn get_ping(text: String) -> Result<DashMap<String, Answer>, AppError> {
     }
 
     // 等待所有TcpStream获取完成
-    while let Some(Err(_)) = futures.next().await {
-        return Err(AppError::Custom("内部错误".to_string()));
+    while let Some(result) = futures.next().await {
+        if let Err(_) = result {
+            return Err(AppError::Custom("内部错误".to_string()));
+        }
     }
-
-    let dm = DashMap::new();
     let streams = match Arc::try_unwrap(streams) {
         Ok(v) => v,
         Err(_) => panic!(""),
     };
+    let dm = DashMap::new();
 
-    let mut futures = FuturesUnordered::new();
-    let target = Arc::new(target);
-    for (k, v) in streams.into_iter() {
-        let mut buffer = String::with_capacity(128);
-        let mut client = v?;
-        let target = target.clone();
-        futures.push(tokio::spawn(async move {
-            (
-                k,
-                send_receive_json::<Target, Answer>(&mut client, &target, &mut buffer).await,
-            )
-        }));
-    }
-    while let Some(result) = futures.next().await {
+    let futures: Vec<_> = {
+        streams
+            .iter_mut()
+            .filter_map(|mut entry| {
+                let k = entry.key().to_string();
+                let v = entry.value_mut();
+
+                match v {
+                    Ok(client) => {
+                        let target = target.clone();
+                        // 将引用的生命周期扩展为 'static
+                        // SAFETY: 我们确保 streams 在 join_all 完成前不会被释放
+                        // 且所有 future 在 join_all 完成时都会结束
+                        // 所以这里扩展引用生命周期是安全的
+                        unsafe {
+                            let client: &'static mut _ = std::mem::transmute(client);
+                            Some(async move {
+                                let mut buffer = String::with_capacity(128);
+                                (
+                                    k,
+                                    send_receive_json::<Target, Answer>(
+                                        client,
+                                        &target,
+                                        &mut buffer,
+                                    )
+                                    .await,
+                                )
+                            })
+                        }
+                    }
+                    Err(_) => None,
+                }
+            })
+            .collect()
+    };
+
+    // SAFETY: 这里完成后，所有扩展的引用生命周期都结束了
+    let results = join_all(futures).await;
+
+    // 处理结果
+    for (k, result) in results {
         match result {
-            Ok((k, Ok(answer))) => {
+            Ok(answer) => {
                 dm.insert(k, answer);
             }
-            Ok((k, Err(e))) => {
+            Err(e) => {
+                if let AppError::IOError(_) = e {
+                    streams.remove(&k);
+                }
                 let mut a = Answer::new();
                 a.error = Some(e.to_string());
                 dm.insert(k, a);
             }
-            Err(_) => {
-                return Err(AppError::Custom("内部错误".to_string()));
-            }
         }
+    }
+
+    for (k, client) in streams.into_iter() {
+        PING_SERVER
+            .get()
+            .await
+            .get(&k)
+            .unwrap()
+            .put(match client {
+                Ok(v) => v,
+                Err(_) => continue,
+            })
+            .await;
     }
     Ok(dm)
 }
