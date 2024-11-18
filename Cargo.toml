@@ -49,3 +49,4 @@ url = "2.5"
 
 [profile.release]
 lto = true
+panic = "abort"

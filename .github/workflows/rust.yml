@@ -17,7 +17,12 @@ jobs:
     - uses: actions/checkout@v3
     - uses: Swatinem/rust-cache@v2
     - name: Build
-      run: cargo build -r
+      run: |
+        cargo build -r
+        strip target/release/bot-rs
+        sudo apt-get update
+        sudo apt-get install -y upx
+        upx --best target/release/bot-rs
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
