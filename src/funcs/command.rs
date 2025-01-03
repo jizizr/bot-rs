@@ -144,7 +144,7 @@ impl<'a> Guard<'a> {
     }
 }
 
-impl<'a> Drop for Guard<'a> {
+impl Drop for Guard<'_> {
     fn drop(&mut self) {
         self.locker.over(self.flag);
     }
@@ -183,7 +183,6 @@ macro_rules! cmd_match {
     rename_rule = "lowercase",
     description = "These commands are supported:"
 )]
-
 pub enum Cmd {
     #[command(description = "获取帮助信息")]
     Help,
