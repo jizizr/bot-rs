@@ -73,13 +73,13 @@ async fn get_music(
 ) -> Result<(), AppError> {
     let name = music.url.join(" ");
     let music = get_music_data(&name, "1").await?;
-    let (audio, cover) = get_music_info(&music)?;
+    let (audio, cover) = get_music_info(&music).await?;
     let err = tokio::join!(
         bot.send_audio(
             msg.chat.id,
-            InputFile::url(audio).file_name(music.song.clone()),
+            InputFile::memory(audio).file_name(music.song.clone()),
         )
-        .thumbnail(InputFile::url(cover))
+        .thumbnail(InputFile::memory(cover))
         .reply_parameters(ReplyParameters::new(msg.id))
         .reply_markup(link2gui_menu(music.cover, name))
         .caption(format!(
@@ -97,7 +97,6 @@ async fn get_music(
 
 async fn get_music_gui(bot: Bot, msg: Message, search: &str) -> Result<(), AppError> {
     let music_datas: MusicList = get(&format!("{}={}", SETTINGS.api.music, search)).await?;
-
     bot.edit_message_caption(msg.chat.id, msg.id)
         .caption("选择你的音乐")
         .reply_markup(gui_menu(music_datas.data, search))
@@ -134,19 +133,19 @@ async fn get_music_cover(bot: Bot, msg: Message, search: &str) -> Result<(), App
 
 async fn get_callback_music(bot: Bot, msg: Message, id: &str, name: &str) -> Result<(), AppError> {
     let music_data: MusicData = get_music_data(name, id).await?;
-    let (audio, cover) = get_music_info(&music_data)?;
+    let (audio, cover) = get_music_info(&music_data).await?;
     bot.edit_message_media(
         msg.chat.id,
         msg.id,
         teloxide::types::InputMedia::Audio(
             InputMediaAudio::caption(
-                InputMediaAudio::new(InputFile::url(audio).file_name(music_data.song)),
+                InputMediaAudio::new(InputFile::memory(audio).file_name(music_data.song)),
                 format!(
                     "演唱者:「{}」\n歌曲链接：{}",
                     music_data.singer, music_data.link,
                 ),
             )
-            .thumbnail(InputFile::url(cover)),
+            .thumbnail(InputFile::memory(cover)),
         ),
     )
     .reply_markup(link2gui_menu(music_data.cover, name.to_string()))
@@ -207,10 +206,9 @@ fn gui_menu(music_datas: Vec<MusicListData>, search: &str) -> InlineKeyboardMark
     InlineKeyboardMarkup::new(keyboard)
 }
 
-fn get_music_info(music: &MusicData) -> Result<(Url, Url), AppError> {
-    let audio = Url::parse(&music.url)?;
-    let cover = Url::parse(&music.cover)?;
-    Ok((audio, cover))
+async fn get_music_info(music: &MusicData) -> Result<(Vec<u8>, Vec<u8>), AppError> {
+    let (audio, cover) = tokio::join!(music2vec(&music.url), music2vec(&music.cover));
+    Ok((audio?, cover?))
 }
 
 pub async fn music(bot: Bot, msg: Message) -> BotResult {

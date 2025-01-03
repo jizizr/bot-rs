@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use lazy_static::lazy_static;
 use serde::de::DeserializeOwned;
 use std::{collections::VecDeque, error::Error, fs::File, io::Read, time::Duration};
-use teloxide::{prelude::*, Bot};
+use teloxide::{Bot, prelude::*};
 use tokio::{
     io::{self, AsyncWriteExt},
     net::TcpStream,
