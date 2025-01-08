@@ -3,7 +3,7 @@ use crate::{ResilientTcpStream, TcpStreamPool};
 use async_once::AsyncOnce;
 use clap::ValueEnum;
 use dashmap::DashMap;
-use futures::{future::join_all, stream::FuturesUnordered, StreamExt};
+use futures::{StreamExt, future::join_all, stream::FuturesUnordered};
 use ping_server_rs::model::*;
 use std::{collections::HashMap, fmt::Write, sync::Arc};
 use tokio::io::{AsyncBufReadExt, BufReader};

@@ -2,12 +2,12 @@ use std::collections::HashSet;
 
 use super::*;
 use reqwest::{
-    header::{HeaderMap, HeaderValue},
     Client, ClientBuilder, Response, Version,
+    header::{HeaderMap, HeaderValue},
 };
 use scraper::{Html, Selector};
 use tokio::net::TcpStream;
-use tokio_native_tls::{native_tls, TlsConnector};
+use tokio_native_tls::{TlsConnector, native_tls};
 use x509_parser::parse_x509_certificate;
 
 lazy_static! {

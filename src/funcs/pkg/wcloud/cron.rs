@@ -1,10 +1,12 @@
 use super::gen;
-use crate::dao::{
-    mysql::wordcloud::{active_group, clear},
-    rdb::wordcloud::*,
+use crate::{
+    BOT, BotError,
+    dao::{
+        mysql::wordcloud::{active_group, clear},
+        rdb::wordcloud::*,
+    },
 };
-use crate::{BotError, BOT};
-use futures::{stream::FuturesUnordered, StreamExt};
+use futures::{StreamExt, stream::FuturesUnordered};
 pub async fn wcloud() -> Result<(), Vec<BotError>> {
     let mut err_vec = Vec::new();
     let mut futures = FuturesUnordered::new();

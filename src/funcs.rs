@@ -1,9 +1,9 @@
-use crate::{get, getor, settings::SETTINGS, BotError, BotResult};
+use crate::{BotError, BotResult, get, getor, settings::SETTINGS};
 use futures::future::BoxFuture;
 use lazy_static::lazy_static;
 use regex::Regex;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
-use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
+use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use serde::Deserialize;
 use std::{fmt, sync::Arc};
 use teloxide::{

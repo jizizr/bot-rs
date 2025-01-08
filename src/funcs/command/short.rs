@@ -1,6 +1,6 @@
 use super::*;
 use fast_qr::{
-    convert::{image::ImageBuilder, Builder, Shape},
+    convert::{Builder, Shape, image::ImageBuilder},
     qr::QRBuilder,
 };
 use serde_json::json;
