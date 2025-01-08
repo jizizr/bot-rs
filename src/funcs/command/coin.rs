@@ -13,17 +13,23 @@ lazy_static! {
 
 #[derive(Deserialize)]
 struct Coin {
-    price: String,
+    data: Vec<CoinData>,
+}
+
+#[derive(Deserialize)]
+struct CoinData {
+    #[serde(rename = "close")]
+    price: f64,
 }
 
 #[cached(time = 10, result = true)]
 async fn coin_price(coin_type: String) -> Result<f64, reqwest::Error> {
     let price: Coin = get(&format!(
-        "https://api.binance.com/api/v3/ticker/price?symbol={}USDT",
+        "https://api.huobi.pro/market/history/kline?&period=1min&size=1&symbol={}usdt",
         coin_type
     ))
     .await?;
-    Ok(price.price.parse().unwrap())
+    Ok(price.data[0].price)
 }
 
 async fn coin_handle(coin_type: &str) -> String {
@@ -34,7 +40,9 @@ async fn coin_handle(coin_type: &str) -> String {
                 Local::now().format("%Y-%m-%d %H:%M:%S%.3f")
             )
         }
-        Err(_) => "Api 请求异常".to_string(),
+        Err(e) => {
+            format!("Api 请求异常:{}", e)
+        }
     }
 }
 
@@ -73,7 +81,7 @@ pub async fn coin(bot: Bot, msg: Message) -> BotResult {
 
 pub async fn coin_callback(bot: Bot, q: CallbackQuery) -> BotResult {
     if let Some(coin_type) = q.data {
-        let text = coin_handle(&coin_type.to_uppercase()).await;
+        let text = coin_handle(&coin_type.to_lowercase()).await;
         bot.answer_callback_query(q.id).await?;
         if let Some(msg) = q.message {
             let _guard = lock!((msg.chat().id, msg.id()));
@@ -126,10 +134,10 @@ pub async fn inline_query_handler(bot: Bot, q: InlineQuery) -> BotResult {
         "01".to_string(),
         "查询虚拟货币实时价格".to_string(),
         InputMessageContent::Text(InputMessageContentText::new(
-            inline_coin_handle(&q.query.to_uppercase()).await,
+            inline_coin_handle(&q.query.to_lowercase()).await,
         )),
     )
-    .reply_markup(inline_keyboard(&q.query.to_uppercase()));
+    .reply_markup(inline_keyboard(&q.query.to_lowercase()));
     let results = vec![InlineQueryResult::Article(coins_query)];
     let response = bot.answer_inline_query(&q.id, results).send().await;
     if let Err(err) = response {

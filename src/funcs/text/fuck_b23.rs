@@ -54,8 +54,6 @@ pub async fn fuck_b23(bot: &Bot, msg: &Message) -> BotResult {
         for m in ms.re.find_iter(text) {
             let url = m.as_str();
             let u = ms.sign.get_safe_url(url).await?;
-            println!("{:#?}", u);
-
             let new_url = format!("https://{}{}", u.host().unwrap(), u.path());
             // 去除原有文本中链接跟踪参数
             replaced.replace_range(
