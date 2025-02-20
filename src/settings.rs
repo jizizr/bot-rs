@@ -13,6 +13,7 @@ pub struct Settings {
     pub gemini: Gemini,
     pub api: Api,
     pub ping_server: HashMap<String, String>,
+    pub vv: Vv,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +51,12 @@ pub struct Redis {
 #[derive(Debug, Deserialize)]
 pub struct Gemini {
     pub key: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Vv {
+    pub api_url: String,
+    pub pic_url: String,
 }
 
 impl Default for Settings {

@@ -32,6 +32,7 @@ pub mod start;
 pub mod test;
 pub mod today;
 pub mod translate;
+pub mod vv;
 pub mod wcloud;
 pub mod wiki;
 
@@ -218,6 +219,8 @@ pub enum Cmd {
     Translate,
     #[command(description = "Ping")]
     Ping,
+    #[command(description = "vv不削能玩？")]
+    Vv,
     #[command(hide)]
     Test,
 }
@@ -244,6 +247,7 @@ pub async fn command_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
         Chat => chat::chat,
         Translate => translate::translate,
         Ping => ping::ping,
+        Vv => vv::vv,
         Test => test::test,
     );
     Ok(())
