@@ -228,9 +228,9 @@ fn translate_menu(is_compare: bool, tl: &str) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![buttom])
 }
 
-pub async fn translate(bot: Bot, msg: Message) -> BotResult {
+pub async fn translate(bot: &Bot, msg: &Message) -> BotResult {
     let is_compare = false;
-    match get_translate(&msg, None, is_compare, false).await {
+    match get_translate(msg, None, is_compare, false).await {
         Ok((text, mid, tl)) => bot
             .send_message(msg.chat.id, text)
             .reply_markup(translate_menu(is_compare, tl))

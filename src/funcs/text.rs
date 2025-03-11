@@ -93,9 +93,9 @@ pub fn init() -> Option<()> {
     Some(())
 }
 
-pub async fn text_handler(bot: Bot, msg: Message) -> BotResult {
-    if getor(&msg).is_some() {
-        if !getor(&msg).unwrap().starts_with('/') {
+pub async fn text_handler(bot: &Bot, msg: &Message) -> BotResult {
+    if getor(msg).is_some() {
+        if !getor(msg).unwrap().starts_with('/') {
             let e = join_with_switch!(
                 &bot,
                 &msg,

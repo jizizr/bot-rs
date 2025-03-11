@@ -1,15 +1,17 @@
 use crate::settings::SETTINGS;
 use async_trait::async_trait;
+use funcs::{command::command_handler, text::text_handler};
 use lazy_static::lazy_static;
 use serde::de::DeserializeOwned;
 use std::{collections::VecDeque, error::Error, fs::File, io::Read, time::Duration};
-use teloxide::{Bot, prelude::*};
+use teloxide::{Bot, prelude::*, types::Me};
 use tokio::{
     io::{self, AsyncWriteExt},
     net::TcpStream,
     sync::Mutex,
     time::timeout,
 };
+pub mod analysis;
 pub mod dao;
 pub mod filter;
 pub mod funcs;
@@ -154,4 +156,10 @@ pub async fn get<T: DeserializeOwned>(url: &str) -> Result<T, reqwest::Error> {
     let resp = reqwest::get(url).await?;
     let model: T = resp.json().await?;
     Ok(model)
+}
+
+pub async fn msg_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
+    command_handler(&bot, &msg, &me).await?;
+    text_handler(&bot, &msg).await?;
+    Ok(())
 }

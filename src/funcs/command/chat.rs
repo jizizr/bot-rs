@@ -51,8 +51,8 @@ struct Part {
     text: String,
 }
 
-pub async fn chat(bot: Bot, msg: Message) -> BotResult {
-    match get_chat(&msg).await {
+pub async fn chat(bot: &Bot, msg: &Message) -> BotResult {
+    match get_chat(msg).await {
         Ok(text) => bot
             .send_message(msg.chat.id, pkg::escape::markdown::escape_markdown(&text))
             .parse_mode(ParseMode::MarkdownV2),

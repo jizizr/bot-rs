@@ -3,10 +3,11 @@ use bot_rs::{
     filter::call_query::call_query_handler,
     funcs::{
         SendErrorHandler,
-        command::{Cmd, coin, command_handler},
+        command::{Cmd, coin},
         pkg::{self, cron},
-        text::{init, text_handler},
+        text::init,
     },
+    msg_handler,
     settings::{self, SETTINGS},
 };
 use std::error::Error;
@@ -18,18 +19,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     log::info!("Starting buttons bot...");
     init();
     let handler = dptree::entry()
-        .branch(
-            Update::filter_message()
-                .filter_command::<Cmd>()
-                .endpoint(command_handler),
-        )
-        .branch(
-            Update::filter_edited_message()
-                .filter_command::<Cmd>()
-                .endpoint(command_handler),
-        )
-        .branch(Update::filter_message().endpoint(text_handler))
-        .branch(Update::filter_edited_message().endpoint(text_handler))
+        .branch(Update::filter_message().endpoint(msg_handler))
+        .branch(Update::filter_edited_message().endpoint(msg_handler))
         .branch(Update::filter_callback_query().endpoint(call_query_handler))
         .branch(Update::filter_inline_query().endpoint(coin::inline_query_handler));
 

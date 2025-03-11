@@ -68,7 +68,7 @@ async fn music2vec(url: &str) -> Result<Vec<u8>, AppError> {
 async fn get_music(
     bot: &Bot,
     music: MusicCmd,
-    msg: Message,
+    msg: &Message,
     msg_bot: &Message,
 ) -> Result<(), AppError> {
     let name = music.url.join(" ");
@@ -211,10 +211,10 @@ async fn get_music_info(music: &MusicData) -> Result<(Vec<u8>, Vec<u8>), AppErro
     Ok((audio?, cover?))
 }
 
-pub async fn music(bot: Bot, msg: Message) -> BotResult {
+pub async fn music(bot: &Bot, msg: &Message) -> BotResult {
     tokio::spawn(bot.send_chat_action(msg.chat.id, ChatAction::Typing).send());
 
-    let music = match MusicCmd::try_parse_from(getor(&msg).unwrap().split_whitespace()) {
+    let music = match MusicCmd::try_parse_from(getor(msg).unwrap().split_whitespace()) {
         Ok(music) => music,
         Err(e) => {
             bot.send_message(msg.chat.id, format!("{}", AppError::from(e)))
@@ -230,7 +230,7 @@ pub async fn music(bot: Bot, msg: Message) -> BotResult {
         .reply_parameters(ReplyParameters::new(msg.id))
         .await?;
 
-    match get_music(&bot, music, msg, &msg_bot).await {
+    match get_music(bot, music, msg, &msg_bot).await {
         Ok(()) => {
             bot.delete_message(msg_bot.chat.id, msg_bot.id).await?;
         }

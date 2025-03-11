@@ -75,7 +75,7 @@ fn function_menu(coin_type: &str) -> InlineKeyboardMarkup {
     ]])
 }
 
-pub async fn coin(bot: Bot, msg: Message) -> BotResult {
+pub async fn coin(bot: &Bot, msg: &Message) -> BotResult {
     bot.send_message(msg.chat.id, "选择您要查询的虚拟货币")
         .reply_markup(popular_coins_menu())
         .await?;

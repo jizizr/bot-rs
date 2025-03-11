@@ -41,11 +41,11 @@ async fn vv_cmd(cmd: &VvCmd) -> Result<Url, AppError> {
         let vv_index = rng.gen_range(0..vv_list.len());
         &vv_list[vv_index]
     };
-    Ok(get_vv_pic_url(vv)?)
+    get_vv_pic_url(vv)
 }
 
-pub async fn vv(bot: Bot, msg: Message) -> BotResult {
-    let cmd = match VvCmd::try_parse_from(getor(&msg).unwrap().split_whitespace()) {
+pub async fn vv(bot: &Bot, msg: &Message) -> BotResult {
+    let cmd = match VvCmd::try_parse_from(getor(msg).unwrap().split_whitespace()) {
         Ok(cmd) => cmd,
         Err(e) => {
             bot.send_message(msg.chat.id, format!("{}", AppError::from(e)))

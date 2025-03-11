@@ -61,7 +61,7 @@ pub async fn config_callback(bot: Bot, q: CallbackQuery) -> BotResult {
     Ok(())
 }
 
-pub async fn config(bot: Bot, msg: Message) -> BotResult {
+pub async fn config(bot: &Bot, msg: &Message) -> BotResult {
     bot.send_message(msg.chat.id, "功能开关")
         .reply_markup(config_menu(msg.chat.id.0))
         .await?;

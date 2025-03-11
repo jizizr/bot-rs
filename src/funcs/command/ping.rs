@@ -258,8 +258,8 @@ async fn get_ping(text: String) -> Result<DashMap<String, Answer>, AppError> {
     Ok(dm)
 }
 
-pub async fn ping(bot: Bot, msg: Message) -> Result<(), AppError> {
-    let text = match get_ping(getor(&msg).unwrap().to_string()).await {
+pub async fn ping(bot: &Bot, msg: &Message) -> Result<(), AppError> {
+    let text = match get_ping(getor(msg).unwrap().to_string()).await {
         Ok(dm) => dm.into_iter().fold(String::new(), |mut acc, (k, v)| {
             acc.push_str(&match v.error {
                 None => format!("{}: {:.2} ms, loss = {}% \n", k, v.avg_time, v.loss),

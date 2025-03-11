@@ -88,8 +88,8 @@ fn parse(raw: &str) -> Result<(f64, &str), AppError> {
     Err(AppError::Custom("解析错误".to_string()))
 }
 
-pub async fn rate(bot: Bot, msg: Message) -> BotResult {
-    let text = get_rate(&msg)
+pub async fn rate(bot: &Bot, msg: &Message) -> BotResult {
+    let text = get_rate(msg)
         .await
         .unwrap_or_else(|e| markdown::escape(&format!("{e}")));
     bot.send_message(msg.chat.id, text)

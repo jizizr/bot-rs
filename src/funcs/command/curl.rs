@@ -255,9 +255,9 @@ async fn get_curl(msg: &Message) -> Result<String, BotError> {
     Ok(result)
 }
 
-pub async fn curl(bot: Bot, msg: Message) -> BotResult {
+pub async fn curl(bot: &Bot, msg: &Message) -> BotResult {
     tokio::spawn(bot.send_chat_action(msg.chat.id, ChatAction::Typing).send());
-    match get_curl(&msg).await {
+    match get_curl(msg).await {
         Ok(text) => {
             bot.send_message(msg.chat.id, text)
                 .reply_parameters(ReplyParameters::new(msg.id))

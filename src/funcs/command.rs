@@ -172,8 +172,7 @@ macro_rules! cmd_match {
             $(
                 Ok(Cmd::$stat) => $func($bot, $msg).await?,
             )+
-            Err(e) => {
-                log::error!("Error in handler: {}", e);
+            Err(_) => {
             }
         }
     };
@@ -225,8 +224,14 @@ pub enum Cmd {
     Test,
 }
 
-pub async fn command_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
-    let cmd: Result<Cmd, ParseError> = BotCommands::parse(getor(&msg).unwrap(), me.username());
+pub async fn command_handler(bot: &Bot, msg: &Message, me: &Me) -> BotResult {
+    // 安全地获取消息文本，如果没有文本则提早返回
+    let text = match getor(msg) {
+        Some(text) => text,
+        None => return Ok(()), // 没有文本内容，直接返回
+    };
+
+    let cmd: Result<Cmd, ParseError> = BotCommands::parse(text, me.username());
     cmd_match!(
         cmd,
         bot,
