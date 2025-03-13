@@ -9,7 +9,7 @@ macro_rules! simple_command_test {
                 |bot: Bot, msg: Message| async move {
                     let key = "/".to_string() + stringify!($cmd);
                     if getor(&msg).unwrap().starts_with(key.as_str()) {
-                        if let Err(e) = $func(bot, msg).await {
+                        if let Err(e) = $func(&bot, &msg).await {
                             println!("{}", e);
                             return Err(e);
                         } else {
