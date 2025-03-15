@@ -2,6 +2,7 @@ use crate::settings::SETTINGS;
 use async_trait::async_trait;
 use funcs::{command::command_handler, text::text_handler};
 use lazy_static::lazy_static;
+use myclap::clap::MyErrorFormatter;
 use serde::de::DeserializeOwned;
 use std::{collections::VecDeque, error::Error, fs::File, io::Read, time::Duration};
 use teloxide::{Bot, prelude::*, types::Me};
@@ -19,7 +20,58 @@ pub mod myclap;
 pub mod settings;
 
 pub type BotError = Box<dyn Error + Send + Sync>;
-pub type BotResult = Result<(), BotError>;
+pub type BotResult = Result<(), AppError>;
+#[derive(Debug, thiserror::Error)]
+pub enum AppError {
+    #[error("API请求失败: {0}")]
+    Request(#[from] reqwest::Error),
+    #[error("API请求失败: {0}")]
+    Retry(#[from] reqwest_middleware::Error),
+    #[error("{}\n\n{}", 
+    .0,
+    .1)]
+    Clap(clap::error::Error<MyErrorFormatter>, &'static String),
+    #[error("{}", .0)]
+    Custom(String),
+    #[error("{}", .0)]
+    Send(#[from] teloxide::RequestError),
+    #[error("{}", .0)]
+    IOError(#[from] std::io::Error),
+    #[error("{}", .0)]
+    FormatError(#[from] std::fmt::Error),
+    #[error("{}", .0)]
+    RegexError(regex::Error),
+    #[error("{}", .0)]
+    SerdeError(#[from] serde_json::Error),
+    #[error("{}", .0)]
+    UrlParseError(#[from] url::ParseError),
+    #[error("{}", .0)]
+    MySQLError(#[from] mysql_async::Error),
+    #[error("{}", .0)]
+    JoinError(#[from] tokio::task::JoinError),
+    #[error("{}", .0)]
+    ImageError(#[from] image::ImageError),
+    #[error("{}", .0)]
+    RedisError(#[from] redis::RedisError),
+    #[error("{}", .0)]
+    TlsError(#[from] tokio_native_tls::native_tls::Error),
+    #[error("{}", .0)]
+    SslError(#[from] x509_parser::nom::Err<x509_parser::error::X509Error>),
+}
+
+#[macro_export]
+macro_rules! ccerr {
+    () => {
+        |e| clap_err!(e)
+    };
+}
+
+#[macro_export]
+macro_rules! clap_err {
+    ($e:expr) => {
+        AppError::Clap($e.apply::<MyErrorFormatter>(), &USAGE)
+    };
+}
 
 lazy_static! {
     pub static ref BOT: Bot = Bot::new(&SETTINGS.bot.token);

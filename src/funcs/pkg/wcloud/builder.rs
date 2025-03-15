@@ -1,6 +1,6 @@
 extern crate wcloud as wc;
 use super::*;
-use image::{ImageBuffer, ImageError, ImageFormat, Luma, Rgba};
+use image::{ImageBuffer, ImageFormat, Luma, Rgba};
 use rand::prelude::*;
 use std::{
     collections::HashMap,
@@ -8,12 +8,6 @@ use std::{
     io::{Cursor, Read as _},
 };
 use wc::{Tokenizer, WordCloud, WordCloudSize};
-#[derive(Error, Debug)]
-pub enum AppError {
-    #[error("图像生成失败: {0}")]
-    IError(#[from] ImageError),
-}
-
 lazy_static! {
     static ref WCLOUD: WordCloud = {
         let tokenizer = Tokenizer::default();

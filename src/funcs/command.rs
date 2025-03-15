@@ -13,7 +13,6 @@ use teloxide::types::{
     InputMessageContentText, LinkPreviewOptions, MediaKind, Message, MessageId, MessageKind,
     ParseMode,
 };
-use thiserror::Error;
 
 pub mod chat;
 pub mod coin;
@@ -37,31 +36,6 @@ lazy_static! {
     static ref LIMITER: BottomLocker = BottomLocker(DashSet::new());
 }
 
-#[derive(Debug, Error)]
-pub enum AppError {
-    #[error("API请求失败: {0}")]
-    Request(#[from] reqwest::Error),
-    #[error("API请求失败: {0}")]
-    Retry(#[from] reqwest_middleware::Error),
-    #[error("{}\n\n{}", 
-    .0,
-    .1)]
-    Clap(clap::error::Error<MyErrorFormatter>, &'static String),
-    #[error("{}", .0)]
-    Custom(String),
-    #[error("{}", .0)]
-    Send(#[from] teloxide::RequestError),
-    #[error("{}", .0)]
-    IOError(#[from] std::io::Error),
-    #[error("{}", .0)]
-    FormatError(#[from] std::fmt::Error),
-    #[error("{}", .0)]
-    RegexError(regex::Error),
-    #[error("{}", .0)]
-    SerdeError(#[from] serde_json::Error),
-    #[error("{}", .0)]
-    UrlParseError(#[from] url::ParseError),
-}
 #[macro_export]
 macro_rules! command_gen {
     ($name:expr, $about:expr, $struct_def:item) => {
@@ -88,21 +62,7 @@ macro_rules! cmd {
     };
 }
 
-#[macro_export]
-macro_rules! ccerr {
-    () => {
-        |e| clap_err!(e)
-    };
-}
-
-#[macro_export]
-macro_rules! clap_err {
-    ($e:expr) => {
-        AppError::Clap($e.apply::<MyErrorFormatter>(), &USAGE)
-    };
-}
-
-async fn auth(bot: &Bot, msg: &Message, user_id: UserId) -> Result<bool, BotError> {
+async fn auth(bot: &Bot, msg: &Message, user_id: UserId) -> Result<bool, AppError> {
     match msg.chat.kind {
         ChatKind::Private { .. } => Ok(true),
         _ => {
@@ -171,10 +131,10 @@ macro_rules! cmd_match {
                 $bot.send_message($msg.chat.id, Cmd::descriptions().to_string())
                     .await
                     .map(|_| ())
-                    .map_err(BotError::from)
+                    .map_err(|e| e.into())
             }
             $(
-                Ok(Cmd::$stat) => $func($bot, $msg).await.map(|_| ()).map_err(BotError::from),
+                Ok(Cmd::$stat) => $func($bot, $msg).await.map(|_| ()).map_err(|e| e.into()),
             )+
             Err(_) => {
                 Ok(())
@@ -237,7 +197,7 @@ pub async fn command_handler(bot: &Bot, msg: &Message, me: &Me) -> BotResult {
     };
 
     let cmd = BotCommands::parse(text, me.username());
-    let _: Result<(), BotError> = cmd_match!(
+    let _: Result<(), AppError> = cmd_match!(
         cmd,
         bot,
         msg,

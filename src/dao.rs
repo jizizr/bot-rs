@@ -1,5 +1,6 @@
+pub mod mongo;
 pub mod mysql;
 pub mod rdb;
 
-use crate::{BotError, BotResult, settings::SETTINGS};
+use crate::{AppError, BotResult, settings::SETTINGS};
 use lazy_static::lazy_static;

@@ -31,7 +31,7 @@ impl RegexSign {
 }
 
 impl BiliUrl {
-    async fn get_safe_url(&self, url: &str) -> Result<Url, BotError> {
+    async fn get_safe_url(&self, url: &str) -> Result<Url, AppError> {
         match self {
             BiliUrl::B23 => Ok(CLIENT
                 .get(url)

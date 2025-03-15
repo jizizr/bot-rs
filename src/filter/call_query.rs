@@ -1,11 +1,10 @@
 use super::*;
-use crate::funcs::command::{coin, config, music, translate};
-use std::error::Error;
+use crate::{
+    BotResult,
+    funcs::command::{coin, config, music, translate},
+};
 
-pub async fn call_query_handler(
-    bot: Bot,
-    mut q: CallbackQuery,
-) -> std::result::Result<(), Box<dyn Error + std::marker::Send + Sync>> {
+pub async fn call_query_handler(bot: Bot, mut q: CallbackQuery) -> BotResult {
     let binding = q.data.unwrap();
     let data: Vec<&str> = binding.splitn(2, ' ').collect();
     q.data = Some(data[1].to_string());

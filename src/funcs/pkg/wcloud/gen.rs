@@ -1,3 +1,4 @@
+use super::*;
 use crate::dao::mysql::wordcloud;
 use std::collections::HashMap;
 use teloxide::{
@@ -6,7 +7,7 @@ use teloxide::{
     utils::markdown,
 };
 
-pub async fn wcloud(bot: &Bot, group: i64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn wcloud(bot: &Bot, group: i64) -> Result<(), AppError> {
     //转换为wordcloud需要的HashMap
     let word_vec = wordcloud::get_words(group).await?;
     let words: HashMap<&str, usize> = word_vec
@@ -31,10 +32,7 @@ pub async fn wcloud(bot: &Bot, group: i64) -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
-pub async fn user_freq(
-    bot: &Bot,
-    group: i64,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn user_freq(bot: &Bot, group: i64) -> Result<(), AppError> {
     let users = wordcloud::get_users(group).await?;
     if users.is_empty() {
         return Ok(());

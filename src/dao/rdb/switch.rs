@@ -26,7 +26,7 @@ pub async fn change_flag<T: Into<usize>>(group_id: i64, offset: T, flag: bool) -
     Ok(conn.setbit(key, offset.into(), flag).await?)
 }
 
-pub async fn get_flag<T: Into<usize>>(group_id: i64, offset: T) -> Result<bool, BotError> {
+pub async fn get_flag<T: Into<usize>>(group_id: i64, offset: T) -> Result<bool, AppError> {
     let mut conn = RDB
         .get_multiplexed_async_connection_with_config(
             &AsyncConnectionConfig::default()

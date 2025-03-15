@@ -1,5 +1,5 @@
 use bot_rs::{
-    BOT, BotError,
+    AppError, BOT,
     filter::call_query::call_query_handler,
     funcs::{
         SendErrorHandler,
@@ -32,13 +32,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .error_handler(err_handler.clone())
         .build();
 
-    cron::run::<BotError>(
+    cron::run::<AppError>(
         "0 0 10,14,18,22 * * ?",
         pkg::wcloud::cron::wcloud,
         err_handler.clone(),
     )
     .await;
-    cron::run::<BotError>(
+    cron::run::<AppError>(
         "0 0 4 * * ?",
         pkg::wcloud::cron::wcloud_then_clear,
         err_handler.clone(),

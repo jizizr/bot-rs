@@ -134,7 +134,7 @@ async fn get_ip_info(ip: &str) -> String {
     }
 }
 
-async fn get_ssl(url: &str) -> Result<String, BotError> {
+async fn get_ssl(url: &str) -> Result<String, AppError> {
     // 连接到远程服务器
     let stream = CONNECTOR
         .connect(url, TcpStream::connect(format!("{url}:443")).await?)
@@ -162,7 +162,7 @@ async fn get_ssl(url: &str) -> Result<String, BotError> {
     ))
 }
 
-async fn get_resp(url: &str) -> Result<Response, BotError> {
+async fn get_resp(url: &str) -> Result<Response, AppError> {
     let resp = CLIENT.get(url).send().await?.error_for_status();
     // 如果请求失败，尝试使用 http 协议请求
     let resp = match resp {
@@ -176,7 +176,7 @@ async fn get_resp(url: &str) -> Result<Response, BotError> {
     Ok(resp)
 }
 
-async fn get_header(resp: &Response) -> Result<String, BotError> {
+async fn get_header(resp: &Response) -> Result<String, AppError> {
     let mut header = String::new();
     let mut hash_set = HashSet::new();
     resp.headers().iter().for_each(|(k, v)| {
@@ -196,7 +196,7 @@ async fn get_header(resp: &Response) -> Result<String, BotError> {
     Ok(header)
 }
 
-async fn post_paste(text: String) -> Result<String, BotError> {
+async fn post_paste(text: String) -> Result<String, AppError> {
     let resp: Paste = PASTE
         .post("https://s.op.wiki/data/post")
         .body(text.trim().to_string())
@@ -207,8 +207,8 @@ async fn post_paste(text: String) -> Result<String, BotError> {
     Ok(format!("https://paste\\.op\\.wiki/{}", resp.key))
 }
 
-async fn get_curl(msg: &Message) -> Result<String, BotError> {
-    let curl = CurlCmd::try_parse_from(getor(msg).unwrap().split_whitespace())?;
+async fn get_curl(msg: &Message) -> Result<String, AppError> {
+    let curl = CurlCmd::try_parse_from(getor(msg).unwrap().split_whitespace()).map_err(ccerr!())?;
     let url = curl.url;
     let resp = get_resp(&url).await?;
     let ip = &resp.remote_addr().unwrap().ip().to_string();

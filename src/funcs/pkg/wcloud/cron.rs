@@ -1,13 +1,13 @@
-use super::gen;
+use super::*;
 use crate::{
-    BOT, BotError,
+    BOT,
     dao::{
         mysql::wordcloud::{active_group, clear},
         rdb::wordcloud::*,
     },
 };
 use futures::{StreamExt, stream::FuturesUnordered};
-pub async fn wcloud() -> Result<(), Vec<BotError>> {
+pub async fn wcloud() -> Result<(), Vec<AppError>> {
     let mut err_vec = Vec::new();
     let mut futures = FuturesUnordered::new();
     for group in active_group().await.map_err(|e| vec![e.into()])? {
@@ -32,8 +32,8 @@ pub async fn wcloud() -> Result<(), Vec<BotError>> {
     }
 }
 
-async fn wcloud_single(group: i64) -> Vec<BotError> {
-    let mut err_vec = Vec::new();
+async fn wcloud_single(group: i64) -> Vec<AppError> {
+    let mut err_vec: Vec<AppError> = Vec::new();
     let flag = get_flag(group).await.unwrap_or_else(|e| {
         err_vec.push(e);
         true
@@ -57,7 +57,7 @@ async fn wcloud_single(group: i64) -> Vec<BotError> {
     err_vec
 }
 
-pub async fn wcloud_then_clear() -> Result<(), Vec<BotError>> {
+pub async fn wcloud_then_clear() -> Result<(), Vec<AppError>> {
     let mut err_vec = match wcloud().await {
         Ok(_) => {
             vec![]
