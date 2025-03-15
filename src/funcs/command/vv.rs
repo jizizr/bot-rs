@@ -20,20 +20,20 @@ lazy_static! {
     static ref PIC_URL: String = SETTINGS.vv.pic_url.trim_end_matches('/').to_string();
 }
 
-async fn get_vv_list(desc: String) -> Result<Vec<String>, AppError> {
+async fn get_vv_list(desc: String) -> Result<Vec<String>, BotError> {
     let url = format!("{}/search?q={}&n=5", *API_URL, desc);
     Ok(CLIENT.post(url).send().await?.json().await?)
 }
 
-fn get_vv_pic_url(name: &str) -> Result<Url, AppError> {
-    Url::parse(&format!("{}/{}", *PIC_URL, name)).map_err(AppError::from)
+fn get_vv_pic_url(name: &str) -> Result<Url, BotError> {
+    Url::parse(&format!("{}/{}", *PIC_URL, name)).map_err(BotError::from)
 }
 
-async fn vv_cmd(cmd: &VvCmd) -> Result<Url, AppError> {
+async fn vv_cmd(cmd: &VvCmd) -> Result<Url, BotError> {
     let desc = cmd.desc.join(" ");
     let vv_list = get_vv_list(desc).await?;
     if vv_list.is_empty() {
-        return Err(AppError::Custom("vv被削了".to_string()));
+        return Err(BotError::Custom("vv被削了".to_string()));
     }
     let vv = {
         let mut rng = rand::thread_rng();

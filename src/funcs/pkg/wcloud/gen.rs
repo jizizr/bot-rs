@@ -7,7 +7,7 @@ use teloxide::{
     utils::markdown,
 };
 
-pub async fn wcloud(bot: &Bot, group: i64) -> Result<(), AppError> {
+pub async fn wcloud(bot: &Bot, group: i64) -> Result<(), BotError> {
     //转换为wordcloud需要的HashMap
     let word_vec = wordcloud::get_words(group).await?;
     let words: HashMap<&str, usize> = word_vec
@@ -32,7 +32,7 @@ pub async fn wcloud(bot: &Bot, group: i64) -> Result<(), AppError> {
     Ok(())
 }
 
-pub async fn user_freq(bot: &Bot, group: i64) -> Result<(), AppError> {
+pub async fn user_freq(bot: &Bot, group: i64) -> Result<(), BotError> {
     let users = wordcloud::get_users(group).await?;
     if users.is_empty() {
         return Ok(());

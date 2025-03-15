@@ -36,6 +36,7 @@ pub struct Api {
 pub struct DB {
     pub mysql: Mysql,
     pub redis: Redis,
+    pub mongo: Mongo,
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,6 +46,11 @@ pub struct Mysql {
 
 #[derive(Debug, Deserialize)]
 pub struct Redis {
+    pub url: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Mongo {
     pub url: String,
 }
 

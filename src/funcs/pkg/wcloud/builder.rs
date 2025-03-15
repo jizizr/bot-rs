@@ -36,7 +36,7 @@ lazy_static! {
     ];
 }
 
-pub fn build(png_bytes: &mut Vec<u8>, words: HashMap<&str, usize>) -> Result<(), AppError> {
+pub fn build(png_bytes: &mut Vec<u8>, words: HashMap<&str, usize>) -> Result<(), BotError> {
     let start = std::time::Instant::now();
     let rgb_image = WCLOUD.generate_from_map_with_color_func(
         words,

@@ -64,10 +64,10 @@ cmd!(
     }
 );
 
-fn parse_host(host: &str) -> Result<String, AppError> {
+fn parse_host(host: &str) -> Result<String, BotError> {
     let host = HOST_MATCH
         .captures(host)
-        .ok_or(AppError::Custom("Invalid target".to_string()))?
+        .ok_or(BotError::Custom("Invalid target".to_string()))?
         .get(2)
         .unwrap()
         .as_str()
@@ -75,7 +75,7 @@ fn parse_host(host: &str) -> Result<String, AppError> {
     Ok(host)
 }
 
-fn into_target(ping_cmd: &PingCmd) -> Result<Target, AppError> {
+fn into_target(ping_cmd: &PingCmd) -> Result<Target, BotError> {
     let record_type = if ping_cmd.v6 {
         "AAAA".to_string()
     } else {
@@ -104,7 +104,7 @@ fn into_target(ping_cmd: &PingCmd) -> Result<Target, AppError> {
             req.port = Some(
                 host_port[1]
                     .parse()
-                    .map_err(|_| AppError::Custom("Invalid port".to_string()))?,
+                    .map_err(|_| BotError::Custom("Invalid port".to_string()))?,
             );
             req.host = parse_host(host_port[0])?;
         }
@@ -124,7 +124,7 @@ fn into_target(ping_cmd: &PingCmd) -> Result<Target, AppError> {
 async fn send_json<T: ?Sized + serde::Serialize>(
     client: &mut ResilientTcpStream,
     target: &T,
-) -> Result<(), AppError> {
+) -> Result<(), BotError> {
     let mut buffer = String::with_capacity(256);
     writeln!(buffer, "{}", serde_json::to_string(target)?)?;
     client.write_all(buffer.as_bytes()).await?;
@@ -134,13 +134,13 @@ async fn send_json<T: ?Sized + serde::Serialize>(
 async fn receive_json<'a, T: serde::Deserialize<'a>>(
     client: &mut ResilientTcpStream,
     buffer: &'a mut String,
-) -> Result<T, AppError> {
+) -> Result<T, BotError> {
     let mut reader = BufReader::new(&mut client.stream);
 
     reader
         .read_line(buffer)
         .await
-        .map_err(|e| AppError::Custom(e.to_string()))?;
+        .map_err(|e| BotError::Custom(e.to_string()))?;
 
     serde_json::from_str(buffer).map_err(|e| {
         log::error!("{}", buffer);
@@ -152,12 +152,12 @@ async fn send_receive_json<'a, T: ?Sized + serde::Serialize, R: serde::Deseriali
     client: &mut ResilientTcpStream,
     target: &T,
     buffer: &'a mut String,
-) -> Result<R, AppError> {
+) -> Result<R, BotError> {
     send_json(client, target).await?;
     receive_json(client, buffer).await
 }
 
-async fn get_ping(text: String) -> Result<DashMap<String, Answer>, AppError> {
+async fn get_ping(text: String) -> Result<DashMap<String, Answer>, BotError> {
     let ping_cmd =
         PingCmd::try_parse_from(text.to_lowercase().split_whitespace()).map_err(ccerr!())?;
     let target = into_target(&ping_cmd)?;
@@ -175,7 +175,7 @@ async fn get_ping(text: String) -> Result<DashMap<String, Answer>, AppError> {
     // 等待所有TcpStream获取完成
     while let Some(result) = futures.next().await {
         if result.is_err() {
-            return Err(AppError::Custom("内部错误".to_string()));
+            return Err(BotError::Custom("内部错误".to_string()));
         }
     }
     let streams = match Arc::try_unwrap(streams) {
@@ -230,7 +230,7 @@ async fn get_ping(text: String) -> Result<DashMap<String, Answer>, AppError> {
                 dm.insert(k, answer);
             }
             Err(e) => {
-                if let AppError::IOError(_) = e {
+                if let BotError::IOError(_) = e {
                     streams.remove(&k);
                 }
                 let mut a = Answer::new();
@@ -255,7 +255,7 @@ async fn get_ping(text: String) -> Result<DashMap<String, Answer>, AppError> {
     Ok(dm)
 }
 
-pub async fn ping(bot: &Bot, msg: &Message) -> Result<(), AppError> {
+pub async fn ping(bot: &Bot, msg: &Message) -> Result<(), BotError> {
     let text = match get_ping(getor(msg).unwrap().to_string()).await {
         Ok(dm) => dm.into_iter().fold(String::new(), |mut acc, (k, v)| {
             acc.push_str(&match v.error {

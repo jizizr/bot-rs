@@ -16,7 +16,7 @@ async fn get_user_profile_photos(
     bot: &Bot,
     msg: &Message,
     output_size: (u32, u32),
-) -> Result<ImageSurface, AppError> {
+) -> Result<ImageSurface, BotError> {
     let (width, height) = output_size;
     let photo = bot.get_user_profile_photos(msg.from().unwrap().id).await?;
     let file_id = &photo.photos[0][0].file.id;

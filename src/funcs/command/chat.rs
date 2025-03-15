@@ -70,7 +70,7 @@ pub async fn chat(bot: &Bot, msg: &Message) -> BotResult {
     Ok(())
 }
 
-async fn get_chat(msg: &Message) -> Result<String, AppError> {
+async fn get_chat(msg: &Message) -> Result<String, BotError> {
     let chat = ChatCmd::try_parse_from(getor(msg).unwrap().split_whitespace()).map_err(ccerr!())?;
     let request_body = format!(
         r#"{{"contents":[{{"parts":[{{"text":"{}"}}]}}]}}"#,
@@ -86,9 +86,9 @@ async fn get_chat(msg: &Message) -> Result<String, AppError> {
     let content = res
         .candidates
         .first()
-        .ok_or(AppError::Custom("未知错误".to_string()))?;
+        .ok_or(BotError::Custom("未知错误".to_string()))?;
     if content.finish_reason != "STOP" {
-        return Err(AppError::Custom(content.finish_reason.to_string()));
+        return Err(BotError::Custom(content.finish_reason.to_string()));
     }
     Ok(content
         .content

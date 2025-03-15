@@ -4,7 +4,7 @@ use funcs::{command::command_handler, text::text_handler};
 use lazy_static::lazy_static;
 use myclap::clap::MyErrorFormatter;
 use serde::de::DeserializeOwned;
-use std::{collections::VecDeque, error::Error, fs::File, io::Read, time::Duration};
+use std::{collections::VecDeque, fs::File, io::Read, time::Duration};
 use teloxide::{Bot, prelude::*, types::Me};
 use tokio::{
     io::{self, AsyncWriteExt},
@@ -19,10 +19,9 @@ pub mod funcs;
 pub mod myclap;
 pub mod settings;
 
-pub type BotError = Box<dyn Error + Send + Sync>;
-pub type BotResult = Result<(), AppError>;
+pub type BotResult = Result<(), BotError>;
 #[derive(Debug, thiserror::Error)]
-pub enum AppError {
+pub enum BotError {
     #[error("API请求失败: {0}")]
     Request(#[from] reqwest::Error),
     #[error("API请求失败: {0}")]
@@ -69,7 +68,7 @@ macro_rules! ccerr {
 #[macro_export]
 macro_rules! clap_err {
     ($e:expr) => {
-        AppError::Clap($e.apply::<MyErrorFormatter>(), &USAGE)
+        BotError::Clap($e.apply::<MyErrorFormatter>(), &USAGE)
     };
 }
 

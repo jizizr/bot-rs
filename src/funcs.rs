@@ -1,4 +1,4 @@
-use crate::{AppError, BotResult, get, getor, settings::SETTINGS};
+use crate::{BotError, BotResult, get, getor, settings::SETTINGS};
 use futures::future::BoxFuture;
 use lazy_static::lazy_static;
 use regex::Regex;

@@ -37,7 +37,7 @@ pub fn fix_start(u: String) -> String {
     format!("http://{}", url)
 }
 
-async fn get_short(msg: &Message) -> Result<String, AppError> {
+async fn get_short(msg: &Message) -> Result<String, BotError> {
     let short =
         ShortCmd::try_parse_from(getor(msg).unwrap().split_whitespace()).map_err(ccerr!())?;
     let surl;
@@ -54,11 +54,11 @@ async fn get_short(msg: &Message) -> Result<String, AppError> {
             surl = None;
             url_value.to_string()
         }
-        _ => return Err(AppError::Custom("用法详解：".to_string())),
+        _ => return Err(BotError::Custom("用法详解：".to_string())),
     };
     url = MATCH
         .find(&url)
-        .ok_or_else(|| AppError::Custom("匹配不到符合规则的URL".to_string()))?
+        .ok_or_else(|| BotError::Custom("匹配不到符合规则的URL".to_string()))?
         .as_str()
         .to_string();
     let request_body = match surl {
@@ -75,9 +75,9 @@ async fn get_short(msg: &Message) -> Result<String, AppError> {
     if post_result.code == 200.to_string() {
         Ok(format!("https://774.gs/{}", post_result.shorturl))
     } else if post_result.code == 2003.to_string() {
-        return Err(AppError::Custom("指定的短域已被占用".to_string()));
+        return Err(BotError::Custom("指定的短域已被占用".to_string()));
     } else {
-        return Err(AppError::Custom("未知错误".to_string()));
+        return Err(BotError::Custom("未知错误".to_string()));
     }
 }
 

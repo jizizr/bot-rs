@@ -19,7 +19,7 @@ cmd!(
     }
 );
 
-async fn get_today(msg: &Message) -> Result<String, AppError> {
+async fn get_today(msg: &Message) -> Result<String, BotError> {
     let base_url = "http://hao.360.com/histoday/".to_string();
     let today =
         TodayCmd::try_parse_from(getor(msg).unwrap().split_whitespace()).map_err(ccerr!())?;
@@ -40,7 +40,7 @@ async fn get_today(msg: &Message) -> Result<String, AppError> {
             )
             .await?
         } else {
-            Err(AppError::Custom("日期不完整\n".to_string()))?
+            Err(BotError::Custom("日期不完整\n".to_string()))?
         }
     } else {
         get_history(base_url, None).await?
@@ -64,10 +64,10 @@ pub async fn today(bot: &Bot, msg: &Message) -> BotResult {
     Ok(())
 }
 
-async fn get_history(url: String, time: Option<String>) -> Result<String, AppError> {
+async fn get_history(url: String, time: Option<String>) -> Result<String, BotError> {
     let req = reqwest::get(url).await?;
     if req.status() == reqwest::StatusCode::NOT_FOUND {
-        return Err(AppError::Custom("日期范围错误".to_string()));
+        return Err(BotError::Custom("日期范围错误".to_string()));
     }
     let rstring = req.text().await?;
     Ok(format!(

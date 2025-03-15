@@ -62,7 +62,7 @@ macro_rules! cmd {
     };
 }
 
-async fn auth(bot: &Bot, msg: &Message, user_id: UserId) -> Result<bool, AppError> {
+async fn auth(bot: &Bot, msg: &Message, user_id: UserId) -> Result<bool, BotError> {
     match msg.chat.kind {
         ChatKind::Private { .. } => Ok(true),
         _ => {
@@ -197,7 +197,7 @@ pub async fn command_handler(bot: &Bot, msg: &Message, me: &Me) -> BotResult {
     };
 
     let cmd = BotCommands::parse(text, me.username());
-    let _: Result<(), AppError> = cmd_match!(
+    let _: Result<(), BotError> = cmd_match!(
         cmd,
         bot,
         msg,

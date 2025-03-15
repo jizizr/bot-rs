@@ -32,7 +32,7 @@ struct RateResponse {
     value: f64,
 }
 
-async fn get_exchange_rate(from: &str, to: &str) -> Result<f64, AppError> {
+async fn get_exchange_rate(from: &str, to: &str) -> Result<f64, BotError> {
     if from == to {
         return Ok(1.0);
     }
@@ -42,13 +42,13 @@ async fn get_exchange_rate(from: &str, to: &str) -> Result<f64, AppError> {
         .send()
         .await?;
     if !resp.status().is_success() {
-        return Err(AppError::Custom("不支持的货币".to_string()));
+        return Err(BotError::Custom("不支持的货币".to_string()));
     }
     let rate: RateResponse = resp.json().await?;
     Ok(rate.value)
 }
 
-async fn coin_exchange(from: &str, to: &str) -> Result<String, AppError> {
+async fn coin_exchange(from: &str, to: &str) -> Result<String, BotError> {
     let (num, from) = parse(from)?;
     let exchange_rate = get_exchange_rate(from, to).await?;
     let mut answer = String::new();
@@ -68,13 +68,13 @@ async fn coin_exchange(from: &str, to: &str) -> Result<String, AppError> {
     Ok(answer)
 }
 
-async fn get_rate(msg: &Message) -> Result<String, AppError> {
+async fn get_rate(msg: &Message) -> Result<String, BotError> {
     let rate = RateCmd::try_parse_from(getor(msg).unwrap().to_uppercase().split_whitespace())
         .map_err(ccerr!())?;
     coin_exchange(&rate.from, &rate.to).await
 }
 
-fn parse(raw: &str) -> Result<(f64, &str), AppError> {
+fn parse(raw: &str) -> Result<(f64, &str), BotError> {
     let iter = raw.chars().enumerate().peekable();
     for (i, c) in iter {
         if !c.is_ascii_digit() && c != '.' {
@@ -85,7 +85,7 @@ fn parse(raw: &str) -> Result<(f64, &str), AppError> {
             }
         }
     }
-    Err(AppError::Custom("解析错误".to_string()))
+    Err(BotError::Custom("解析错误".to_string()))
 }
 
 pub async fn rate(bot: &Bot, msg: &Message) -> BotResult {

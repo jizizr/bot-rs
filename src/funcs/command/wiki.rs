@@ -35,7 +35,7 @@ struct Page {
     snippet: String,
 }
 
-async fn get_wiki(msg: &Message) -> Result<String, AppError> {
+async fn get_wiki(msg: &Message) -> Result<String, BotError> {
     let search =
         WikiCmd::try_parse_from(getor(msg).unwrap().split_whitespace()).map_err(ccerr!())?;
     let result: SearchResult = get(&format!(

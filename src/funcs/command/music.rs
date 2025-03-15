@@ -44,7 +44,7 @@ struct MusicList {
     data: Vec<MusicListData>,
 }
 
-async fn get_music_data(name: &str, num: &str) -> Result<MusicData, AppError> {
+async fn get_music_data(name: &str, num: &str) -> Result<MusicData, BotError> {
     let url = if num == "1" {
         format!("{}={}&choose=1", SETTINGS.api.music, name)
     } else {
@@ -55,7 +55,7 @@ async fn get_music_data(name: &str, num: &str) -> Result<MusicData, AppError> {
 }
 
 #[allow(dead_code)]
-async fn music2vec(url: &str) -> Result<Vec<u8>, AppError> {
+async fn music2vec(url: &str) -> Result<Vec<u8>, BotError> {
     let mut resp = CLIENT.get(url).send().await?;
     let mut buf = Vec::new();
     while let Some(chunk) = resp.chunk().await? {
@@ -69,7 +69,7 @@ async fn get_music(
     music: MusicCmd,
     msg: &Message,
     msg_bot: &Message,
-) -> Result<(), AppError> {
+) -> Result<(), BotError> {
     let name = music.url.join(" ");
     let music = get_music_data(&name, "1").await?;
     let (audio, cover) = get_music_info(&music).await?;
@@ -94,7 +94,7 @@ async fn get_music(
     Ok(())
 }
 
-async fn get_music_gui(bot: Bot, msg: Message, search: &str) -> Result<(), AppError> {
+async fn get_music_gui(bot: Bot, msg: Message, search: &str) -> Result<(), BotError> {
     let music_datas: MusicList = get(&format!("{}={}", SETTINGS.api.music, search)).await?;
     bot.edit_message_caption(msg.chat.id, msg.id)
         .caption("选择你的音乐")
@@ -103,7 +103,7 @@ async fn get_music_gui(bot: Bot, msg: Message, search: &str) -> Result<(), AppEr
     Ok(())
 }
 
-async fn get_music_cover(bot: Bot, msg: Message, search: &str) -> Result<(), AppError> {
+async fn get_music_cover(bot: Bot, msg: Message, search: &str) -> Result<(), BotError> {
     bot.send_photo(
         msg.chat.id,
         InputFile::url(
@@ -120,7 +120,7 @@ async fn get_music_cover(bot: Bot, msg: Message, search: &str) -> Result<(), App
                 match &msg.reply_markup().unwrap().inline_keyboard[0][1].kind {
                     CallbackData(data) => data,
                     _ => {
-                        return Err(AppError::Custom("Unknown Error".to_string()));
+                        return Err(BotError::Custom("Unknown Error".to_string()));
                     }
                 },
             ),
@@ -130,7 +130,7 @@ async fn get_music_cover(bot: Bot, msg: Message, search: &str) -> Result<(), App
     Ok(())
 }
 
-async fn get_callback_music(bot: Bot, msg: Message, id: &str, name: &str) -> Result<(), AppError> {
+async fn get_callback_music(bot: Bot, msg: Message, id: &str, name: &str) -> Result<(), BotError> {
     let music_data: MusicData = get_music_data(name, id).await?;
     let (audio, cover) = get_music_info(&music_data).await?;
     bot.edit_message_media(
@@ -153,7 +153,7 @@ async fn get_callback_music(bot: Bot, msg: Message, id: &str, name: &str) -> Res
     Ok(())
 }
 
-pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), AppError> {
+pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> {
     if let Some(music) = q.data {
         bot.answer_callback_query(q.id).await?;
         let mut music = music.splitn(2, ' ');
@@ -172,7 +172,7 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), AppError> 
                 get_callback_music(bot, msg, music_name, music.next().unwrap()).await?
             }
             None => {
-                return Err(AppError::Custom(
+                return Err(BotError::Custom(
                     "Unknown Error in [Music music_callback]".to_string(),
                 ));
             }
@@ -205,7 +205,7 @@ fn gui_menu(music_datas: Vec<MusicListData>, search: &str) -> InlineKeyboardMark
     InlineKeyboardMarkup::new(keyboard)
 }
 
-async fn get_music_info(music: &MusicData) -> Result<(Vec<u8>, Vec<u8>), AppError> {
+async fn get_music_info(music: &MusicData) -> Result<(Vec<u8>, Vec<u8>), BotError> {
     let (audio, cover) = tokio::join!(music2vec(&music.url), music2vec(&music.cover));
     Ok((audio?, cover?))
 }

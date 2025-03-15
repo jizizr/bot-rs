@@ -25,7 +25,7 @@ cmd!(
     }
 );
 
-fn extract_data(json_data: Value) -> Result<Vec<(String, String)>, AppError> {
+fn extract_data(json_data: Value) -> Result<Vec<(String, String)>, BotError> {
     let extracted = json_data
         .as_array()
         .and_then(|array| array.first()?.as_array())
@@ -43,12 +43,12 @@ fn extract_data(json_data: Value) -> Result<Vec<(String, String)>, AppError> {
                 })
                 .collect()
         })
-        .ok_or(AppError::Custom("Invalid structure".to_string()))?;
+        .ok_or(BotError::Custom("Invalid structure".to_string()))?;
 
     Ok(extracted)
 }
 
-async fn translate_req(tl: &str, text: &str, is_compare: bool) -> Result<String, AppError> {
+async fn translate_req(tl: &str, text: &str, is_compare: bool) -> Result<String, BotError> {
     let url_str = format!(
         "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={}&dt=t&q={}",
         tl,
@@ -78,10 +78,10 @@ async fn translate_req(tl: &str, text: &str, is_compare: bool) -> Result<String,
     })
 }
 
-fn compare_info(msg: &Message) -> Result<bool, AppError> {
+fn compare_info(msg: &Message) -> Result<bool, BotError> {
     if let CallbackData(data) = &msg
         .reply_markup()
-        .ok_or(AppError::Custom("No reply_markup".to_string()))?
+        .ok_or(BotError::Custom("No reply_markup".to_string()))?
         .inline_keyboard[0][0]
         .kind
     {
@@ -91,30 +91,30 @@ fn compare_info(msg: &Message) -> Result<bool, AppError> {
             Ok(false)
         }
     } else {
-        Err(AppError::Custom(
+        Err(BotError::Custom(
             "Unknown Error in [Translate compare_info]".to_string(),
         ))
     }
 }
 
-fn tl_info(msg: &Message) -> Result<&str, AppError> {
+fn tl_info(msg: &Message) -> Result<&str, BotError> {
     if let CallbackData(data) = &msg
         .reply_markup()
-        .ok_or(AppError::Custom("No reply_markup".to_string()))?
+        .ok_or(BotError::Custom("No reply_markup".to_string()))?
         .inline_keyboard[0][1]
         .kind
     {
-        Ok(data.splitn(2, ' ').last().ok_or(AppError::Custom(
+        Ok(data.splitn(2, ' ').last().ok_or(BotError::Custom(
             "Unknown Error in [Translate tl_info]".to_string(),
         ))?)
     } else {
-        Err(AppError::Custom(
+        Err(BotError::Custom(
             "Unknown Error in [Translate tl_info]".to_string(),
         ))
     }
 }
 
-pub async fn translate_callback(bot: Bot, q: CallbackQuery) -> Result<(), AppError> {
+pub async fn translate_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> {
     if let Some(translate) = q.data {
         bot.answer_callback_query(q.id).await?;
         let mut translate = translate.splitn(2, ' ');
@@ -147,7 +147,7 @@ pub async fn translate_callback(bot: Bot, q: CallbackQuery) -> Result<(), AppErr
                 tl = CN;
             }
             _ => {
-                return Err(AppError::Custom(
+                return Err(BotError::Custom(
                     "Unknown Error in [Translate translate_callback]".to_string(),
                 ));
             }
@@ -185,7 +185,7 @@ async fn get_translate<'a>(
     tl: Option<&'a str>,
     is_compare: bool,
     is_callback: bool,
-) -> Result<(String, MessageId, &'a str), AppError> {
+) -> Result<(String, MessageId, &'a str), BotError> {
     let (translate, mid) =
         match TranslateCmd::try_parse_from(getor(msg).unwrap().split_whitespace()) {
             Ok(translate) => (translate, msg.id),
