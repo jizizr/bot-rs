@@ -1,5 +1,5 @@
 use super::*;
-use crate::{cmd, command_gen, error_fmt, lock};
+use crate::{ccerr, clap_err, cmd, command_gen, lock, myclap::clap::MyErrorFormatter};
 use clap::{CommandFactory, Parser};
 use dashmap::DashSet;
 use std::{
@@ -7,14 +7,11 @@ use std::{
     hash::{Hash, Hasher},
     ops::Deref,
 };
-use teloxide::{
-    types::{
-        ChatKind, InlineKeyboardButton, InlineKeyboardButtonKind::CallbackData,
-        InlineKeyboardMarkup, InlineQueryResult, InlineQueryResultArticle, InputFile,
-        InputMediaAudio, InputMessageContent, InputMessageContentText, LinkPreviewOptions,
-        MediaKind, Message, MessageId, MessageKind, ParseMode,
-    },
-    utils::command::ParseError,
+use teloxide::types::{
+    ChatKind, InlineKeyboardButton, InlineKeyboardButtonKind::CallbackData, InlineKeyboardMarkup,
+    InlineQueryResult, InlineQueryResultArticle, InputFile, InputMediaAudio, InputMessageContent,
+    InputMessageContentText, LinkPreviewOptions, MediaKind, Message, MessageId, MessageKind,
+    ParseMode,
 };
 use thiserror::Error;
 
@@ -40,40 +37,31 @@ lazy_static! {
     static ref LIMITER: BottomLocker = BottomLocker(DashSet::new());
 }
 
-#[macro_export]
-macro_rules! error_fmt {
-    ($usage:ident, $($variant:ident($error_type:ty),)*) => {
-        fn clap_fmt(err: &clap::error::Error) -> String {
-            format!(
-                "{}\n{}",
-                err.render().to_string().splitn(2, "Usage").nth(0).unwrap(),
-                *$usage
-            )
-        }
-        fn custom_fmt(err: &String) -> String {
-            format!("{}\n\n{}", err, *USAGE)
-        }
-        #[allow(dead_code)]
-        #[derive(Error, Debug)]
-        pub enum AppError {
-            #[error("API请求失败: {0}")]
-            Request(#[from] reqwest::Error),
-            #[error("API请求失败: {0}")]
-            Retry(#[from] reqwest_middleware::Error),
-            #[error("{}",clap_fmt(.0))]
-            Clap(#[from] clap::error::Error),
-            #[error("{}",custom_fmt(.0))]
-            Custom(String),
-            #[error("{}",.0)]
-            Send(#[from] teloxide::RequestError),
-            $(
-            #[error("{}",.0)]
-            $variant(#[from] $error_type),
-            )*
-        }
-    };
+#[derive(Debug, Error)]
+pub enum AppError {
+    #[error("API请求失败: {0}")]
+    Request(#[from] reqwest::Error),
+    #[error("API请求失败: {0}")]
+    Retry(#[from] reqwest_middleware::Error),
+    #[error("{}\n\n{}", 
+    .0,
+    .1)]
+    Clap(clap::error::Error<MyErrorFormatter>, &'static String),
+    #[error("{}", .0)]
+    Custom(String),
+    #[error("{}", .0)]
+    Send(#[from] teloxide::RequestError),
+    #[error("{}", .0)]
+    IOError(#[from] std::io::Error),
+    #[error("{}", .0)]
+    FormatError(#[from] std::fmt::Error),
+    #[error("{}", .0)]
+    RegexError(regex::Error),
+    #[error("{}", .0)]
+    SerdeError(#[from] serde_json::Error),
+    #[error("{}", .0)]
+    UrlParseError(#[from] url::ParseError),
 }
-
 #[macro_export]
 macro_rules! command_gen {
     ($name:expr, $about:expr, $struct_def:item) => {
@@ -83,7 +71,7 @@ macro_rules! command_gen {
                                     about = concat!("命令功能：",$about),
                                     name = $name,
                                     next_help_heading = "参数解释",
-                                    disable_help_flag = true
+                                    disable_help_flag = true,
                                 )]
         $struct_def
     };
@@ -91,12 +79,26 @@ macro_rules! command_gen {
 
 #[macro_export]
 macro_rules! cmd {
-    ($name:expr, $about:expr, $struct_name:ident, { $($field:tt)* }, $($variant:ident($error_type:ty),)*) => {
+    ($name:expr, $about:expr, $struct_name:ident, { $($field:tt)* }) => {
         lazy_static!{
             static ref USAGE: String = $struct_name::command().render_help().to_string();
         }
-        error_fmt!(USAGE, $($variant($error_type),)*);
+        // error_fmt!(USAGE, $($variant($error_type),)*);
         command_gen!($name, $about, struct $struct_name { $($field)* });
+    };
+}
+
+#[macro_export]
+macro_rules! ccerr {
+    () => {
+        |e| clap_err!(e)
+    };
+}
+
+#[macro_export]
+macro_rules! clap_err {
+    ($e:expr) => {
+        AppError::Clap($e.apply::<MyErrorFormatter>(), &USAGE)
     };
 }
 
@@ -167,12 +169,15 @@ macro_rules! cmd_match {
         match $cmd {
             Ok(Cmd::Help) => {
                 $bot.send_message($msg.chat.id, Cmd::descriptions().to_string())
-                    .await?;
+                    .await
+                    .map(|_| ())
+                    .map_err(BotError::from)
             }
             $(
-                Ok(Cmd::$stat) => $func($bot, $msg).await?,
+                Ok(Cmd::$stat) => $func($bot, $msg).await.map(|_| ()).map_err(BotError::from),
             )+
             Err(_) => {
+                Ok(())
             }
         }
     };
@@ -231,8 +236,8 @@ pub async fn command_handler(bot: &Bot, msg: &Message, me: &Me) -> BotResult {
         None => return Ok(()), // 没有文本内容，直接返回
     };
 
-    let cmd: Result<Cmd, ParseError> = BotCommands::parse(text, me.username());
-    cmd_match!(
+    let cmd = BotCommands::parse(text, me.username());
+    let _: Result<(), BotError> = cmd_match!(
         cmd,
         bot,
         msg,

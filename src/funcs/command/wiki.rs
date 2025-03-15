@@ -12,7 +12,7 @@ cmd!(
         ///词条名
         #[arg(required = true)]
         search: Vec<String>,
-    },
+    }
 );
 
 #[derive(Deserialize)]
@@ -36,7 +36,8 @@ struct Page {
 }
 
 async fn get_wiki(msg: &Message) -> Result<String, AppError> {
-    let search = WikiCmd::try_parse_from(getor(msg).unwrap().split_whitespace())?;
+    let search =
+        WikiCmd::try_parse_from(getor(msg).unwrap().split_whitespace()).map_err(ccerr!())?;
     let result: SearchResult = get(&format!(
         "https://zh.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit=1&srsearch={}",
         search.search.join(" ")

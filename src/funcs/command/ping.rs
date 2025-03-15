@@ -61,11 +61,7 @@ cmd!(
         /// dns 为 AAAA 记录
         #[arg(short='6', long)]
         v6: bool,
-    },
-    IOError(std::io::Error),
-    FormatError(std::fmt::Error),
-    RegexError(regex::Error),
-    SerdeError(serde_json::Error),
+    }
 );
 
 fn parse_host(host: &str) -> Result<String, AppError> {
@@ -162,7 +158,8 @@ async fn send_receive_json<'a, T: ?Sized + serde::Serialize, R: serde::Deseriali
 }
 
 async fn get_ping(text: String) -> Result<DashMap<String, Answer>, AppError> {
-    let ping_cmd = PingCmd::try_parse_from(text.to_lowercase().split_whitespace())?;
+    let ping_cmd =
+        PingCmd::try_parse_from(text.to_lowercase().split_whitespace()).map_err(ccerr!())?;
     let target = into_target(&ping_cmd)?;
     let mut futures = FuturesUnordered::new();
     let streams = Arc::new(DashMap::new());

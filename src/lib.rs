@@ -15,6 +15,7 @@ pub mod analysis;
 pub mod dao;
 pub mod filter;
 pub mod funcs;
+pub mod myclap;
 pub mod settings;
 
 pub type BotError = Box<dyn Error + Send + Sync>;

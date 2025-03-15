@@ -22,7 +22,7 @@ cmd!(
         ///翻译内容
         #[arg(required = true)]
         content: Vec<String>,
-    },
+    }
 );
 
 fn extract_data(json_data: Value) -> Result<Vec<(String, String)>, AppError> {
@@ -198,10 +198,11 @@ async fn get_translate<'a>(
                         } else {
                             msg.reply_to_message().and_then(|msg| msg.text())
                         }
-                        .ok_or(e)?,
+                        .ok_or(clap_err!(e))?,
                     ]
                     .into_iter(),
-                )?,
+                )
+                .map_err(ccerr!())?,
                 match msg.reply_to_message() {
                     Some(m) => m.id,
                     None => msg.id,

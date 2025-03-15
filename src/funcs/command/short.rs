@@ -20,7 +20,7 @@ cmd!(
         url: Option<String>,
         ///短链后缀
         surl: Option<String>,
-    },
+    }
 );
 
 #[derive(Deserialize)]
@@ -38,7 +38,8 @@ pub fn fix_start(u: String) -> String {
 }
 
 async fn get_short(msg: &Message) -> Result<String, AppError> {
-    let short = ShortCmd::try_parse_from(getor(msg).unwrap().split_whitespace())?;
+    let short =
+        ShortCmd::try_parse_from(getor(msg).unwrap().split_whitespace()).map_err(ccerr!())?;
     let surl;
     let mut url: String = match (short.surl, msg.reply_to_message(), &short.url) {
         (Some(s), _, _) => {

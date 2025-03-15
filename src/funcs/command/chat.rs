@@ -26,7 +26,7 @@ cmd!(
         ///聊天内容
         #[arg(required = true)]
         content: Vec<String>,
-    },
+    }
 );
 
 #[derive(Deserialize)]
@@ -71,7 +71,7 @@ pub async fn chat(bot: &Bot, msg: &Message) -> BotResult {
 }
 
 async fn get_chat(msg: &Message) -> Result<String, AppError> {
-    let chat = ChatCmd::try_parse_from(getor(msg).unwrap().split_whitespace())?;
+    let chat = ChatCmd::try_parse_from(getor(msg).unwrap().split_whitespace()).map_err(ccerr!())?;
     let request_body = format!(
         r#"{{"contents":[{{"parts":[{{"text":"{}"}}]}}]}}"#,
         chat.content.join(" ")

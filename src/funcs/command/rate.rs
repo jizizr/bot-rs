@@ -16,7 +16,7 @@ cmd!(
         ///目标货币
         #[arg(default_value_t = String::from("CNY"),value_parser  = is_alphabetic)]
         to: String,
-    },
+    }
 );
 
 fn is_alphabetic(value: &str) -> Result<String, String> {
@@ -70,7 +70,7 @@ async fn coin_exchange(from: &str, to: &str) -> Result<String, AppError> {
 
 async fn get_rate(msg: &Message) -> Result<String, AppError> {
     let rate = RateCmd::try_parse_from(getor(msg).unwrap().to_uppercase().split_whitespace())
-        .map_err(AppError::from)?;
+        .map_err(ccerr!())?;
     coin_exchange(&rate.from, &rate.to).await
 }
 

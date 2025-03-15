@@ -6,3 +6,4 @@ URL
 /data/func_switch
 .DS_Store
 /.idea
+src/funcs/command/test.rs

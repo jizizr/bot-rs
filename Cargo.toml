@@ -9,7 +9,7 @@ reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
 serde = { version = "1.0", features = ["derive"] }
 lazy_static = "1.5"
 regex = "1.10"
-clap = { version = "4.0", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
 thiserror = "2"
 teloxide = { git = "https://github.com/teloxide/teloxide", features = [
     "webhooks-axum",
@@ -25,7 +25,7 @@ mysql_async = "0.35"
 async-trait = "0.1.8"
 scraper = "0.22"
 cached = { version = "0.54", features = ["async"] }
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 dashmap = "6"
 image = "0.25"
 jieba-rs = "0.7"
@@ -48,6 +48,9 @@ lingua = { version = "1.6", default-features = false, features = [
 wcloud = { git = "https://github.com/jizizr/wcloud" }
 rand = "0.8"
 url = "2.5"
+mongodb = "3"
+serde_repr = "0.1"
+anstyle = "1.0"
 
 [profile.release]
 lto = true

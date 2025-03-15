@@ -11,8 +11,7 @@ cmd!(
         ///描述vv
         #[arg(required = true)]
         desc: Vec<String>,
-    },
-    UrlParseError(url::ParseError),
+    }
 );
 
 lazy_static! {
@@ -27,7 +26,7 @@ async fn get_vv_list(desc: String) -> Result<Vec<String>, AppError> {
 }
 
 fn get_vv_pic_url(name: &str) -> Result<Url, AppError> {
-    Ok(Url::parse(&format!("{}/{}", *PIC_URL, name))?)
+    Url::parse(&format!("{}/{}", *PIC_URL, name)).map_err(AppError::from)
 }
 
 async fn vv_cmd(cmd: &VvCmd) -> Result<Url, AppError> {
@@ -48,7 +47,7 @@ pub async fn vv(bot: &Bot, msg: &Message) -> BotResult {
     let cmd = match VvCmd::try_parse_from(getor(msg).unwrap().split_whitespace()) {
         Ok(cmd) => cmd,
         Err(e) => {
-            bot.send_message(msg.chat.id, format!("{}", AppError::from(e)))
+            bot.send_message(msg.chat.id, format!("{}", clap_err!(e)))
                 .reply_parameters(ReplyParameters::new(msg.id))
                 .await?;
             return Ok(());

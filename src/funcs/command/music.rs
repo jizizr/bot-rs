@@ -15,8 +15,7 @@ cmd!(
         ///音乐名
         #[arg(required = true)]
         url: Vec<String>,
-    },
-    UrlParseError(url::ParseError),
+    }
 );
 
 #[derive(Deserialize)]
@@ -217,7 +216,7 @@ pub async fn music(bot: &Bot, msg: &Message) -> BotResult {
     let music = match MusicCmd::try_parse_from(getor(msg).unwrap().split_whitespace()) {
         Ok(music) => music,
         Err(e) => {
-            bot.send_message(msg.chat.id, format!("{}", AppError::from(e)))
+            bot.send_message(msg.chat.id, format!("{}", clap_err!(e)))
                 .reply_parameters(ReplyParameters::new(msg.id))
                 .send()
                 .await?;

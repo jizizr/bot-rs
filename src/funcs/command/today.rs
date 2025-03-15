@@ -16,13 +16,13 @@ cmd!(
         month: Option<u8>,
         /// 日
         day: Option<u8>,
-    },
+    }
 );
 
 async fn get_today(msg: &Message) -> Result<String, AppError> {
     let base_url = "http://hao.360.com/histoday/".to_string();
     let today =
-        TodayCmd::try_parse_from(getor(msg).unwrap().split_whitespace()).map_err(AppError::from)?;
+        TodayCmd::try_parse_from(getor(msg).unwrap().split_whitespace()).map_err(ccerr!())?;
     let his = if today.month.is_some() {
         if today.day.is_some() {
             get_history(

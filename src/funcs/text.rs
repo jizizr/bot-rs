@@ -94,26 +94,29 @@ pub fn init() -> Option<()> {
 }
 
 pub async fn text_handler(bot: &Bot, msg: &Message) -> BotResult {
-    if getor(msg).is_some() {
-        if !getor(msg).unwrap().starts_with('/') {
-            let e = join_with_switch!(
-                &bot,
-                &msg,
-                fix::fix,
-                six::six,
-                repeat::repeat,
-                pretext::pretext,
-                fuck_b23::fuck_b23
-            );
-            if let Some(err) = e.fmt() {
-                log::error!("{}", err);
-            }
-        } else {
-            let e = join_with_switch!(&bot, &msg, guozao::guozao);
-            if let Some(err) = e.fmt() {
-                log::error!("{}", err);
+    match getor(msg) {
+        Some(m) => {
+            if !m.starts_with('/') {
+                let e = join_with_switch!(
+                    &bot,
+                    &msg,
+                    fix::fix,
+                    six::six,
+                    repeat::repeat,
+                    pretext::pretext,
+                    fuck_b23::fuck_b23
+                );
+                if let Some(err) = e.fmt() {
+                    log::error!("{}", err);
+                }
+            } else {
+                let e = join_with_switch!(&bot, &msg, guozao::guozao);
+                if let Some(err) = e.fmt() {
+                    log::error!("{}", err);
+                }
             }
         }
+        None => {}
     }
     Ok(())
 }
