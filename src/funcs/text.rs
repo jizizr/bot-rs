@@ -1,3 +1,8 @@
+use crate::{
+    analysis::model::{BotLogBuilder, MessageStatus},
+    dao::mongo::analysis::insert_log,
+};
+
 use super::{pkg::kv::GroupFuncSwitch, *};
 
 mod fix;
@@ -95,6 +100,7 @@ pub fn init() -> Option<()> {
 
 pub async fn text_handler(bot: &Bot, msg: &Message) -> BotResult {
     if let Some(m) = getor(msg) {
+        let mut blog = BotLogBuilder::from(msg);
         if !m.starts_with('/') {
             let e = join_with_switch!(
                 &bot,
@@ -107,13 +113,19 @@ pub async fn text_handler(bot: &Bot, msg: &Message) -> BotResult {
             );
             if let Some(err) = e.fmt() {
                 log::error!("{}", err);
+                blog.set_status(MessageStatus::RunError);
+                blog.set_error(err);
             }
         } else {
             let e = join_with_switch!(&bot, &msg, guozao::guozao);
             if let Some(err) = e.fmt() {
                 log::error!("{}", err);
+                blog.set_status(MessageStatus::RunError);
+                blog.set_error(err);
             }
         }
+        blog.set_command(m.to_string());
+        let _ = insert_log(&blog.into()).await;
     }
     Ok(())
 }

@@ -239,11 +239,11 @@ pub async fn command_handler(bot: &Bot, msg: &Message, me: &Me) -> BotResult {
             }
             _ => {
                 log.set_status(MessageStatus::RunError);
-                log.set_command(text.to_string());
                 log.set_error(err_msg);
             }
         }
     }
+    log.set_command(text.to_string());
     let _ = insert_log(&log.into()).await;
     Ok(())
 }
