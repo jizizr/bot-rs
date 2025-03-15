@@ -213,17 +213,8 @@ async fn get_music_info(music: &MusicData) -> Result<(Vec<u8>, Vec<u8>), BotErro
 pub async fn music(bot: &Bot, msg: &Message) -> BotResult {
     tokio::spawn(bot.send_chat_action(msg.chat.id, ChatAction::Typing).send());
 
-    let music = match MusicCmd::try_parse_from(getor(msg).unwrap().split_whitespace()) {
-        Ok(music) => music,
-        Err(e) => {
-            bot.send_message(msg.chat.id, format!("{}", clap_err!(e)))
-                .reply_parameters(ReplyParameters::new(msg.id))
-                .send()
-                .await?;
-            return Ok(());
-        }
-    };
-
+    let music =
+        MusicCmd::try_parse_from(getor(msg).unwrap().split_whitespace()).map_err(ccerr!())?;
     let msg_bot = bot
         .send_message(msg.chat.id, "正在获取音乐...")
         .reply_parameters(ReplyParameters::new(msg.id))
@@ -236,6 +227,7 @@ pub async fn music(bot: &Bot, msg: &Message) -> BotResult {
         Err(e) => {
             bot.edit_message_text(msg_bot.chat.id, msg_bot.id, format!("{e}"))
                 .await?;
+            return Err(e);
         }
     }
     Ok(())

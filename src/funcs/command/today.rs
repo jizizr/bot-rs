@@ -49,8 +49,7 @@ async fn get_today(msg: &Message) -> Result<String, BotError> {
 }
 
 pub async fn today(bot: &Bot, msg: &Message) -> BotResult {
-    let text = get_today(msg).await.unwrap_or_else(|e| format!("{e}"));
-    bot.send_message(msg.chat.id, text)
+    bot.send_message(msg.chat.id, get_today(msg).await?)
         .parse_mode(ParseMode::MarkdownV2)
         .link_preview_options(LinkPreviewOptions {
             is_disabled: true,

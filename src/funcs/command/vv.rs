@@ -44,17 +44,9 @@ async fn vv_cmd(cmd: &VvCmd) -> Result<Url, BotError> {
 }
 
 pub async fn vv(bot: &Bot, msg: &Message) -> BotResult {
-    let cmd = match VvCmd::try_parse_from(getor(msg).unwrap().split_whitespace()) {
-        Ok(cmd) => cmd,
-        Err(e) => {
-            bot.send_message(msg.chat.id, format!("{}", clap_err!(e)))
-                .reply_parameters(ReplyParameters::new(msg.id))
-                .await?;
-            return Ok(());
-        }
-    };
-
-    let pic_url = vv_cmd(&cmd).await?;
+    let pic_url =
+        vv_cmd(&VvCmd::try_parse_from(getor(msg).unwrap().split_whitespace()).map_err(ccerr!())?)
+            .await?;
     bot.send_photo(msg.chat.id, InputFile::url(pic_url))
         .reply_parameters(ReplyParameters::new(msg.id))
         .await?;

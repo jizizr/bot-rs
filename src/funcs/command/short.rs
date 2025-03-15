@@ -94,19 +94,11 @@ fn url2qr(url: &str) -> Vec<u8> {
 }
 
 pub async fn short(bot: &Bot, msg: &Message) -> BotResult {
-    match get_short(msg).await {
-        Ok(url) => {
-            bot.send_photo(msg.chat.id, InputFile::memory(url2qr(&url)))
-                .caption(format!("短链接：{}", url))
-                .send()
-                .await?
-        }
-        Err(e) => {
-            bot.send_message(msg.chat.id, format!("{e}"))
-                .reply_parameters(ReplyParameters::new(msg.id))
-                .send()
-                .await?
-        }
-    };
+    tokio::spawn(bot.send_chat_action(msg.chat.id, ChatAction::Typing).send());
+    let url = get_short(msg).await?;
+    bot.send_photo(msg.chat.id, InputFile::memory(url2qr(&url)))
+        .caption(format!("短链接：{}", url))
+        .send()
+        .await?;
     Ok(())
 }

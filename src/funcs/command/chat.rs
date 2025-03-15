@@ -52,12 +52,11 @@ struct Part {
 }
 
 pub async fn chat(bot: &Bot, msg: &Message) -> BotResult {
-    match get_chat(msg).await {
-        Ok(text) => bot
-            .send_message(msg.chat.id, pkg::escape::markdown::escape_markdown(&text))
-            .parse_mode(ParseMode::MarkdownV2),
-        Err(e) => bot.send_message(msg.chat.id, format!("{e}").replace(&*API_URL, "")),
-    }
+    bot.send_message(
+        msg.chat.id,
+        pkg::escape::markdown::escape_markdown(&get_chat(msg).await?),
+    )
+    .parse_mode(ParseMode::MarkdownV2)
     .link_preview_options(LinkPreviewOptions {
         is_disabled: true,
         url: None,

@@ -231,15 +231,10 @@ fn translate_menu(is_compare: bool, tl: &str) -> InlineKeyboardMarkup {
 
 pub async fn translate(bot: &Bot, msg: &Message) -> BotResult {
     let is_compare = false;
-    match get_translate(msg, None, is_compare, false).await {
-        Ok((text, mid, tl)) => bot
-            .send_message(msg.chat.id, text)
-            .reply_markup(translate_menu(is_compare, tl))
-            .reply_parameters(ReplyParameters::new(mid)),
-        Err(e) => bot
-            .send_message(msg.chat.id, format!("{e}"))
-            .reply_parameters(ReplyParameters::new(msg.id)),
-    }
-    .await?;
+    let (text, mid, tl) = get_translate(msg, None, is_compare, false).await?;
+    bot.send_message(msg.chat.id, text)
+        .reply_markup(translate_menu(is_compare, tl))
+        .reply_parameters(ReplyParameters::new(mid))
+        .await?;
     Ok(())
 }

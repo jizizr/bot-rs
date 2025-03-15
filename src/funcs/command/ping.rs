@@ -256,16 +256,16 @@ async fn get_ping(text: String) -> Result<DashMap<String, Answer>, BotError> {
 }
 
 pub async fn ping(bot: &Bot, msg: &Message) -> Result<(), BotError> {
-    let text = match get_ping(getor(msg).unwrap().to_string()).await {
-        Ok(dm) => dm.into_iter().fold(String::new(), |mut acc, (k, v)| {
+    let text = get_ping(getor(msg).unwrap().to_string())
+        .await?
+        .into_iter()
+        .fold(String::new(), |mut acc, (k, v)| {
             acc.push_str(&match v.error {
                 None => format!("{}: {:.2} ms, loss = {}% \n", k, v.avg_time, v.loss),
                 Some(e) => format!("{}: {}\n", k, e),
             });
             acc
-        }),
-        Err(e) => e.to_string(),
-    };
+        });
     bot.send_message(msg.chat.id, text).await?;
     Ok(())
 }

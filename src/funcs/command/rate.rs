@@ -89,10 +89,7 @@ fn parse(raw: &str) -> Result<(f64, &str), BotError> {
 }
 
 pub async fn rate(bot: &Bot, msg: &Message) -> BotResult {
-    let text = get_rate(msg)
-        .await
-        .unwrap_or_else(|e| markdown::escape(&format!("{e}")));
-    bot.send_message(msg.chat.id, text)
+    bot.send_message(msg.chat.id, get_rate(msg).await?)
         .reply_parameters(ReplyParameters::new(msg.id))
         .parse_mode(ParseMode::MarkdownV2)
         .send()

@@ -64,11 +64,7 @@ async fn get_wiki(msg: &Message) -> Result<String, BotError> {
 }
 
 pub async fn wiki(bot: &Bot, msg: &Message) -> BotResult {
-    let text = match get_wiki(msg).await {
-        Ok(msg) => msg,
-        Err(e) => markdown::escape(&format!("{e}")),
-    };
-    bot.send_message(msg.chat.id, &text)
+    bot.send_message(msg.chat.id, &get_wiki(msg).await?)
         .parse_mode(ParseMode::MarkdownV2)
         .reply_parameters(ReplyParameters::new(msg.id))
         .await?;

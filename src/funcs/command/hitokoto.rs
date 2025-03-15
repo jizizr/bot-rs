@@ -8,25 +8,20 @@ struct Quote {
 }
 
 pub async fn hitokoto(bot: &Bot, msg: &Message) -> BotResult {
-    let resp: Result<Quote, reqwest::Error> = get("https://v1.hitokoto.cn/").await;
-    match resp {
-        Err(e) => {
-            let error_message = format!("{:?}", e);
-            bot.send_message(msg.chat.id, error_message)
-                .reply_parameters(ReplyParameters::new(msg.id))
-                .await?;
-        }
-        Ok(quote) => {
-            // let quote = resp.unwrap();
-            let who = match quote.from_who {
+    let resp: Quote = get("https://v1.hitokoto.cn/").await?;
+    bot.send_message(
+        msg.chat.id,
+        format!(
+            "{}\n—— {}《{}》",
+            resp.hitokoto,
+            match resp.from_who {
                 Some(text) => text,
                 None => "".to_string(),
-            };
-            let message = format!("{}\n—— {}《{}》", quote.hitokoto, who, quote.from);
-            bot.send_message(msg.chat.id, message)
-                .reply_parameters(ReplyParameters::new(msg.id))
-                .await?;
-        }
-    }
+            },
+            resp.from
+        ),
+    )
+    .reply_parameters(ReplyParameters::new(msg.id))
+    .await?;
     Ok(())
 }

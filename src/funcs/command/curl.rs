@@ -257,27 +257,17 @@ async fn get_curl(msg: &Message) -> Result<String, BotError> {
 
 pub async fn curl(bot: &Bot, msg: &Message) -> BotResult {
     tokio::spawn(bot.send_chat_action(msg.chat.id, ChatAction::Typing).send());
-    match get_curl(msg).await {
-        Ok(text) => {
-            bot.send_message(msg.chat.id, text)
-                .reply_parameters(ReplyParameters::new(msg.id))
-                .link_preview_options(LinkPreviewOptions {
-                    is_disabled: true,
-                    url: None,
-                    prefer_small_media: false,
-                    prefer_large_media: false,
-                    show_above_text: false,
-                })
-                .parse_mode(ParseMode::MarkdownV2)
-                .send()
-                .await?;
-        }
-        Err(e) => {
-            bot.send_message(msg.chat.id, e.to_string())
-                .reply_parameters(ReplyParameters::new(msg.id))
-                .send()
-                .await?;
-        }
-    }
+    bot.send_message(msg.chat.id, get_curl(msg).await?)
+        .reply_parameters(ReplyParameters::new(msg.id))
+        .link_preview_options(LinkPreviewOptions {
+            is_disabled: true,
+            url: None,
+            prefer_small_media: false,
+            prefer_large_media: false,
+            show_above_text: false,
+        })
+        .parse_mode(ParseMode::MarkdownV2)
+        .send()
+        .await?;
     Ok(())
 }
