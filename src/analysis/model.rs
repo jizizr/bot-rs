@@ -26,6 +26,8 @@ pub enum MessageStatus {
 pub struct BotLog {
     group_id: i64,
     user_id: u64,
+    username: Option<String>,
+    group_username: Option<String>,
     timestamp: DateTime<Utc>,
     msg_type: MessageType,
     msg_ctx: MessageContext,
@@ -69,7 +71,9 @@ impl From<&Message> for BotLogBuilder {
     fn from(msg: &Message) -> Self {
         let mut bl = BotLog {
             group_id: msg.chat.id.0,
+            group_username: msg.chat.username().map(|s| s.to_string()),
             user_id: msg.from.as_ref().unwrap().id.0,
+            username: msg.from.as_ref().unwrap().username.clone(),
             timestamp: chrono::Utc::now(),
             msg_type: MessageType::Text,
             msg_ctx: MessageContext::new(msg.id.0),
