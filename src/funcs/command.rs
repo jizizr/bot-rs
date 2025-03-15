@@ -197,7 +197,11 @@ pub async fn command_handler(bot: &Bot, msg: &Message, me: &Me) -> BotResult {
         None => return Ok(()), // 没有文本内容，直接返回
     };
 
-    let cmd = BotCommands::parse(text, me.username())?;
+    let cmd = if let Ok(cmd) = BotCommands::parse(text, me.username()) {
+        cmd
+    } else {
+        return Ok(());
+    };
     let mut log = BotLogBuilder::from(msg);
     let cmd_result: Result<(), BotError> = cmd_match!(
         cmd,
