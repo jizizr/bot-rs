@@ -95,7 +95,7 @@ fn write_dynamic_context(
                     "子命令 '{invalid}{invalid_arg}{invalid:#}' 不能与以下内容一起使用",
                 );
             } else {
-                styled.push_str(error.kind().as_str().unwrap());
+                styled.push_str(error.kind().as_str().unwrap_or_default());
             }
 
             if let Some(prior_arg) = prior_arg {

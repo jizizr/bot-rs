@@ -56,6 +56,8 @@ pub enum BotError {
     TlsError(#[from] tokio_native_tls::native_tls::Error),
     #[error("{}", .0)]
     SslError(#[from] x509_parser::nom::Err<x509_parser::error::X509Error>),
+    #[error("{}", .0)]
+    BotCommandParseError(#[from] teloxide::utils::command::ParseError),
 }
 
 #[macro_export]

@@ -1,5 +1,9 @@
+use crate::{
+    analysis::model::{BotLogBuilder, MessageStatus},
+    dao::mongo::analysis::insert_log,
+};
+
 use super::*;
-use crate::{ccerr, clap_err, cmd, command_gen, lock, myclap::clap::MyErrorFormatter};
 use clap::{CommandFactory, Parser};
 use dashmap::DashSet;
 use std::{
@@ -127,18 +131,15 @@ macro_rules! lock {
 macro_rules! cmd_match {
     ($cmd:expr, $bot:expr, $msg:expr,$($stat:ident => $func:expr),+ $(,)?) => {
         match $cmd {
-            Ok(Cmd::Help) => {
+            Cmd::Help => {
                 $bot.send_message($msg.chat.id, Cmd::descriptions().to_string())
                     .await
                     .map(|_| ())
                     .map_err(|e| e.into())
             }
             $(
-                Ok(Cmd::$stat) => $func($bot, $msg).await.map(|_| ()).map_err(|e| e.into()),
+                Cmd::$stat => $func($bot, $msg).await,
             )+
-            Err(_) => {
-                Ok(())
-            }
         }
     };
 }
@@ -196,8 +197,9 @@ pub async fn command_handler(bot: &Bot, msg: &Message, me: &Me) -> BotResult {
         None => return Ok(()), // 没有文本内容，直接返回
     };
 
-    let cmd = BotCommands::parse(text, me.username());
-    let _: Result<(), BotError> = cmd_match!(
+    let cmd = BotCommands::parse(text, me.username())?;
+    let mut log = BotLogBuilder::from(msg);
+    let cmd_result: Result<(), BotError> = cmd_match!(
         cmd,
         bot,
         msg,
@@ -220,5 +222,24 @@ pub async fn command_handler(bot: &Bot, msg: &Message, me: &Me) -> BotResult {
         Vv => vv::vv,
         Test => test::test,
     );
+    if let Err(e) = cmd_result {
+        let err_msg = format!("{e}");
+        tokio::spawn(
+            bot.send_message(msg.chat.id, err_msg.clone())
+                .reply_parameters(ReplyParameters::new(msg.id))
+                .send(),
+        );
+        match e {
+            BotError::Clap(_, _) => {
+                log.set_status(MessageStatus::CmdError);
+            }
+            _ => {
+                log.set_status(MessageStatus::RunError);
+                log.set_command(text.to_string());
+                log.set_error(err_msg);
+            }
+        }
+    }
+    let _ = insert_log(&log.into()).await;
     Ok(())
 }

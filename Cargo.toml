@@ -48,7 +48,7 @@ lingua = { version = "1.6", default-features = false, features = [
 wcloud = { git = "https://github.com/jizizr/wcloud" }
 rand = "0.8"
 url = "2.5"
-mongodb = "3"
+mongodb = "3" 
 serde_repr = "0.1"
 anstyle = "1.0"
 

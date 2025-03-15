@@ -1,4 +1,4 @@
-use crate::{BotError, BotResult, get, getor, settings::SETTINGS};
+use crate::*;
 use futures::future::BoxFuture;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -8,7 +8,6 @@ use serde::Deserialize;
 use std::{fmt, sync::Arc};
 use teloxide::{
     error_handlers::ErrorHandler,
-    prelude::*,
     types::{ChatAction, Me, ReplyParameters, User},
     utils::{command::BotCommands, markdown},
 };
