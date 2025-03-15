@@ -24,25 +24,25 @@ impl clap::error::ErrorFormatter for MyErrorFormatter {
 
         let mut suggested = false;
         if let Some(valid) = error.get(ContextKind::SuggestedSubcommand) {
-            styled.push_str("\n");
+            styled.push('\n');
             if !suggested {
-                styled.push_str("\n");
+                styled.push('\n');
                 suggested = true;
             }
             did_you_mean(&mut styled, &styles, "子命令", valid);
         }
         if let Some(valid) = error.get(ContextKind::SuggestedArg) {
-            styled.push_str("\n");
+            styled.push('\n');
             if !suggested {
-                styled.push_str("\n");
+                styled.push('\n');
                 suggested = true;
             }
             did_you_mean(&mut styled, &styles, "参数", valid);
         }
         if let Some(valid) = error.get(ContextKind::SuggestedValue) {
-            styled.push_str("\n");
+            styled.push('\n');
             if !suggested {
-                styled.push_str("\n");
+                styled.push('\n');
                 suggested = true;
             }
             did_you_mean(&mut styled, &styles, "值", valid);
@@ -50,7 +50,7 @@ impl clap::error::ErrorFormatter for MyErrorFormatter {
         let suggestions = error.get(ContextKind::Suggested);
         if let Some(ContextValue::StyledStrs(suggestions)) = suggestions {
             if !suggested {
-                styled.push_str("\n");
+                styled.push('\n');
             }
             for suggestion in suggestions {
                 let _ = write!(styled, "\n{TAB}{valid}提示:{valid:#} ",);
@@ -101,7 +101,7 @@ fn write_dynamic_context(
             if let Some(prior_arg) = prior_arg {
                 match prior_arg {
                     ContextValue::Strings(values) => {
-                        styled.push_str(":");
+                        styled.push(':');
                         for v in values {
                             let _ = write!(styled, "\n{TAB}{invalid}{v}{invalid:#}",);
                         }
@@ -289,8 +289,8 @@ fn write_dynamic_context(
     }
 }
 
-fn singular_or_plural(n: usize) -> &'static str {
-    if n > 1 { " 个" } else { " 个" }
+fn singular_or_plural(_n: usize) -> &'static str {
+    " 个"
 }
 
 fn write_values_list(
@@ -311,7 +311,7 @@ fn write_values_list(
                 let _ = write!(styled, "{valid}{}{valid:#}", Escape(val));
             }
 
-            styled.push_str("]");
+            styled.push(']');
         }
     }
 }
