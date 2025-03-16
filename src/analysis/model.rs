@@ -1,5 +1,4 @@
-use chrono::{DateTime, Utc};
-
+use mongodb::bson::DateTime;
 use serde::Serialize;
 use serde_repr::Serialize_repr;
 use teloxide::types::Message;
@@ -28,7 +27,7 @@ pub struct BotLog {
     user_id: u64,
     username: Option<String>,
     group_username: Option<String>,
-    timestamp: DateTime<Utc>,
+    timestamp: DateTime,
     msg_type: MessageType,
     msg_ctx: MessageContext,
     error: Option<String>,
@@ -74,7 +73,7 @@ impl From<&Message> for BotLogBuilder {
             group_username: msg.chat.username().map(|s| s.to_string()),
             user_id: msg.from.as_ref().unwrap().id.0,
             username: msg.from.as_ref().unwrap().username.clone(),
-            timestamp: chrono::Utc::now(),
+            timestamp: DateTime::now(),
             msg_type: MessageType::Text,
             msg_ctx: MessageContext::new(msg.id.0),
             error: None,
@@ -88,7 +87,8 @@ impl From<&Message> for BotLogBuilder {
 
 impl From<BotLogBuilder> for BotLog {
     fn from(mut val: BotLogBuilder) -> Self {
-        val.0.msg_ctx.time_cost = (chrono::Utc::now() - val.0.timestamp).num_milliseconds();
+        val.0.msg_ctx.time_cost =
+            DateTime::now().timestamp_millis() - val.0.timestamp.timestamp_millis();
         val.0
     }
 }

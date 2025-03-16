@@ -213,7 +213,9 @@ pub async fn get<T: DeserializeOwned>(url: &str) -> Result<T, reqwest::Error> {
 }
 
 pub async fn msg_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
-    command_handler(&bot, &msg, &me).await?;
+    if command_handler(&bot, &msg, &me).await.is_ok() {
+        return Ok(());
+    }
     text_handler(&bot, &msg).await?;
     Ok(())
 }
