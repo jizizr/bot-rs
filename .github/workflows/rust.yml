@@ -22,7 +22,7 @@ jobs:
         strip target/release/bot-rs
         sudo apt-get update
         sudo apt-get install -y upx
-        upx --best target/release/bot-rs
+        upx -7 target/release/bot-rs
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
