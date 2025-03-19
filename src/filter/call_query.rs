@@ -40,7 +40,7 @@ pub async fn call_query_handler(bot: Bot, mut q: CallbackQuery) -> BotResult {
         blog.set_error(e.to_string());
         blog.set_status(MessageStatus::RunError);
     });
-    blog.set_command(data[0].to_string());
+    blog.set_command(binding);
     let _ = insert_log(&blog.into()).await;
     Ok(())
 }
