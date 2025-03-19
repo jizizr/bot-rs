@@ -1,7 +1,7 @@
 use mongodb::bson::DateTime;
 use serde::Serialize;
 use serde_repr::Serialize_repr;
-use teloxide::types::Message;
+use teloxide::types::{CallbackQuery, Message};
 
 use crate::getor;
 
@@ -81,6 +81,29 @@ impl From<&Message> for BotLogBuilder {
         if getor(msg).unwrap().starts_with("/") {
             bl.msg_type = MessageType::Command;
         }
+        Self(bl)
+    }
+}
+
+impl From<&CallbackQuery> for BotLogBuilder {
+    fn from(callback_query: &CallbackQuery) -> Self {
+        let bl = BotLog {
+            group_id: match &callback_query.message {
+                Some(msg) => msg.chat().id.0,
+                None => 0,
+            },
+            group_username: if let Some(msg) = &callback_query.message {
+                msg.chat().username().map(|s| s.to_string())
+            } else {
+                None
+            },
+            user_id: callback_query.from.id.0,
+            username: callback_query.from.username.clone(),
+            timestamp: DateTime::now(),
+            msg_type: MessageType::Callback,
+            msg_ctx: MessageContext::new(0),
+            error: None,
+        };
         Self(bl)
     }
 }
