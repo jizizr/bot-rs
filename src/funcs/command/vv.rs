@@ -36,8 +36,8 @@ async fn vv_cmd(cmd: &VvCmd) -> Result<Url, BotError> {
         return Err(BotError::Custom("vv被削了".to_string()));
     }
     let vv = {
-        let mut rng = rand::thread_rng();
-        let vv_index = rng.gen_range(0..vv_list.len());
+        let mut rng = rand::rng();
+        let vv_index = rng.random_range(0..vv_list.len());
         &vv_list[vv_index]
     };
     get_vv_pic_url(vv)

@@ -41,7 +41,7 @@ async fn wcloud_single(group: i64) -> Vec<BotError> {
     if !flag {
         return err_vec;
     }
-    match gen::wcloud(&BOT, group).await {
+    match generate::wcloud(&BOT, group).await {
         Ok(_) => {
             wc_switch(group, false)
                 .await
@@ -51,7 +51,7 @@ async fn wcloud_single(group: i64) -> Vec<BotError> {
             err_vec.push(e);
         }
     }
-    if let Err(e) = gen::user_freq(&BOT, group).await {
+    if let Err(e) = generate::user_freq(&BOT, group).await {
         err_vec.push(e);
     }
     err_vec

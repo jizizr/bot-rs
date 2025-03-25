@@ -43,8 +43,8 @@ pub fn build(png_bytes: &mut Vec<u8>, words: HashMap<&str, usize>) -> Result<(),
         WordCloudSize::FromMask(MASK.clone()),
         5.0,
         |_, _| {
-            let mut rng = rand::thread_rng();
-            COLORS[rng.gen_range(0..COLORS.len())]
+            let mut rng = rand::rng();
+            COLORS[rng.random_range(0..COLORS.len())]
         },
     );
     rgb_image.write_to(&mut Cursor::new(png_bytes), ImageFormat::Png)?;
