@@ -27,6 +27,7 @@ pub struct BotLog {
     user_id: u64,
     username: Option<String>,
     group_username: Option<String>,
+    group_name: Option<String>,
     timestamp: DateTime,
     msg_type: MessageType,
     msg_ctx: MessageContext,
@@ -71,6 +72,7 @@ impl From<&Message> for BotLogBuilder {
         let mut bl = BotLog {
             group_id: msg.chat.id.0,
             group_username: msg.chat.username().map(|s| s.to_string()),
+            group_name: msg.chat.title().map(|s| s.to_string()),
             user_id: msg.from.as_ref().unwrap().id.0,
             username: msg.from.as_ref().unwrap().username.clone(),
             timestamp: DateTime::now(),
@@ -91,6 +93,10 @@ impl From<&CallbackQuery> for BotLogBuilder {
             group_id: match &callback_query.message {
                 Some(msg) => msg.chat().id.0,
                 None => 0,
+            },
+            group_name: match &callback_query.message {
+                Some(msg) => msg.chat().title().map(|s| s.to_string()),
+                None => None,
             },
             group_username: if let Some(msg) = &callback_query.message {
                 msg.chat().username().map(|s| s.to_string())
