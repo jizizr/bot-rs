@@ -25,13 +25,35 @@ pub enum MessageStatus {
 pub struct BotLog {
     group_id: i64,
     user_id: u64,
-    username: Option<String>,
-    group_username: Option<String>,
-    group_name: Option<String>,
     timestamp: DateTime,
     msg_type: MessageType,
     msg_ctx: MessageContext,
     error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Group {
+    pub group_id: i64,
+    group_username: Option<String>,
+    group_name: Option<String>,
+}
+
+impl Group {
+    pub fn get_id(&self) -> i64 {
+        self.group_id
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct User {
+    user_id: u64,
+    username: Option<String>,
+}
+
+impl User {
+    pub fn get_id(&self) -> u64 {
+        self.user_id
+    }
 }
 
 pub struct BotLogBuilder(BotLog);
@@ -67,14 +89,30 @@ impl BotLogBuilder {
     }
 }
 
+impl From<&Message> for User {
+    fn from(msg: &Message) -> Self {
+        Self {
+            user_id: msg.from.as_ref().unwrap().id.0,
+            username: msg.from.as_ref().unwrap().username.clone(),
+        }
+    }
+}
+
+impl From<&Message> for Group {
+    fn from(msg: &Message) -> Self {
+        Self {
+            group_id: msg.chat.id.0,
+            group_username: msg.chat.username().map(|s| s.to_string()),
+            group_name: msg.chat.title().map(|s| s.to_string()),
+        }
+    }
+}
+
 impl From<&Message> for BotLogBuilder {
     fn from(msg: &Message) -> Self {
         let mut bl = BotLog {
             group_id: msg.chat.id.0,
-            group_username: msg.chat.username().map(|s| s.to_string()),
-            group_name: msg.chat.title().map(|s| s.to_string()),
             user_id: msg.from.as_ref().unwrap().id.0,
-            username: msg.from.as_ref().unwrap().username.clone(),
             timestamp: DateTime::now(),
             msg_type: MessageType::Text,
             msg_ctx: MessageContext::new(msg.id.0),
@@ -87,9 +125,18 @@ impl From<&Message> for BotLogBuilder {
     }
 }
 
-impl From<&CallbackQuery> for BotLogBuilder {
+impl From<&CallbackQuery> for User {
     fn from(callback_query: &CallbackQuery) -> Self {
-        let bl = BotLog {
+        Self {
+            user_id: callback_query.from.id.0,
+            username: callback_query.from.username.clone(),
+        }
+    }
+}
+
+impl From<&CallbackQuery> for Group {
+    fn from(callback_query: &CallbackQuery) -> Self {
+        Self {
             group_id: match &callback_query.message {
                 Some(msg) => msg.chat().id.0,
                 None => 0,
@@ -103,8 +150,18 @@ impl From<&CallbackQuery> for BotLogBuilder {
             } else {
                 None
             },
+        }
+    }
+}
+
+impl From<&CallbackQuery> for BotLogBuilder {
+    fn from(callback_query: &CallbackQuery) -> Self {
+        let bl = BotLog {
+            group_id: match &callback_query.message {
+                Some(msg) => msg.chat().id.0,
+                None => 0,
+            },
             user_id: callback_query.from.id.0,
-            username: callback_query.from.username.clone(),
             timestamp: DateTime::now(),
             msg_type: MessageType::Callback,
             msg_ctx: MessageContext::new(0),

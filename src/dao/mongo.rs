@@ -1,10 +1,16 @@
 pub mod analysis;
 use super::*;
 use async_once::AsyncOnce;
-use mongodb::{Client, Database, bson::doc};
+use mongodb::{
+    Client, Collection, Database,
+    bson::{self, doc},
+};
 
 lazy_static! {
     static ref DB: AsyncOnce<Database> = AsyncOnce::new(init_mongo());
+    static ref BOTLOG: AsyncOnce<Collection<bson::Document>> = AsyncOnce::new(init_botlog());
+    static ref GROUP: AsyncOnce<Collection<bson::Document>> = AsyncOnce::new(init_group());
+    static ref USER: AsyncOnce<Collection<bson::Document>> = AsyncOnce::new(init_user());
 }
 
 #[macro_export]
@@ -50,4 +56,15 @@ async fn init_mongo() -> Database {
         .database("logs");
     analysis::create_index(&db).await;
     db
+}
+
+async fn init_botlog() -> Collection<bson::Document> {
+    DB.get().await.collection::<bson::Document>("logs")
+}
+
+async fn init_group() -> Collection<bson::Document> {
+    DB.get().await.collection::<bson::Document>("groups")
+}
+async fn init_user() -> Collection<bson::Document> {
+    DB.get().await.collection::<bson::Document>("users")
 }

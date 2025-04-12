@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     BotResult,
-    analysis::model::{BotLogBuilder, MessageStatus},
+    analysis::model::{BotLogBuilder, Group, MessageStatus, User},
     dao::mongo::analysis::insert_log,
     funcs::command::{coin, config, music, translate},
 };
@@ -27,6 +27,8 @@ pub async fn call_query_handler(bot: Bot, mut q: CallbackQuery) -> BotResult {
     q.data = Some(data[1].to_string());
 
     let mut blog = BotLogBuilder::from(&q);
+    let user = User::from(&q);
+    let group = Group::from(&q);
     let _ = dispatch_callbacks!(
         data[0],
         bot,
@@ -41,6 +43,6 @@ pub async fn call_query_handler(bot: Bot, mut q: CallbackQuery) -> BotResult {
         blog.set_status(MessageStatus::RunError);
     });
     blog.set_command(binding);
-    let _ = insert_log(&blog.into()).await;
+    let _ = insert_log((&blog.into(), &user, &group)).await;
     Ok(())
 }

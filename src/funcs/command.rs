@@ -240,6 +240,8 @@ pub async fn command_handler(bot: &Bot, msg: &Message, me: &Me) -> BotResult {
         }
     }
     log.set_command(text.to_string());
-    let _ = insert_log(&log.into()).await;
+    let user = model::User::from(msg);
+    let group = model::Group::from(msg);
+    let _ = insert_log((&log.into(), &user, &group)).await;
     Ok(())
 }

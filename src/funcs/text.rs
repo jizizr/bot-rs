@@ -1,8 +1,3 @@
-use crate::{
-    analysis::model::{BotLogBuilder, MessageStatus},
-    dao::mongo::analysis::insert_log,
-};
-
 use super::{pkg::kv::GroupFuncSwitch, *};
 
 mod fix;
@@ -125,7 +120,9 @@ pub async fn text_handler(bot: &Bot, msg: &Message) -> BotResult {
             }
         }
         blog.set_command(m.to_string());
-        let _ = insert_log(&blog.into()).await;
+        let user = model::User::from(msg);
+        let group = model::Group::from(msg);
+        insert_log((&blog.into(), &user, &group)).await.unwrap();
     }
     Ok(())
 }
