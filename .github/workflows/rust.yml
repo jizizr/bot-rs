@@ -16,6 +16,10 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - uses: Swatinem/rust-cache@v2
+      with:
+          prefix-key: "v0"
+          shared-key: "shared"
+          cache-on-failure: true
     - name: Build
       run: |
         cargo build -r
