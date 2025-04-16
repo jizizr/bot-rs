@@ -1,4 +1,6 @@
 pub mod analysis;
+pub mod freq;
+
 use super::*;
 use async_once::AsyncOnce;
 use mongodb::{

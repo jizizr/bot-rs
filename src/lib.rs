@@ -58,6 +58,10 @@ pub enum BotError {
     SslError(#[from] x509_parser::nom::Err<x509_parser::error::X509Error>),
     #[error("{}", .0)]
     BotCommandParseError(#[from] teloxide::utils::command::ParseError),
+    #[error("{}", .0)]
+    MongoError(#[from] mongodb::error::Error),
+    #[error("{}", .0)]
+    PaintError(#[from] charts_rs::CanvasError),
 }
 
 #[macro_export]

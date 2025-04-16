@@ -51,7 +51,7 @@ url = "2.5"
 mongodb = "3"
 serde_repr = "0.1"
 anstyle = "1.0"
-
+charts-rs = { version = "0.3", features = ["image-encoder"] }
 [profile.release]
 lto = true
 panic = "abort"

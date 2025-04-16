@@ -21,6 +21,7 @@ use teloxide::types::{
 pub mod chat;
 pub mod coin;
 pub mod config;
+pub mod count;
 pub mod curl;
 pub mod hitokoto;
 pub mod id;
@@ -186,6 +187,8 @@ pub enum Cmd {
     Ping,
     #[command(description = "vv不削能玩？")]
     Vv,
+    #[command(description = "发言趋势")]
+    Count,
     #[command(hide)]
     Test,
 }
@@ -220,6 +223,7 @@ pub async fn command_handler(bot: &Bot, msg: &Message, me: &Me) -> BotResult {
         Translate => translate::translate,
         Ping => ping::ping,
         Vv => vv::vv,
+        Count => count::count,
         Test => test::test,
     );
     if let Err(e) = cmd_result {
