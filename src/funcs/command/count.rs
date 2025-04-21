@@ -5,7 +5,7 @@ use crate::{
 };
 
 cmd!(
-    "count",
+    "/count",
     "统计消息发送频率",
     CountCmd,
     {
