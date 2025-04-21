@@ -1,14 +1,71 @@
 use super::*;
 use crate::analysis::model::MessageCount;
+use chrono::{Duration as ChronoDuration, Utc};
 use futures::stream::{StreamExt, TryStreamExt};
 use std::collections::HashMap;
 
-pub async fn query_data(gid: i64, uid: u64) -> Result<HashMap<String, HashMap<u8, f32>>, BotError> {
+#[derive(Debug, PartialEq, Clone, clap::ValueEnum)]
+pub enum Duration {
+    #[value(aliases = ["day", "d"])]
+    Day,
+    #[value(aliases = ["week", "w"])]
+    Week,
+    #[value(aliases = ["month", "m"])]
+    Month,
+    #[value(aliases = ["quarter", "q"])]
+    Quarter,
+    #[value(aliases = ["year", "y"])]
+    Year,
+    #[value(skip)]
+    Invalid,
+}
+
+impl<T: Into<String>> From<T> for Duration {
+    fn from(value: T) -> Self {
+        match value.into().as_str() {
+            "day" | "d" => Duration::Day,
+            "week" | "w" => Duration::Week,
+            "month" | "m" => Duration::Month,
+            "quarter" | "q" => Duration::Quarter,
+            "year" | "y" => Duration::Year,
+            _ => Duration::Invalid,
+        }
+    }
+}
+
+pub async fn query_data(
+    gid: i64,
+    uid: u64,
+    duration: Option<Duration>,
+) -> Result<HashMap<String, HashMap<u8, f32>>, BotError> {
+    let mut match_condition = doc! {
+        "group_id": bson::Bson::Int64(gid)
+    };
+
+    if let Some(duration_value) = duration {
+        if duration_value != Duration::Invalid {
+            let now = Utc::now();
+            let start_time = match duration_value {
+                Duration::Day => now - ChronoDuration::days(1),
+                Duration::Week => now - ChronoDuration::weeks(1),
+                Duration::Month => now - ChronoDuration::days(30),
+                Duration::Quarter => now - ChronoDuration::days(90),
+                Duration::Year => now - ChronoDuration::days(365),
+                Duration::Invalid => now,
+            };
+
+            match_condition.insert(
+                "timestamp",
+                doc! {
+                    "$gte": bson::DateTime::from_chrono(start_time),
+                },
+            );
+        }
+    }
+
     let pipeline = vec![
         doc! {
-            "$match": {
-                "group_id": bson::Bson::Int64(gid)
-            }
+            "$match": match_condition
         },
         doc! {
             "$facet": {

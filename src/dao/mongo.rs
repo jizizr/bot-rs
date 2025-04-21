@@ -3,11 +3,8 @@ pub mod freq;
 
 use super::*;
 use async_once::AsyncOnce;
-use mongodb::{
-    Client, Collection, Database,
-    bson::{self, doc},
-};
-
+use bson::doc;
+use mongodb::{Client, Collection, Database};
 lazy_static! {
     static ref DB: AsyncOnce<Database> = AsyncOnce::new(init_mongo());
     static ref BOTLOG: AsyncOnce<Collection<bson::Document>> = AsyncOnce::new(init_botlog());
