@@ -198,7 +198,7 @@ async fn get_header(resp: &Response) -> Result<String, BotError> {
 
 async fn post_paste(text: String) -> Result<String, BotError> {
     let resp: Paste = PASTE
-        .post("https://s.op.wiki/data/post")
+        .post("https://paste.op.wiki/data/post")
         .body(text.trim().to_string())
         .send()
         .await?
