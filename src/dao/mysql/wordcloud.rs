@@ -22,12 +22,11 @@ pub async fn add_words(group_id: i64, words: Vec<String>) -> BotResult {
     if words.is_empty() {
         return Ok(());
     }
-    let repeat = format!("({},?,1)", group_id);
+    let repeat = format!("({group_id},?,1)");
     let values_str = vec![repeat; words.len()].join(", ");
     let params = Params::Positional(words.into_iter().map(Into::into).collect());
     let sql = format!(
-        "INSERT INTO `words` (group_id, word, count) VALUES {} ON DUPLICATE KEY UPDATE count = count + 1",
-        values_str
+        "INSERT INTO `words` (group_id, word, count) VALUES {values_str} ON DUPLICATE KEY UPDATE count = count + 1"
     );
     WORD_POOL.get_conn().await?.exec_drop(sql, params).await?;
     Ok(())
@@ -38,10 +37,7 @@ pub async fn get_words(group_id: i64) -> Result<Vec<Word>> {
         .get_conn()
         .await?
         .query_map(
-            format!(
-                "SELECT word, count FROM `words` WHERE group_id = {}",
-                group_id
-            ),
+            format!("SELECT word, count FROM `words` WHERE group_id = {group_id}"),
             |(word, frequency)| Word { word, frequency },
         )
         .await
@@ -78,8 +74,7 @@ pub async fn get_users(group_id: i64) -> Result<Vec<UserFrequency>> {
         .await?
         .query_map(
             format!(
-                "SELECT user_id, name, count FROM `users` WHERE group_id = {} ORDER BY count DESC LIMIT 5",
-                group_id
+                "SELECT user_id, name, count FROM `users` WHERE group_id = {group_id} ORDER BY count DESC LIMIT 5"
             ),
             |(user_id, name, frequency)| UserFrequency { user_id, name, frequency },
         )

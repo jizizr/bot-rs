@@ -36,8 +36,8 @@ where
     E: fmt::Debug,
 {
     fn handle_error(self: Arc<Self>, error: E) -> BoxFuture<'static, ()> {
-        let error_msg = format!("Error: {:?}", error);
-        log::error!("{}", error_msg);
+        let error_msg = format!("Error: {error:?}");
+        log::error!("{error_msg}");
         Box::pin(async move {
             let _ = self.bot.send_message(self.owner, error_msg).await;
         })

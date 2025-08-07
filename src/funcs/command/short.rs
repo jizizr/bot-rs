@@ -34,7 +34,7 @@ pub fn fix_start(u: String) -> String {
     if url.starts_with("http://") || url.starts_with("https://") {
         return url;
     }
-    format!("http://{}", url)
+    format!("http://{url}")
 }
 
 async fn get_short(msg: &Message) -> Result<String, BotError> {
@@ -97,7 +97,7 @@ pub async fn short(bot: &Bot, msg: &Message) -> BotResult {
     tokio::spawn(bot.send_chat_action(msg.chat.id, ChatAction::Typing).send());
     let url = get_short(msg).await?;
     bot.send_photo(msg.chat.id, InputFile::memory(url2qr(&url)))
-        .caption(format!("短链接：{}", url))
+        .caption(format!("短链接：{url}"))
         .send()
         .await?;
     Ok(())

@@ -107,7 +107,7 @@ async fn get_music_cover(bot: Bot, msg: Message, search: &str) -> Result<(), Bot
     bot.send_photo(
         msg.chat.id,
         InputFile::url(
-            Url::parse(&format!("https://y.qq.com/music/photo_new/{}", search)).unwrap(),
+            Url::parse(&format!("https://y.qq.com/music/photo_new/{search}")).unwrap(),
         ),
     )
     .reply_parameters(ReplyParameters::new(msg.id))

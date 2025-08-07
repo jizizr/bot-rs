@@ -19,7 +19,7 @@ trait Display {
 impl Display for BotResult {
     fn fmt(&self) -> Option<String> {
         if let Err(e) = self {
-            Some(format!("{}", e))
+            Some(format!("{e}"))
         } else {
             None
         }
@@ -107,14 +107,14 @@ pub async fn text_handler(bot: &Bot, msg: &Message) -> BotResult {
                 fuck_b23::fuck_b23
             );
             if let Some(err) = e.fmt() {
-                log::error!("{}", err);
+                log::error!("{err}");
                 blog.set_status(MessageStatus::RunError);
                 blog.set_error(err);
             }
         } else {
             let e = join_with_switch!(&bot, &msg, guozao::guozao);
             if let Some(err) = e.fmt() {
-                log::error!("{}", err);
+                log::error!("{err}");
                 blog.set_status(MessageStatus::RunError);
                 blog.set_error(err);
             }

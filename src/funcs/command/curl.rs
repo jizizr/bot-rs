@@ -61,7 +61,7 @@ struct Paste {
 fn fixer(url: &str) -> Result<String, String> {
     let mut url = url.to_string();
     if !url.starts_with("http://") && !url.starts_with("https://") {
-        url = format!("https://{}", url);
+        url = format!("https://{url}");
     }
     if MATCH.is_match(&url) {
         Ok(url)
@@ -217,7 +217,7 @@ async fn get_curl(msg: &Message) -> Result<String, BotError> {
     let version = get_http_version(&resp);
     let body = resp.text().await?;
     let title = match get_title(&body) {
-        Some(s) => format!("*Page Title: *{}", s),
+        Some(s) => format!("*Page Title: *{s}"),
         None => String::new(),
     };
     let (ssl, ip_info, paste_url) = if url.scheme() == "https" {

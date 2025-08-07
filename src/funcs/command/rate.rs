@@ -53,8 +53,7 @@ async fn coin_exchange(from: &str, to: &str) -> Result<String, BotError> {
     let exchange_rate = get_exchange_rate(from, to).await?;
     let mut answer = String::new();
     answer.push_str(&format!(
-        "*`1`* {} \\= *`{:.4}`* {}\n",
-        from, exchange_rate, to
+        "*`1`* {from} \\= *`{exchange_rate:.4}`* {to}\n"
     ));
     if num != 1.0 {
         answer.push_str(&format!(

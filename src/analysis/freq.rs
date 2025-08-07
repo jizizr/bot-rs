@@ -22,5 +22,5 @@ pub fn paint(datas: HashMap<String, HashMap<u8, f32>>) -> Result<Vec<u8>, BotErr
     );
     line_chart.series_smooth = true;
     svg_to_webp(&line_chart.svg()?)
-        .map_err(|e| BotError::Custom(format!("failed to convert svg to webp: {}", e)))
+        .map_err(|e| BotError::Custom(format!("failed to convert svg to webp: {e}")))
 }

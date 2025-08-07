@@ -29,7 +29,7 @@ fn escape_special_chars(text: &str) -> String {
     text.chars()
         .map(|c| match c {
             '*' | '_' | '[' | ']' | '(' | ')' | '~' | '`' | '>' | '#' | '+' | '-' | '=' | '|'
-            | '{' | '}' | '.' | '!' => format!("\\{}", c),
+            | '{' | '}' | '.' | '!' => format!("\\{c}"),
             _ => c.to_string(),
         })
         .collect()

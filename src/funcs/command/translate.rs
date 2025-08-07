@@ -67,7 +67,7 @@ async fn translate_req(tl: &str, text: &str, is_compare: bool) -> Result<String,
         let data_iter = data.iter();
         if is_compare {
             data_iter
-                .map(|(a, b)| format!("{}\n{}", b, a))
+                .map(|(a, b)| format!("{b}\n{a}"))
                 .collect::<Vec<String>>()
         } else {
             data_iter
@@ -225,7 +225,7 @@ fn translate_menu(is_compare: bool, tl: &str) -> InlineKeyboardMarkup {
     } else {
         InlineKeyboardButton::callback("普通翻译模式", "trans two")
     });
-    buttom.push(InlineKeyboardButton::callback(tl, format!("trans {}", tl)));
+    buttom.push(InlineKeyboardButton::callback(tl, format!("trans {tl}")));
     InlineKeyboardMarkup::new(vec![buttom])
 }
 

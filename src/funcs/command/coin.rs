@@ -25,8 +25,7 @@ struct CoinData {
 #[cached(time = 10, result = true)]
 async fn coin_price(coin_type: String) -> Result<f64, reqwest::Error> {
     let price: Coin = get(&format!(
-        "https://api.huobi.pro/market/history/kline?&period=1min&size=1&symbol={}usdt",
-        coin_type
+        "https://api.huobi.pro/market/history/kline?&period=1min&size=1&symbol={coin_type}usdt"
     ))
     .await?;
     Ok(price.data[0].price)
@@ -44,7 +43,7 @@ async fn coin_handle(coin_type: &str) -> String {
             )
         }
         Err(e) => {
-            format!("Api 请求异常:{}", e)
+            format!("Api 请求异常:{e}")
         }
     }
 }
@@ -56,7 +55,7 @@ fn popular_coins_menu() -> InlineKeyboardMarkup {
         let row = coins
             .iter()
             .map(|&coin_type| {
-                InlineKeyboardButton::callback(coin_type, format!("coin {}", coin_type))
+                InlineKeyboardButton::callback(coin_type, format!("coin {coin_type}"))
             })
             .collect();
         keyboard[i] = row
@@ -70,7 +69,7 @@ fn popular_coins_menu() -> InlineKeyboardMarkup {
 fn function_menu(coin_type: &str) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new([[
         InlineKeyboardButton::callback("返回🔙", "coin back".to_string()),
-        InlineKeyboardButton::callback("刷新🔁", format!("coin {}", coin_type)),
+        InlineKeyboardButton::callback("刷新🔁", format!("coin {coin_type}")),
         InlineKeyboardButton::switch_inline_query_current_chat("其他货币", ""),
     ]])
 }
@@ -142,7 +141,7 @@ pub async fn inline_query_handler(bot: Bot, q: InlineQuery) -> BotResult {
     let results = vec![InlineQueryResult::Article(coins_query)];
     let response = bot.answer_inline_query(&q.id, results).send().await;
     if let Err(err) = response {
-        log::error!("Error in handler: {:?}", err);
+        log::error!("Error in handler: {err:?}");
     }
     Ok(respond(())?)
 }

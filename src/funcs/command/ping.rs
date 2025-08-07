@@ -114,7 +114,7 @@ fn into_target(ping_cmd: &PingCmd) -> Result<Target, BotError> {
                 req.host = format!("http://{}", req.host)
             }
             if let Some(port) = ping_cmd.port {
-                req.host.push_str(&format!(":{}", port));
+                req.host.push_str(&format!(":{port}"));
             }
         }
     }
@@ -143,7 +143,7 @@ async fn receive_json<'a, T: serde::Deserialize<'a>>(
         .map_err(|e| BotError::Custom(e.to_string()))?;
 
     serde_json::from_str(buffer).map_err(|e| {
-        log::error!("{}", buffer);
+        log::error!("{buffer}");
         e.into()
     })
 }
@@ -262,7 +262,7 @@ pub async fn ping(bot: &Bot, msg: &Message) -> Result<(), BotError> {
         .fold(String::new(), |mut acc, (k, v)| {
             acc.push_str(&match v.error {
                 None => format!("{}: {:.2} ms, loss = {}% \n", k, v.avg_time, v.loss),
-                Some(e) => format!("{}: {}\n", k, e),
+                Some(e) => format!("{k}: {e}\n"),
             });
             acc
         });
@@ -338,7 +338,7 @@ mod tests {
             let ping_cmd = PingCmd::try_parse_from(text.to_lowercase().split_whitespace())
                 .unwrap_or_else(|e| panic!("{}", e.to_string()));
             let result = into_target(&ping_cmd).unwrap();
-            println!("{}", text);
+            println!("{text}");
             assert_eq!(expect, result);
         }
     }
