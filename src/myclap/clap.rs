@@ -300,8 +300,8 @@ fn write_values_list(
     possible_values: Option<&ContextValue>,
 ) {
     use std::fmt::Write as _;
-    if let Some(ContextValue::Strings(possible_values)) = possible_values {
-        if !possible_values.is_empty() {
+    if let Some(ContextValue::Strings(possible_values)) = possible_values
+        && !possible_values.is_empty() {
             let _ = write!(styled, "\n{TAB}[{list_name}: ");
 
             for (idx, val) in possible_values.iter().enumerate() {
@@ -313,7 +313,6 @@ fn write_values_list(
 
             styled.push(']');
         }
-    }
 }
 
 struct Escape<'s>(&'s str);

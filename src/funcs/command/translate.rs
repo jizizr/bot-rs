@@ -172,11 +172,10 @@ pub async fn translate_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotErr
 }
 
 fn extract_text(message: &Message) -> Option<&str> {
-    if let MessageKind::Common(common) = &message.kind {
-        if let MediaKind::Text(media_text) = &common.media_kind {
+    if let MessageKind::Common(common) = &message.kind
+        && let MediaKind::Text(media_text) = &common.media_kind {
             return Some(&media_text.text);
         }
-    }
     None
 }
 

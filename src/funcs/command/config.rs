@@ -28,8 +28,8 @@ fn config_menu(group_id: i64) -> InlineKeyboardMarkup {
 }
 
 pub async fn config_callback(bot: Bot, q: CallbackQuery) -> BotResult {
-    if let Some(config) = q.data {
-        if let Some(MaybeInaccessibleMessage::Regular(msg)) = q.message {
+    if let Some(config) = q.data
+        && let Some(MaybeInaccessibleMessage::Regular(msg)) = q.message {
             if !auth(&bot, &msg, q.from.id).await? {
                 bot.answer_callback_query(q.id)
                     .text("你不是管理员")
@@ -57,7 +57,6 @@ pub async fn config_callback(bot: Bot, q: CallbackQuery) -> BotResult {
                 .send()
                 .await?;
         }
-    }
     Ok(())
 }
 

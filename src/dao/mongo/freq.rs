@@ -42,8 +42,8 @@ pub async fn query_data(
         "group_id": bson::Bson::Int64(gid)
     };
 
-    if let Some(duration_value) = duration {
-        if duration_value != Duration::Invalid {
+    if let Some(duration_value) = duration
+        && duration_value != Duration::Invalid {
             let now = Utc::now();
             let start_time = match duration_value {
                 Duration::Day => now - ChronoDuration::days(1),
@@ -61,7 +61,6 @@ pub async fn query_data(
                 },
             );
         }
-    }
 
     let pipeline = vec![
         doc! {

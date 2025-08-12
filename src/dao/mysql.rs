@@ -29,7 +29,7 @@ impl ConnBufBuilder {
             .await;
     }
 
-    pub fn build(&mut self) -> ConnBuf {
+    pub fn build(&'_ mut self) -> ConnBuf<'_> {
         self.buffer.pop();
         self.buffer = format!("{}{}{}", self.begin, self.buffer, self.end);
         ConnBuf {
