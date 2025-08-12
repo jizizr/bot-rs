@@ -2,13 +2,13 @@ use bot_rs::{
     BOT, BotError,
     filter::call_query::call_query_handler,
     funcs::{
-        SendErrorHandler,
+        // SendErrorHandler,
         command::{Cmd, coin},
         pkg::{self, cron},
         text::init,
     },
     msg_handler,
-    settings::{self, SETTINGS},
+    settings::{self},
 };
 use std::error::Error;
 use teloxide::{prelude::*, update_listeners::webhooks, utils::command::BotCommands};
@@ -24,26 +24,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .branch(Update::filter_callback_query().endpoint(call_query_handler))
         .branch(Update::filter_inline_query().endpoint(coin::inline_query_handler));
 
-    let err_handler = SendErrorHandler::new(BOT.clone(), ChatId(SETTINGS.bot.owner));
+    // let err_handler = SendErrorHandler::new(BOT.clone(), ChatId(SETTINGS.bot.owner));
 
     let mut dispatcher = Dispatcher::builder(BOT.clone(), handler)
         .enable_ctrlc_handler()
         .distribution_function(|_| None::<std::convert::Infallible>)
-        .error_handler(err_handler.clone())
+        // .error_handler(err_handler.clone())
         .build();
 
-    cron::run::<BotError>(
-        "0 0 10,14,18,22 * * ?",
-        pkg::wcloud::cron::wcloud,
-        err_handler.clone(),
-    )
-    .await;
-    cron::run::<BotError>(
-        "0 0 4 * * ?",
-        pkg::wcloud::cron::wcloud_then_clear,
-        err_handler.clone(),
-    )
-    .await;
+    cron::run::<BotError>("0 0 10,14,18,22 * * ?", pkg::wcloud::cron::wcloud, None).await;
+    cron::run::<BotError>("0 0 4 * * ?", pkg::wcloud::cron::wcloud_then_clear, None).await;
 
     let mode = std::env::var("MODE").unwrap_or_default();
     if mode == "r" {

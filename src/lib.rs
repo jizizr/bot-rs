@@ -5,7 +5,11 @@ use lazy_static::lazy_static;
 use myclap::clap::MyErrorFormatter;
 use serde::de::DeserializeOwned;
 use std::{collections::VecDeque, fs::File, io::Read, time::Duration};
-use teloxide::{Bot, prelude::*, types::Me};
+use teloxide::{
+    Bot,
+    prelude::*,
+    types::{Chat, Me, MessageKind},
+};
 use tokio::{
     io::{self, AsyncWriteExt},
     net::TcpStream,
@@ -216,10 +220,41 @@ pub async fn get<T: DeserializeOwned>(url: &str) -> Result<T, reqwest::Error> {
     Ok(model)
 }
 
+fn chat_info(chat: &Chat) -> String {
+    format!(
+        "群组ID：{}\n群组名称：@{}\n群组标题：{}",
+        chat.id,
+        chat.username().unwrap_or_default(),
+        chat.title().unwrap_or_default()
+    )
+}
+
 pub async fn msg_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
+    match &msg.kind {
+        MessageKind::LeftChatMember(user_info) => {
+            if me.user.id != user_info.left_chat_member.id {
+                return Ok(());
+            }
+            bot.send_message(
+                ChatId(SETTINGS.bot.owner),
+                format!("被群组移出：\n{}", chat_info(&msg.chat)),
+            )
+            .await?;
+        }
+        MessageKind::NewChatMembers(users) => {
+            if !users.new_chat_members.iter().any(|u| u.id == me.user.id) {
+                return Ok(());
+            }
+            bot.send_message(
+                ChatId(SETTINGS.bot.owner),
+                format!("被群组邀请：\n{}", chat_info(&msg.chat)),
+            )
+            .await?;
+        }
+        _ => {}
+    };
     if command_handler(&bot, &msg, &me).await.is_ok() {
         return Ok(());
     }
-    text_handler(&bot, &msg).await?;
-    Ok(())
+    text_handler(&bot, &msg).await
 }

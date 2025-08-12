@@ -22,7 +22,7 @@ where
 pub async fn run<E>(
     exp: &'static str,
     f: impl TaskFunc,
-    handler: Arc<dyn ErrorHandler<BotError> + Send + Sync>,
+    handler: Option<Arc<dyn ErrorHandler<BotError> + Send + Sync>>,
 ) {
     tokio::task::spawn(async move {
         let schedule = cron::Schedule::from_str(exp).unwrap();
@@ -31,9 +31,20 @@ pub async fn run<E>(
             let next = schedule.upcoming(Local).next().unwrap();
             let wait_time = next.signed_duration_since(now).to_std().unwrap();
             tokio::time::sleep(wait_time).await;
-            if let Err(err) = f.call().await {
-                for e in err {
-                    handler.clone().handle_error(e).await;
+            {
+                if let Err(err) = f.call().await {
+                    match handler {
+                        Some(ref h) => {
+                            for e in err {
+                                h.clone().handle_error(e).await;
+                            }
+                        }
+                        None => {
+                            for e in err {
+                                log::error!("Cron task error: {}", e);
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -20,24 +20,27 @@ macro_rules! index_builder {
     // 处理联合索引
     ($collection:expr, ($($field:expr),+)) => {
         {
-            $collection
+            let _ = $collection
                 .create_index(
                     mongodb::IndexModel::builder()
                     .keys(mongodb::bson::doc! { $($field: 1),+ })
                     .build()
                 )
-                .await
-                .expect("Failed to create composite index");
+                .await.inspect_err(|_| {
+                    eprintln!("Failed to create composite index");
+                });
         }
     };
 
     // 处理单索引
     ($collection:expr, $field:literal) => {
         {
-            $collection
+            let _ = $collection
                 .create_index(mongodb::IndexModel::builder().keys(mongodb::bson::doc! { $field: 1 }).build())
                 .await
-                .expect(&format!("Failed to create index for {}", $field));
+                .inspect_err(|_|{
+                    eprintln!("Failed to create index for {}", $field);
+                });
         }
     };
 

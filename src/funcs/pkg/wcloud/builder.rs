@@ -37,7 +37,6 @@ lazy_static! {
 }
 
 pub fn build(png_bytes: &mut Vec<u8>, words: HashMap<&str, usize>) -> Result<(), BotError> {
-    let start = std::time::Instant::now();
     let rgb_image = WCLOUD.generate_from_map_with_color_func(
         words,
         WordCloudSize::FromMask(MASK.clone()),
@@ -48,6 +47,5 @@ pub fn build(png_bytes: &mut Vec<u8>, words: HashMap<&str, usize>) -> Result<(),
         },
     );
     rgb_image.write_to(&mut Cursor::new(png_bytes), ImageFormat::Png)?;
-    println!("生成词云耗时: {:?}", start.elapsed());
     Ok(())
 }
