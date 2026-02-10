@@ -66,7 +66,7 @@ fn fixer(url: &str) -> Result<String, String> {
     if MATCH.is_match(&url) {
         Ok(url)
     } else {
-        Err(format!("不符合规则的URL\n\n{}", USAGE.as_str()))
+        Err(format!("不符合规则的URL\n\n{}", CurlCmd::get_usage_i18n_with_language_tag(None)))
     }
 }
 
@@ -208,7 +208,11 @@ async fn post_paste(text: String) -> Result<String, BotError> {
 }
 
 async fn get_curl(msg: &Message) -> Result<String, BotError> {
-    let curl = CurlCmd::try_parse_from(getor(msg).unwrap().split_whitespace()).map_err(ccerr!())?;
+    let language_tag = Some("zh-CN");
+    let curl = CurlCmd::parse_i18n_from_bot(
+        getor(msg).unwrap().split_whitespace(),
+        language_tag,
+    )?;
     let url = curl.url;
     let resp = get_resp(&url).await?;
     let ip = &resp.remote_addr().unwrap().ip().to_string();

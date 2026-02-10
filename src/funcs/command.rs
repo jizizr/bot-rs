@@ -4,7 +4,8 @@ use crate::{
 };
 
 use super::*;
-use clap::{CommandFactory, Parser};
+use clap::Parser;
+use clap_i18n_richformatter::clap_i18n;
 use dashmap::DashSet;
 use std::{
     collections::hash_map::DefaultHasher,
@@ -45,10 +46,12 @@ lazy_static! {
 macro_rules! command_gen {
     ($name:expr, $about:expr, $struct_def:item) => {
         #[derive(Parser)]
+        #[clap_i18n]
         #[command(
                                     help_template = "使用方法：{usage}\n\n{all-args}\n\n{about}",
                                     about = concat!("命令功能：",$about),
                                     name = $name,
+                                    version = env!("CARGO_PKG_VERSION"),
                                     next_help_heading = "参数解释",
                                     disable_help_flag = true,
                                 )]
@@ -59,11 +62,24 @@ macro_rules! command_gen {
 #[macro_export]
 macro_rules! cmd {
     ($name:expr, $about:expr, $struct_name:ident, { $($field:tt)* }) => {
-        lazy_static!{
-            static ref USAGE: String = $struct_name::command().render_help().to_string();
-        }
+        // lazy_static!{
+        //     static ref USAGE: String = $struct_name::command_i18n().render_help().to_string();
+        // }
         // error_fmt!(USAGE, $($variant($error_type),)*);
         command_gen!($name, $about, struct $struct_name { $($field)* });
+            impl $struct_name {
+                pub fn parse_i18n_from_bot<I, T>(
+                    itr: I,
+                    language_tag: Option<&str>,
+                ) -> Result<Self, BotError>
+                where
+                    I: IntoIterator<Item = T>,
+                    T: Into<std::ffi::OsString> + Clone,
+                {
+                    let usage = Self::get_usage_i18n_with_language_tag(language_tag);
+                    Self::parse_i18n_from_with_language_tag(itr, language_tag).map_err(|e| BotError::Clap2(e, usage))
+                }
+            }
     };
 }
 

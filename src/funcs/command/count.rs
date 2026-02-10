@@ -15,8 +15,11 @@ cmd!(
 );
 
 pub async fn count(bot: &Bot, msg: &Message) -> BotResult {
-    let command =
-        CountCmd::try_parse_from(getor(msg).unwrap().split_whitespace()).map_err(ccerr!())?;
+    let language_tag = Some("zh-CN");
+    let command = CountCmd::parse_i18n_from_bot(
+        getor(msg).unwrap().split_whitespace(),
+        language_tag,
+    )?;
     let datas = query_data(
         msg.chat.id.0,
         msg.from

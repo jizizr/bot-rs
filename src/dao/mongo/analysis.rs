@@ -23,26 +23,40 @@ pub(super) async fn create_index(db: &mongodb::Database) {
 }
 
 pub async fn insert_log(log: (&BotLog, &User, &Group)) -> Result<(), mongodb::error::Error> {
+    if is_mongo_disabled() {
+        return Ok(());
+    }
     let (botlog, user, group) = log;
 
-    BOTLOG
-        .get()
-        .await
-        .insert_one(bson::to_document(botlog)?)
-        .await?;
-    USER.get()
-        .await
-        .replace_one(
-            doc! {"user_id": user.get_id() as i64},
-            bson::to_document(user)?,
-        )
-        .upsert(true)
-        .await?;
-    GROUP
-        .get()
-        .await
-        .replace_one(doc! {"group_id": group.get_id()}, bson::to_document(group)?)
-        .upsert(true)
-        .await?;
-    Ok(())
+    let result = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        BOTLOG
+            .get()
+            .await
+            .insert_one(bson::to_document(botlog)?)
+            .await?;
+        USER.get()
+            .await
+            .replace_one(
+                doc! {"user_id": user.get_id() as i64},
+                bson::to_document(user)?,
+            )
+            .upsert(true)
+            .await?;
+        GROUP
+            .get()
+            .await
+            .replace_one(doc! {"group_id": group.get_id()}, bson::to_document(group)?)
+            .upsert(true)
+            .await?;
+        Ok::<(), mongodb::error::Error>(())
+    })
+    .await;
+
+    match result {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) | Err(_) => {
+            disable_mongo();
+            Ok(())
+        }
+    }
 }

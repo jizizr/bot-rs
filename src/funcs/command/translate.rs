@@ -185,11 +185,15 @@ async fn get_translate<'a>(
     is_compare: bool,
     is_callback: bool,
 ) -> Result<(String, MessageId, &'a str), BotError> {
+    let language_tag = Some("zh-CN");
     let (translate, mid) =
-        match TranslateCmd::try_parse_from(getor(msg).unwrap().split_whitespace()) {
+        match TranslateCmd::parse_i18n_from_bot(
+            getor(msg).unwrap().split_whitespace(),
+            language_tag,
+        ) {
             Ok(translate) => (translate, msg.id),
             Err(e) => (
-                TranslateCmd::try_parse_from(
+                TranslateCmd::parse_i18n_from_bot(
                     [
                         "/translate",
                         if is_callback {
@@ -197,11 +201,12 @@ async fn get_translate<'a>(
                         } else {
                             msg.reply_to_message().and_then(|msg| msg.text())
                         }
-                        .ok_or(clap_err!(e))?,
+                        .ok_or(e)?,
                     ]
                     .into_iter(),
+                    language_tag,
                 )
-                .map_err(ccerr!())?,
+                ?,
                 match msg.reply_to_message() {
                     Some(m) => m.id,
                     None => msg.id,

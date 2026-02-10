@@ -70,7 +70,8 @@ pub async fn chat(bot: &Bot, msg: &Message) -> BotResult {
 }
 
 async fn get_chat(msg: &Message) -> Result<String, BotError> {
-    let chat = ChatCmd::try_parse_from(getor(msg).unwrap().split_whitespace()).map_err(ccerr!())?;
+    let language_tag = Some("zh-CN");
+    let chat = ChatCmd::parse_i18n_from_bot(getor(msg).unwrap().split_whitespace(), language_tag)?;
     let request_body = format!(
         r#"{{"contents":[{{"parts":[{{"text":"{}"}}]}}]}}"#,
         chat.content.join(" ")

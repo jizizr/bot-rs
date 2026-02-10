@@ -5,6 +5,25 @@ use super::*;
 use async_once::AsyncOnce;
 use bson::doc;
 use mongodb::{Client, Collection, Database};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+lazy_static! {
+    static ref MONGO_DISABLED: AtomicBool = AtomicBool::new(false);
+}
+
+pub(super) fn is_mongo_disabled() -> bool {
+    if MONGO_DISABLED.load(Ordering::Relaxed) {
+        return true;
+    }
+    matches!(
+        std::env::var("MONGO_DISABLE"),
+        Ok(v) if v == "1" || v.eq_ignore_ascii_case("true")
+    )
+}
+
+pub(super) fn disable_mongo() {
+    MONGO_DISABLED.store(true, Ordering::Relaxed);
+}
 lazy_static! {
     static ref DB: AsyncOnce<Database> = AsyncOnce::new(init_mongo());
     static ref BOTLOG: AsyncOnce<Collection<bson::Document>> = AsyncOnce::new(init_botlog());

@@ -24,63 +24,53 @@ pub mod myclap;
 pub mod settings;
 
 pub type BotResult = Result<(), BotError>;
-#[derive(Debug, thiserror::Error)]
-pub enum BotError {
-    #[error("API请求失败: {0}")]
-    Request(#[from] reqwest::Error),
-    #[error("API请求失败: {0}")]
-    Retry(#[from] reqwest_middleware::Error),
-    #[error("{}\n\n{}", 
-    .0,
-    .1)]
-    Clap(clap::error::Error<MyErrorFormatter>, &'static String),
-    #[error("{}", .0)]
-    Custom(String),
-    #[error("{}", .0)]
-    Send(#[from] teloxide::RequestError),
-    #[error("{}", .0)]
-    IOError(#[from] std::io::Error),
-    #[error("{}", .0)]
-    FormatError(#[from] std::fmt::Error),
-    #[error("{}", .0)]
-    RegexError(regex::Error),
-    #[error("{}", .0)]
-    SerdeError(#[from] serde_json::Error),
-    #[error("{}", .0)]
-    UrlParseError(#[from] url::ParseError),
-    #[error("{}", .0)]
-    MySQLError(#[from] mysql_async::Error),
-    #[error("{}", .0)]
-    JoinError(#[from] tokio::task::JoinError),
-    #[error("{}", .0)]
-    ImageError(#[from] image::ImageError),
-    #[error("{}", .0)]
-    RedisError(#[from] redis::RedisError),
-    #[error("{}", .0)]
-    TlsError(#[from] tokio_native_tls::native_tls::Error),
-    #[error("{}", .0)]
-    SslError(#[from] x509_parser::nom::Err<x509_parser::error::X509Error>),
-    #[error("{}", .0)]
-    BotCommandParseError(#[from] teloxide::utils::command::ParseError),
-    #[error("{}", .0)]
-    MongoError(#[from] mongodb::error::Error),
-    #[error("{}", .0)]
-    PaintError(#[from] charts_rs::CanvasError),
-}
-
-#[macro_export]
-macro_rules! ccerr {
-    () => {
-        |e| clap_err!(e)
-    };
-}
-
-#[macro_export]
-macro_rules! clap_err {
-    ($e:expr) => {
-        BotError::Clap($e.apply::<MyErrorFormatter>(), &USAGE)
-    };
-}
+    #[derive(Debug, thiserror::Error)]
+    pub enum BotError {
+        #[error("API请求失败: {0}")]
+        Request(#[from] reqwest::Error),
+        #[error("API请求失败: {0}")]
+        Retry(#[from] reqwest_middleware::Error),
+        #[error("{}\n\n{}", 
+        .0,
+        .1)]
+        Clap(clap::error::Error<MyErrorFormatter>, &'static String),
+        #[error("{}\n\n{}", 
+        .0,
+        .1)]
+        Clap2(clap::error::Error<clap_i18n_richformatter::ClapI18nRichFormatter>, String),
+        #[error("{}", .0)]
+        Custom(String),
+        #[error("{}", .0)]
+        Send(#[from] teloxide::RequestError),
+        #[error("{}", .0)]
+        IOError(#[from] std::io::Error),
+        #[error("{}", .0)]
+        FormatError(#[from] std::fmt::Error),
+        #[error("{}", .0)]
+        RegexError(regex::Error),
+        #[error("{}", .0)]
+        SerdeError(#[from] serde_json::Error),
+        #[error("{}", .0)]
+        UrlParseError(#[from] url::ParseError),
+        #[error("{}", .0)]
+        MySQLError(#[from] mysql_async::Error),
+        #[error("{}", .0)]
+        JoinError(#[from] tokio::task::JoinError),
+        #[error("{}", .0)]
+        ImageError(#[from] image::ImageError),
+        #[error("{}", .0)]
+        RedisError(#[from] redis::RedisError),
+        #[error("{}", .0)]
+        TlsError(#[from] tokio_native_tls::native_tls::Error),
+        #[error("{}", .0)]
+        SslError(#[from] x509_parser::nom::Err<x509_parser::error::X509Error>),
+        #[error("{}", .0)]
+        BotCommandParseError(#[from] teloxide::utils::command::ParseError),
+        #[error("{}", .0)]
+        MongoError(#[from] mongodb::error::Error),
+        #[error("{}", .0)]
+        PaintError(#[from] charts_rs::CanvasError),
+    }
 
 lazy_static! {
     pub static ref BOT: Bot = Bot::new(&SETTINGS.bot.token);

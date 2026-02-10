@@ -44,9 +44,12 @@ async fn vv_cmd(cmd: &VvCmd) -> Result<Url, BotError> {
 }
 
 pub async fn vv(bot: &Bot, msg: &Message) -> BotResult {
-    let pic_url =
-        vv_cmd(&VvCmd::try_parse_from(getor(msg).unwrap().split_whitespace()).map_err(ccerr!())?)
-            .await?;
+    let language_tag = Some("zh-CN");
+    let pic_url = vv_cmd(&VvCmd::parse_i18n_from_bot(
+        getor(msg).unwrap().split_whitespace(),
+        language_tag,
+    )?)
+    .await?;
     bot.send_photo(msg.chat.id, InputFile::url(pic_url))
         .reply_parameters(ReplyParameters::new(msg.id))
         .await?;

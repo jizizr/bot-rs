@@ -68,9 +68,14 @@ async fn coin_exchange(from: &str, to: &str) -> Result<String, BotError> {
 }
 
 async fn get_rate(msg: &Message) -> Result<String, BotError> {
-    let rate = RateCmd::try_parse_from(getor(msg).unwrap().to_uppercase().split_whitespace())
-        .map_err(ccerr!())?;
-    coin_exchange(&rate.from, &rate.to).await
+    let language_tag = Some("zh-CN");
+    let rate = RateCmd::parse_i18n_from_bot(
+        getor(msg).unwrap().split_whitespace(),
+        language_tag,
+    )?;
+    // let rate = RateCmd::parse_i18n_from_bot(getor(msg).unwrap().split_whitespace())
+    //     ?;
+    coin_exchange(&rate.from.to_uppercase(), &rate.to.to_uppercase()).await
 }
 
 fn parse(raw: &str) -> Result<(f64, &str), BotError> {

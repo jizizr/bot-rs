@@ -53,6 +53,9 @@ bson = { version = "2", features = ["chrono-0_4"] }
 serde_repr = "0.1"
 anstyle = "1.0"
 charts-rs = { version = "0.3", features = ["image-encoder"] }
+clap-i18n-richformatter = { git = "https://github.com/jizizr/clap-i18n-richformatter", features = [
+    "derive",
+] }
 [profile.release]
 lto = true
 panic = "abort"

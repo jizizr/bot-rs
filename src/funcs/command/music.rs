@@ -213,8 +213,11 @@ async fn get_music_info(music: &MusicData) -> Result<(Vec<u8>, Vec<u8>), BotErro
 pub async fn music(bot: &Bot, msg: &Message) -> BotResult {
     tokio::spawn(bot.send_chat_action(msg.chat.id, ChatAction::Typing).send());
 
-    let music =
-        MusicCmd::try_parse_from(getor(msg).unwrap().split_whitespace()).map_err(ccerr!())?;
+    let language_tag = Some("zh-CN");
+    let music = MusicCmd::parse_i18n_from_bot(
+        getor(msg).unwrap().split_whitespace(),
+        language_tag,
+    )?;
     let msg_bot = bot
         .send_message(msg.chat.id, "正在获取音乐...")
         .reply_parameters(ReplyParameters::new(msg.id))
