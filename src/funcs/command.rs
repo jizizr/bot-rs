@@ -29,6 +29,7 @@ pub mod id;
 pub mod music;
 pub mod ping;
 pub mod rate;
+pub mod rom;
 pub mod short;
 pub mod start;
 pub mod test;
@@ -201,6 +202,8 @@ pub enum Cmd {
     Translate,
     #[command(description = "Ping")]
     Ping,
+    #[command(description = "小米刷机包链接")]
+    Rom,
     #[command(description = "vv不削能玩？")]
     Vv,
     #[command(description = "发言趋势")]
@@ -238,6 +241,7 @@ pub async fn command_handler(bot: &Bot, msg: &Message, me: &Me) -> BotResult {
         Chat => chat::chat,
         Translate => translate::translate,
         Ping => ping::ping,
+        Rom => rom::rom,
         Vv => vv::vv,
         Count => count::count,
         Test => test::test,

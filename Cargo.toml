@@ -6,7 +6,7 @@ edition = "2024"
 
 [dependencies]
 tokio = "1.0"
-reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", features = ["rustls-tls", "json", "blocking", "cookies"] }
 serde = { version = "1", features = ["derive"] }
 lazy_static = "1.5"
 regex = "1.10"
@@ -19,7 +19,7 @@ teloxide = { git = "https://github.com/teloxide/teloxide", features = [
 ] }
 log = "0.4"
 pretty_env_logger = "0.5"
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["preserve_order"] }
 fast_qr = { version = "0.12", features = ["image"] }
 mysql_async = "0.35"
 async-trait = "0.1.8"
@@ -52,6 +52,13 @@ mongodb = "3"
 bson = { version = "2", features = ["chrono-0_4"] }
 serde_repr = "0.1"
 anstyle = "1.0"
+aes = "0.8"
+base64 = "0.22"
+cbc = { version = "0.1", features = ["alloc"] }
+indexmap = { version = "2", features = ["serde"] }
+md5 = "0.7"
+prost = "0.13"
+uuid = { version = "1", features = ["v4"] }
 charts-rs = { version = "0.3", features = ["image-encoder"] }
 clap-i18n-richformatter = { git = "https://github.com/jizizr/clap-i18n-richformatter", features = [
     "derive",

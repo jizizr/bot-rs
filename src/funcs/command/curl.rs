@@ -66,7 +66,10 @@ fn fixer(url: &str) -> Result<String, String> {
     if MATCH.is_match(&url) {
         Ok(url)
     } else {
-        Err(format!("不符合规则的URL\n\n{}", CurlCmd::get_usage_i18n_with_language_tag(None)))
+        Err(format!(
+            "不符合规则的URL\n\n{}",
+            CurlCmd::get_usage_i18n_with_language_tag(None)
+        ))
     }
 }
 
@@ -78,18 +81,33 @@ fn get_title(body: &str) -> Option<String> {
     if let Some(title_element) = document.select(&title_selector).next() {
         // 提取 <title> 标签的内容并打印
         let title_text = title_element.text().collect::<String>();
-        Some(markdown::escape(title_text.trim()))
+        Some(title_text.trim().to_string())
     } else {
         None
     }
 }
 
+fn html_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn html_link(label: &str, url: &str) -> String {
+    format!(
+        "<a href=\"{}\">{}</a>",
+        html_escape(url),
+        html_escape(label)
+    )
+}
+
 fn get_http_version(resq: &Response) -> String {
     let version = resq.version();
     match version {
-        Version::HTTP_09 => "HTTP/0\\.9",
-        Version::HTTP_10 => "HTTP/1\\.0",
-        Version::HTTP_11 => "HTTP/1\\.1",
+        Version::HTTP_09 => "HTTP/0.9",
+        Version::HTTP_10 => "HTTP/1.0",
+        Version::HTTP_11 => "HTTP/1.1",
         Version::HTTP_2 => "HTTP/2",
         Version::HTTP_3 => "HTTP/3",
         _ => "",
@@ -105,7 +123,7 @@ async fn get_ip_info(ip: &str) -> String {
                 || ip.message.unwrap() == "Reserved range"
             {
                 format!(
-                    "*Location:* {}\n*Announced By:* {}",
+                    "<b>Location:</b> {}\n<b>Announced By:</b> {}",
                     "Reserved range", "Reserved range"
                 )
             } else {
@@ -113,15 +131,15 @@ async fn get_ip_info(ip: &str) -> String {
             }
         }
         Ok(ip) => format!(
-            "*Location:* {}\n*Announced By:* {}",
-            markdown::escape(&format!(
+            "<b>Location:</b> {}\n<b>Announced By:</b> {}",
+            html_escape(&format!(
                 "{} {} {} {}",
                 ip.continent.unwrap_or(String::new()),
                 ip.country.unwrap_or(String::new()),
                 ip.region.unwrap_or(String::new()),
                 ip.city.unwrap_or(String::new())
             )),
-            markdown::escape(&format!(
+            html_escape(&format!(
                 "AS{} {}",
                 ip.connection.as_ref().unwrap().asn,
                 ip.connection.as_ref().unwrap().isp
@@ -154,11 +172,11 @@ async fn get_ssl(url: &str) -> Result<String, BotError> {
     let valid_until = cert.tbs_certificate.validity.not_after;
 
     Ok(format!(
-        "*Subject:* {}\n*Issuer:* {}\n*Valid from:* {}\n*Valid until:* {}",
-        markdown::escape(&subject.to_string()),
-        markdown::escape(&issuer.to_string()),
-        markdown::escape(&valid_from.to_string()),
-        markdown::escape(&valid_until.to_string())
+        "<b>Subject:</b> {}\n<b>Issuer:</b> {}\n<b>Valid from:</b> {}\n<b>Valid until:</b> {}",
+        html_escape(&subject.to_string()),
+        html_escape(&issuer.to_string()),
+        html_escape(&valid_from.to_string()),
+        html_escape(&valid_until.to_string())
     ))
 }
 
@@ -187,11 +205,7 @@ async fn get_header(resp: &Response) -> Result<String, BotError> {
         if !hash_set.insert(hn) {
             return;
         }
-        header.push_str(&format!(
-            "*{}:* {}\n",
-            markdown::escape(k.as_str()),
-            markdown::escape(v.to_str().unwrap())
-        ));
+        header.push_str(&format!("{}: {}\n", k.as_str(), v.to_str().unwrap()));
     });
     Ok(header)
 }
@@ -204,15 +218,12 @@ async fn post_paste(text: String) -> Result<String, BotError> {
         .await?
         .json()
         .await?;
-    Ok(format!("https://paste\\.op\\.wiki/{}", resp.key))
+    Ok(format!("https://paste.op.wiki/{}", resp.key))
 }
 
 async fn get_curl(msg: &Message) -> Result<String, BotError> {
     let language_tag = Some("zh-CN");
-    let curl = CurlCmd::parse_i18n_from_bot(
-        getor(msg).unwrap().split_whitespace(),
-        language_tag,
-    )?;
+    let curl = CurlCmd::parse_i18n_from_bot(getor(msg).unwrap().split_whitespace(), language_tag)?;
     let url = curl.url;
     let resp = get_resp(&url).await?;
     let ip = &resp.remote_addr().unwrap().ip().to_string();
@@ -221,7 +232,7 @@ async fn get_curl(msg: &Message) -> Result<String, BotError> {
     let version = get_http_version(&resp);
     let body = resp.text().await?;
     let title = match get_title(&body) {
-        Some(s) => format!("*Page Title: *{s}"),
+        Some(s) => format!("<b>Page Title:</b> {}", html_escape(&s)),
         None => String::new(),
     };
     let (ssl, ip_info, paste_url) = if url.scheme() == "https" {
@@ -234,27 +245,30 @@ async fn get_curl(msg: &Message) -> Result<String, BotError> {
         let temp = tokio::join!(get_ip_info(ip), post_paste(body));
         (Ok("".to_string()), temp.0, temp.1)
     };
+    let ssl = ssl.unwrap_or_else(|e| html_escape(&e.to_string()));
+    let paste_url = paste_url.unwrap_or_else(|e| e.to_string());
     let result = format!(
-        "
-*HTTP Request Summary*
+        "<b>HTTP Request Summary</b>
 {}
 {title}
 
-▼ *Server Info:*
+<b>Server Info</b>
+<blockquote expandable>
 {}
-*IP Address:*{}
+<b>IP Address:</b> {}
 {ip_info}
+</blockquote>
 
-*▼ Headers:*
-{version}
-{header}
+<b>Headers</b>
+<blockquote expandable>{}</blockquote>
 
-*▼ Body:*
+<b>Body</b>
 {}",
-        markdown::escape(url.as_ref()),
-        ssl.unwrap_or_else(|e| e.to_string()),
-        markdown::escape(ip),
-        paste_url.unwrap_or_else(|e| e.to_string()),
+        html_link(url.as_ref(), url.as_ref()),
+        ssl,
+        html_escape(ip),
+        html_escape(&format!("{version}\n{header}")),
+        html_link("打开 Paste", &paste_url),
     );
     Ok(result)
 }
@@ -270,7 +284,7 @@ pub async fn curl(bot: &Bot, msg: &Message) -> BotResult {
             prefer_large_media: false,
             show_above_text: false,
         })
-        .parse_mode(ParseMode::MarkdownV2)
+        .parse_mode(ParseMode::Html)
         .send()
         .await?;
     Ok(())
