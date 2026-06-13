@@ -43,24 +43,25 @@ pub async fn query_data(
     };
 
     if let Some(duration_value) = duration
-        && duration_value != Duration::Invalid {
-            let now = Utc::now();
-            let start_time = match duration_value {
-                Duration::Day => now - ChronoDuration::days(1),
-                Duration::Week => now - ChronoDuration::weeks(1),
-                Duration::Month => now - ChronoDuration::days(30),
-                Duration::Quarter => now - ChronoDuration::days(90),
-                Duration::Year => now - ChronoDuration::days(365),
-                Duration::Invalid => now,
-            };
+        && duration_value != Duration::Invalid
+    {
+        let now = Utc::now();
+        let start_time = match duration_value {
+            Duration::Day => now - ChronoDuration::days(1),
+            Duration::Week => now - ChronoDuration::weeks(1),
+            Duration::Month => now - ChronoDuration::days(30),
+            Duration::Quarter => now - ChronoDuration::days(90),
+            Duration::Year => now - ChronoDuration::days(365),
+            Duration::Invalid => now,
+        };
 
-            match_condition.insert(
-                "timestamp",
-                doc! {
-                    "$gte": bson::DateTime::from_chrono(start_time),
-                },
-            );
-        }
+        match_condition.insert(
+            "timestamp",
+            doc! {
+                "$gte": bson::DateTime::from_chrono(start_time),
+            },
+        );
+    }
 
     let pipeline = vec![
         doc! {

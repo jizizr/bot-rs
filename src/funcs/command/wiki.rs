@@ -37,10 +37,8 @@ struct Page {
 
 async fn get_wiki(msg: &Message) -> Result<String, BotError> {
     let language_tag = Some("zh-CN");
-    let search = WikiCmd::parse_i18n_from_bot(
-        getor(msg).unwrap().split_whitespace(),
-        language_tag,
-    )?;
+    let search =
+        WikiCmd::parse_i18n_from_bot(getor(msg).unwrap().split_whitespace(), language_tag)?;
     let result: SearchResult = get(&format!(
         "https://zh.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit=1&srsearch={}",
         search.search.join(" ")

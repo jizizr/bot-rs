@@ -57,8 +57,10 @@ base64 = "0.22"
 cbc = { version = "0.1", features = ["alloc"] }
 indexmap = { version = "2", features = ["serde"] }
 md5 = "0.7"
+sha1 = "0.10"
 prost = "0.13"
 uuid = { version = "1", features = ["v4"] }
+oxideav-mp4 = "0.0.8"
 charts-rs = { version = "0.3", features = ["image-encoder"] }
 clap-i18n-richformatter = { git = "https://github.com/jizizr/clap-i18n-richformatter", features = [
     "derive",

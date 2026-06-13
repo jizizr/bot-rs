@@ -301,18 +301,19 @@ fn write_values_list(
 ) {
     use std::fmt::Write as _;
     if let Some(ContextValue::Strings(possible_values)) = possible_values
-        && !possible_values.is_empty() {
-            let _ = write!(styled, "\n{TAB}[{list_name}: ");
+        && !possible_values.is_empty()
+    {
+        let _ = write!(styled, "\n{TAB}[{list_name}: ");
 
-            for (idx, val) in possible_values.iter().enumerate() {
-                if idx > 0 {
-                    styled.push_str(", ");
-                }
-                let _ = write!(styled, "{valid}{}{valid:#}", Escape(val));
+        for (idx, val) in possible_values.iter().enumerate() {
+            if idx > 0 {
+                styled.push_str(", ");
             }
-
-            styled.push(']');
+            let _ = write!(styled, "{valid}{}{valid:#}", Escape(val));
         }
+
+        styled.push(']');
+    }
 }
 
 struct Escape<'s>(&'s str);

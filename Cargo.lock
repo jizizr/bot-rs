@@ -505,6 +505,7 @@ dependencies = [
  "md5",
  "mongodb",
  "mysql_async",
+ "oxideav-mp4",
  "ping-server-rs",
  "pretty_env_logger",
  "prost",
@@ -518,6 +519,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_repr",
+ "sha1",
  "sled",
  "teloxide",
  "thiserror 2.0.12",
@@ -3362,6 +3364,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22ec719bbf3b2a81c109a4e20b1f129b5566b7dce654bc3872f6a05abf82b2c4"
 dependencies = [
  "ttf-parser 0.25.1",
+]
+
+[[package]]
+name = "oxideav-core"
+version = "0.1.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90f122ec5ab9940f06ac87f34ffd165412aaf42017bcaf8e61f592d9cca838ce"
+dependencies = [
+ "bytemuck",
+ "serde_json",
+ "thiserror 2.0.12",
+]
+
+[[package]]
+name = "oxideav-mp4"
+version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5bc426bb6e2ca3ebd48a550d5a45e493259a429ba6bdae53516df88ef8965b10"
+dependencies = [
+ "oxideav-core",
 ]
 
 [[package]]

@@ -39,10 +39,8 @@ pub fn fix_start(u: String) -> String {
 
 async fn get_short(msg: &Message) -> Result<String, BotError> {
     let language_tag = Some("zh-CN");
-    let short = ShortCmd::parse_i18n_from_bot(
-        getor(msg).unwrap().split_whitespace(),
-        language_tag,
-    )?;
+    let short =
+        ShortCmd::parse_i18n_from_bot(getor(msg).unwrap().split_whitespace(), language_tag)?;
     let surl;
     let mut url: String = match (short.surl, msg.reply_to_message(), &short.url) {
         (Some(s), _, _) => {

@@ -159,10 +159,8 @@ async fn send_receive_json<'a, T: ?Sized + serde::Serialize, R: serde::Deseriali
 
 async fn get_ping(text: String) -> Result<DashMap<String, Answer>, BotError> {
     let language_tag = Some("zh-CN");
-    let ping_cmd = PingCmd::parse_i18n_from_bot(
-        text.to_lowercase().split_whitespace(),
-        language_tag,
-    )?;
+    let ping_cmd =
+        PingCmd::parse_i18n_from_bot(text.to_lowercase().split_whitespace(), language_tag)?;
     let target = into_target(&ping_cmd)?;
     let mut futures = FuturesUnordered::new();
     let streams = Arc::new(DashMap::new());
@@ -339,11 +337,9 @@ mod tests {
         ];
         for (expect, text) in texts {
             let language_tag = Some("zh-CN");
-            let ping_cmd = PingCmd::parse_i18n_from_bot(
-                text.to_lowercase().split_whitespace(),
-                language_tag,
-            )
-            .unwrap_or_else(|e| panic!("{}", e.to_string()));
+            let ping_cmd =
+                PingCmd::parse_i18n_from_bot(text.to_lowercase().split_whitespace(), language_tag)
+                    .unwrap_or_else(|e| panic!("{}", e.to_string()));
             let result = into_target(&ping_cmd).unwrap();
             println!("{text}");
             assert_eq!(expect, result);

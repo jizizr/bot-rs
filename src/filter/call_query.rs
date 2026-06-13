@@ -22,15 +22,20 @@ macro_rules! dispatch_callbacks {
     };
 }
 pub async fn call_query_handler(bot: Bot, mut q: CallbackQuery) -> BotResult {
-    let binding = q.data.unwrap();
-    let data: Vec<&str> = binding.splitn(2, ' ').collect();
-    q.data = Some(data[1].to_string());
+    let Some(binding) = q.data.clone() else {
+        return Ok(());
+    };
+    let (command, payload) = binding
+        .split_once(' ')
+        .map(|(command, payload)| (command, payload))
+        .unwrap_or((binding.as_str(), ""));
+    q.data = Some(payload.to_string());
 
     let mut blog = BotLogBuilder::from(&q);
     let user = User::from(&q);
     let group = Group::from(&q);
     let _ = dispatch_callbacks!(
-        data[0],
+        command,
         bot,
         q,
         "coin" => coin::coin_callback,

@@ -173,9 +173,10 @@ pub async fn translate_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotErr
 
 fn extract_text(message: &Message) -> Option<&str> {
     if let MessageKind::Common(common) = &message.kind
-        && let MediaKind::Text(media_text) = &common.media_kind {
-            return Some(&media_text.text);
-        }
+        && let MediaKind::Text(media_text) = &common.media_kind
+    {
+        return Some(&media_text.text);
+    }
     None
 }
 
@@ -186,33 +187,31 @@ async fn get_translate<'a>(
     is_callback: bool,
 ) -> Result<(String, MessageId, &'a str), BotError> {
     let language_tag = Some("zh-CN");
-    let (translate, mid) =
-        match TranslateCmd::parse_i18n_from_bot(
-            getor(msg).unwrap().split_whitespace(),
-            language_tag,
-        ) {
-            Ok(translate) => (translate, msg.id),
-            Err(e) => (
-                TranslateCmd::parse_i18n_from_bot(
-                    [
-                        "/translate",
-                        if is_callback {
-                            extract_text(msg)
-                        } else {
-                            msg.reply_to_message().and_then(|msg| msg.text())
-                        }
-                        .ok_or(e)?,
-                    ]
-                    .into_iter(),
-                    language_tag,
-                )
-                ?,
-                match msg.reply_to_message() {
-                    Some(m) => m.id,
-                    None => msg.id,
-                },
-            ),
-        };
+    let (translate, mid) = match TranslateCmd::parse_i18n_from_bot(
+        getor(msg).unwrap().split_whitespace(),
+        language_tag,
+    ) {
+        Ok(translate) => (translate, msg.id),
+        Err(e) => (
+            TranslateCmd::parse_i18n_from_bot(
+                [
+                    "/translate",
+                    if is_callback {
+                        extract_text(msg)
+                    } else {
+                        msg.reply_to_message().and_then(|msg| msg.text())
+                    }
+                    .ok_or(e)?,
+                ]
+                .into_iter(),
+                language_tag,
+            )?,
+            match msg.reply_to_message() {
+                Some(m) => m.id,
+                None => msg.id,
+            },
+        ),
+    };
     let text = translate.content.join(" ");
     let tl = tl.unwrap_or_else(|| match LANG.detect_language_of(&text) {
         Some(Language::Chinese) => EN,

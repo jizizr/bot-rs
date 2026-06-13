@@ -3,7 +3,10 @@
 /bot_derive
 URL
 /data/conf.toml
+/data/applemusic-wrapper*
 /data/func_switch
 .DS_Store
 /.idea
 src/funcs/command/test.rs
+docker-compose.applemusic.yml
+docker-compose.db.yml

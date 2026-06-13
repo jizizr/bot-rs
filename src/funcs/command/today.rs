@@ -22,10 +22,8 @@ cmd!(
 async fn get_today(msg: &Message) -> Result<String, BotError> {
     let base_url = "http://hao.360.com/histoday/".to_string();
     let language_tag = Some("zh-CN");
-    let today = TodayCmd::parse_i18n_from_bot(
-        getor(msg).unwrap().split_whitespace(),
-        language_tag,
-    )?;
+    let today =
+        TodayCmd::parse_i18n_from_bot(getor(msg).unwrap().split_whitespace(), language_tag)?;
     let his = if today.month.is_some() {
         if today.day.is_some() {
             get_history(

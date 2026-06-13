@@ -1,8 +1,6 @@
 use super::*;
-use updater_core::{
-    Device, QueryResult, RemoteDevices, RomInfoData, RomQuery, fetch_rom_info,
-};
 use std::sync::LazyLock;
+use updater_core::{Device, QueryResult, RemoteDevices, RomInfoData, RomQuery, fetch_rom_info};
 
 mod updater_core;
 mod updater_links;

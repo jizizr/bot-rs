@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod freq;
+pub mod music_settings;
 
 use super::*;
 use async_once::AsyncOnce;
@@ -76,6 +77,7 @@ async fn init_mongo() -> Database {
         .unwrap()
         .database("logs");
     analysis::create_index(&db).await;
+    music_settings::create_index(&db).await;
     db
 }
 

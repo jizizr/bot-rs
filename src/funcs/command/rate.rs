@@ -52,9 +52,7 @@ async fn coin_exchange(from: &str, to: &str) -> Result<String, BotError> {
     let (num, from) = parse(from)?;
     let exchange_rate = get_exchange_rate(from, to).await?;
     let mut answer = String::new();
-    answer.push_str(&format!(
-        "*`1`* {from} \\= *`{exchange_rate:.4}`* {to}\n"
-    ));
+    answer.push_str(&format!("*`1`* {from} \\= *`{exchange_rate:.4}`* {to}\n"));
     if num != 1.0 {
         answer.push_str(&format!(
             "*`{}`* {} \\= *`{:.4}`* {}",
@@ -69,10 +67,7 @@ async fn coin_exchange(from: &str, to: &str) -> Result<String, BotError> {
 
 async fn get_rate(msg: &Message) -> Result<String, BotError> {
     let language_tag = Some("zh-CN");
-    let rate = RateCmd::parse_i18n_from_bot(
-        getor(msg).unwrap().split_whitespace(),
-        language_tag,
-    )?;
+    let rate = RateCmd::parse_i18n_from_bot(getor(msg).unwrap().split_whitespace(), language_tag)?;
     // let rate = RateCmd::parse_i18n_from_bot(getor(msg).unwrap().split_whitespace())
     //     ?;
     coin_exchange(&rate.from.to_uppercase(), &rate.to.to_uppercase()).await

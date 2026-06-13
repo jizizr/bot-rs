@@ -14,7 +14,7 @@ use std::{
 };
 use teloxide::types::{
     ChatKind, InlineKeyboardButton, InlineKeyboardButtonKind::CallbackData, InlineKeyboardMarkup,
-    InlineQueryResult, InlineQueryResultArticle, InputFile, InputMediaAudio, InputMessageContent,
+    InlineQueryResult, InlineQueryResultArticle, InputFile, InputMessageContent,
     InputMessageContentText, LinkPreviewOptions, MediaKind, Message, MessageId, MessageKind,
     ParseMode,
 };
