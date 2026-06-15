@@ -188,7 +188,7 @@ pub async fn query_data(
         },
     ];
 
-    let cursor = BOTLOG.get().await.aggregate(pipeline).await?;
+    let cursor = botlog().await.aggregate(pipeline).await?;
     let results: Vec<MessageCount> = cursor
         .map(|result| {
             result.and_then(|doc| {

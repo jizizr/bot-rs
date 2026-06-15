@@ -3,14 +3,12 @@ pub mod freq;
 pub mod music_settings;
 
 use super::*;
-use async_once::AsyncOnce;
 use bson::doc;
 use mongodb::{Client, Collection, Database};
 use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::OnceCell;
 
-lazy_static! {
-    static ref MONGO_DISABLED: AtomicBool = AtomicBool::new(false);
-}
+static MONGO_DISABLED: AtomicBool = AtomicBool::new(false);
 
 pub(super) fn is_mongo_disabled() -> bool {
     if MONGO_DISABLED.load(Ordering::Relaxed) {
@@ -25,12 +23,10 @@ pub(super) fn is_mongo_disabled() -> bool {
 pub(super) fn disable_mongo() {
     MONGO_DISABLED.store(true, Ordering::Relaxed);
 }
-lazy_static! {
-    static ref DB: AsyncOnce<Database> = AsyncOnce::new(init_mongo());
-    static ref BOTLOG: AsyncOnce<Collection<bson::Document>> = AsyncOnce::new(init_botlog());
-    static ref GROUP: AsyncOnce<Collection<bson::Document>> = AsyncOnce::new(init_group());
-    static ref USER: AsyncOnce<Collection<bson::Document>> = AsyncOnce::new(init_user());
-}
+static DB: OnceCell<Database> = OnceCell::const_new();
+static BOTLOG: OnceCell<Collection<bson::Document>> = OnceCell::const_new();
+static GROUP: OnceCell<Collection<bson::Document>> = OnceCell::const_new();
+static USER: OnceCell<Collection<bson::Document>> = OnceCell::const_new();
 
 #[macro_export]
 macro_rules! index_builder {
@@ -82,12 +78,28 @@ async fn init_mongo() -> Database {
 }
 
 async fn init_botlog() -> Collection<bson::Document> {
-    DB.get().await.collection::<bson::Document>("logs")
+    db().await.collection::<bson::Document>("logs")
 }
 
 async fn init_group() -> Collection<bson::Document> {
-    DB.get().await.collection::<bson::Document>("groups")
+    db().await.collection::<bson::Document>("groups")
 }
 async fn init_user() -> Collection<bson::Document> {
-    DB.get().await.collection::<bson::Document>("users")
+    db().await.collection::<bson::Document>("users")
+}
+
+pub(super) async fn db() -> &'static Database {
+    DB.get_or_init(init_mongo).await
+}
+
+pub(super) async fn botlog() -> &'static Collection<bson::Document> {
+    BOTLOG.get_or_init(init_botlog).await
+}
+
+pub(super) async fn group() -> &'static Collection<bson::Document> {
+    GROUP.get_or_init(init_group).await
+}
+
+pub(super) async fn user() -> &'static Collection<bson::Document> {
+    USER.get_or_init(init_user).await
 }

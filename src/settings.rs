@@ -52,8 +52,6 @@ pub struct AppleMusic {
     pub language: String,
     #[serde(default = "default_apple_timeout")]
     pub timeout: u64,
-    #[serde(default = "default_apple_quality")]
-    pub quality: String,
     #[serde(default)]
     pub wrapper_host: String,
     #[serde(default)]
@@ -70,7 +68,6 @@ impl Default for AppleMusic {
             storefront: default_apple_storefront(),
             language: default_apple_language(),
             timeout: default_apple_timeout(),
-            quality: default_apple_quality(),
             wrapper_host: String::new(),
             wv_client_id: String::new(),
             wv_private_key: String::new(),
@@ -125,10 +122,6 @@ fn default_apple_language() -> String {
 
 fn default_apple_timeout() -> u64 {
     30
-}
-
-fn default_apple_quality() -> String {
-    "high".to_string()
 }
 
 impl Default for Settings {
@@ -190,6 +183,5 @@ mod tests {
         assert_eq!(settings.music.applemusic.storefront, "us");
         assert_eq!(settings.music.applemusic.language, "en-US");
         assert_eq!(settings.music.applemusic.timeout, 30);
-        assert_eq!(settings.music.applemusic.quality, "high");
     }
 }

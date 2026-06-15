@@ -7,16 +7,20 @@ use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pk
 use chrono::{Local, TimeZone};
 use indexmap::IndexMap;
 use prost::Message;
-use reqwest::blocking::Client;
-use reqwest::header::{CONTENT_LENGTH, CONTENT_RANGE, COOKIE, RANGE};
+use reqwest::{
+    blocking::Client,
+    header::{CONTENT_LENGTH, CONTENT_RANGE, COOKIE, RANGE},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::HashMap;
-use std::error::Error;
-use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
-use std::sync::OnceLock;
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    error::Error,
+    ffi::{CStr, CString},
+    os::raw::c_char,
+    sync::OnceLock,
+    time::Duration,
+};
 use uuid::Uuid;
 
 pub use super::updater_links::{DownloadLinks, OfficialPath, ResolvedDownloadPath};
