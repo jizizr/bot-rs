@@ -2,26 +2,44 @@ use super::provider::{
     DownloadProgress, MusicPlatform, MusicProvider, MusicSearchItem, MusicTrack,
 };
 use crate::{BotError, settings::SETTINGS};
+use aes::cipher::{KeyIvInit, StreamCipher};
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose};
 use lazy_static::lazy_static;
 use oxideav_mp4::cenc::{SencBox, SubsampleEntry, TencBox, parse_senc, parse_tenc};
+use protobuf::Message;
 use regex::Regex;
 use reqwest::Client;
+use rsa::{RsaPrivateKey, pkcs1::DecodeRsaPrivateKey};
 use serde::Deserialize;
-use std::{collections::HashMap, sync::RwLock, time::Duration};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::{collections::HashMap, fs, io::Cursor, sync::RwLock, time::Duration};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream};
 use url::Url;
+use widevine::{
+    Cdm, Device, KeyType, LicenseType, Pssh,
+    device::{DeviceType, SecurityLevel},
+};
+use widevine_proto::license_protocol::{WidevinePsshData, widevine_pssh_data};
 
 const APPLE_MUSIC_API: &str = "https://amp-api.music.apple.com";
 const APPLE_MUSIC_ORIGIN: &str = "https://music.apple.com";
 const APPLE_MUSIC_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36";
 const DEFAULT_ARTWORK_SIZE: usize = 1200;
 const WEB_PLAYBACK_URL: &str = "https://play.itunes.apple.com/WebObjects/MZPlay.woa/wa/webPlayback";
+const WEB_PLAYBACK_LICENSE_URL: &str =
+    "https://play.itunes.apple.com/WebObjects/MZPlay.woa/wa/acquireWebPlaybackLicense";
 const APPLE_WRAPPER_SCHEME: &str = "applemusic-wrapper://";
+const APPLE_WIDEVINE_SCHEME: &str = "applemusic-widevine://";
 const APPLE_WRAPPER_M3U8_PORT: u16 = 20020;
 const APPLE_WRAPPER_DECRYPT_PORT: u16 = 10020;
 const APPLE_PREFETCH_KEY_URI: &str = "skd://itunes.apple.com/P000000000/s1/e1";
 const APPLE_WRAPPER_IO_TIMEOUT: Duration = Duration::from_secs(15);
+type Aes128Ctr = ctr::Ctr128BE<aes::Aes128>;
+
+// Public Widevine L3 test device from the source MusicBot-Go Apple Music provider.
+// This is not Apple account data; users can override it with wv_client_id /
+// wv_private_key file paths in settings.
+const DEFAULT_WV_DEVICE_WVD_BASE64: &str = "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nm+ku3P/ASTk/EgYono5aMTLgPkdkbSnYxjKEzzh9SHdM5+57ErVx5as58/EJvFI9GL3DQERoOaLG38riYhqVQVMEmxbG0TrDDfxSYUuS1agwzz5AueHF7qOa5Wm5yF0u2cw+eQCzpeMatAUKrgIIARIQaePomLssP7ijsygdhPiMFBiO1b6RBSKOAjCCAQoCggEBANj26bWJ8FEg6aQ+0NlOof4JlQFtvR4rQKfc0cV/wwVQPM8TP56Yr85O5v+E3EIkJqj/+k/kvy1E1Q8UOuu8IEyjtGf6JRv6YD/bJeInqK+pw30K72Lmo5TXKCif1JZlGy6MUUHyfFWt5jkvN6rTbzfOfUKDWy1xfi04dPu60/MUb9F4MVC3Q78YuXNXAHR3WyfdIow7hcuOFl2dyu0X2OWOmDvGMwiWdYlSrEOjtNCRPK0mZSXSRwztud0Et6sB0kUZpdzqhJjh43L8gYOW4sJBHcpkRCzL+Yt5XWCBDjgwWvtc4z6t37j/fXir915BuMeqNYW5WvyIhopur5HrdKECAwEAASjwIhKAAyKLYzDrP5CzVu+/EZK2J722lyCg7a4C3lm+/QINe+sWXCdJuj6pHvVG7YiVlZVJs3ldhIgPBzAHMeNjys2vd+Cxe1Im3Ljbl2M1C0Xn4naOsCF/dDabsQjlqiFkakPYTRyv51WP2jzHS4lHY1ZHwVWhVBJdmlp3cz/hDMEs22j+3P5QrJnBrtJz95NBzb5lwNLdkQ7eUZGwfzrgp/9wQa8lEEGpyklcp8b4i2oRbUAA+m2O6CDOZkTNGrnFMZ/qiv5tesqMKkFL0bVI7K8I0XWTnPqUbwqxeGBDEvoAMcyi6XG9QiKHI9jkymKZ1d9R0RDkcDYSo2I1U0g7io/TTuNbnXIB5OE6vLgnbbGzxF2QgKU4YBq4siXSUsDh+UzNb5V9CXnFjE/QTm26GfSH7zjgOyVTxkXtTV1TZCmsgCl99cP3CAAAKTbpGCDLx73rPyLzr/5hjJlCRz2Eh0IARGuARgIRsHLM42t1EOzUytL9yHWahXmkm/rcEgq9Aca8uRoWCgxjb21wYW55X25hbWUSBkdvb2dsZRohCgptb2RlbF9uYW1lEhNBT1NQIG9uIElBIEVtdWxhdG9yGhgKEWFyY2hpdGVjdHVyZV9uYW1lEgN4ODYaHgoLZGV2aWNlX25hbWUSD2dlbmVyaWNfeDg2X2FybRoiCgxwcm9kdWN0X25hbWUSEnNka19ncGhvbmVfeDg2X2FybRpkCgpidWlsZF9pbmZvElZnb29nbGUvc2RrX2dwaG9uZV94ODZfYXJtL2dlbmVyaWNfeDg2X2FybTo5L1BTUjEuMTgwNzIwLjEyMi82NzM2NzQyOnVzZXJkZWJ1Zy9kZXYta2V5cxoeChR3aWRldmluZV9jZG1fdmVyc2lvbhIGMTQuMC4wGiQKH29lbV9jcnlwdG9fc2VjdXJpdHlfcGF0Y2hfbGV2ZWwSATAyDhABIAAoDTAAQABIAFAA";
 
 lazy_static! {
     static ref CLIENT: Client = {
@@ -73,7 +91,7 @@ impl MusicProvider for AppleMusicProvider {
         keyword: &str,
         selected_id: Option<&str>,
     ) -> Result<MusicTrack, BotError> {
-        resolve_apple_track(keyword, selected_id, apple_quality()).await
+        resolve_apple_track(keyword, selected_id, AppleMusicQuality::High).await
     }
 }
 
@@ -82,7 +100,7 @@ pub(super) async fn resolve_with_quality(
     selected_id: Option<&str>,
     quality: &str,
 ) -> Result<MusicTrack, BotError> {
-    resolve_apple_track(keyword, selected_id, apple_quality_from_str(quality)).await
+    resolve_apple_track(keyword, selected_id, quality_from_str(quality)).await
 }
 
 async fn resolve_apple_track(
@@ -199,7 +217,7 @@ struct WebPlaybackSong {
     assets: Vec<WebPlaybackAsset>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct WebPlaybackAsset {
     #[serde(rename = "URL")]
     url: String,
@@ -208,7 +226,7 @@ struct WebPlaybackAsset {
     metadata: WebPlaybackMetadata,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 struct WebPlaybackMetadata {
     #[serde(default, rename = "bitRate")]
     bit_rate: i64,
@@ -237,19 +255,21 @@ async fn get_apple_download_url_with_quality(
         ));
     }
     validate_apple_download_environment()?;
-    if let Some(wrapper_host) = apple_wrapper_host_opt() {
-        return Ok(format!(
-            "{APPLE_WRAPPER_SCHEME}{wrapper_host}/{id}?quality={}",
-            quality.as_str()
+    let wrapper_host = apple_wrapper_host_opt();
+    if should_prefer_apple_wrapper(quality, wrapper_host.is_some()) {
+        return Ok(apple_wrapper_internal_url(
+            wrapper_host.as_deref().unwrap(),
+            id,
+            quality,
         ));
     }
-    if quality.needs_wrapper() {
-        return Err(BotError::Custom(
-            "Apple Music 无损/Hi-Res 下载需要配置 music.applemusic.wrapper_host".to_string(),
-        ));
-    }
+    Ok(apple_widevine_internal_url(id, quality))
+}
 
-    let media_user_token = media_user_token;
+async fn get_apple_webplayback_assets(
+    id: &str,
+    media_user_token: String,
+) -> Result<Vec<WebPlaybackAsset>, BotError> {
     let developer_token = ensure_developer_token().await?;
     let response = CLIENT
         .post(WEB_PLAYBACK_URL)
@@ -268,18 +288,30 @@ async fn get_apple_download_url_with_quality(
         )));
     }
     let response: WebPlaybackResponse = response.json().await?;
-    let asset = response
+    Ok(response
         .song_list
         .into_iter()
         .flat_map(|song| song.assets)
-        .max_by_key(|asset| {
-            (
-                (asset.flavor.as_deref() == Some("28:ctrp256")) as i32,
-                asset.metadata.bit_rate,
-            )
-        })
-        .ok_or_else(|| BotError::Custom("Apple Music 没有返回 WebPlayback 资源".to_string()))?;
-    resolve_hls_to_media(&asset.url).await
+        .collect())
+}
+
+fn should_prefer_apple_wrapper(quality: AppleMusicQuality, has_wrapper: bool) -> bool {
+    has_wrapper
+        && matches!(
+            quality,
+            AppleMusicQuality::Standard | AppleMusicQuality::Lossless | AppleMusicQuality::HiRes
+        )
+}
+
+fn apple_wrapper_internal_url(host: &str, id: &str, quality: AppleMusicQuality) -> String {
+    format!(
+        "{APPLE_WRAPPER_SCHEME}{host}/{id}?quality={}",
+        quality.as_str()
+    )
+}
+
+fn apple_widevine_internal_url(id: &str, quality: AppleMusicQuality) -> String {
+    format!("{APPLE_WIDEVINE_SCHEME}{id}?quality={}", quality.as_str())
 }
 
 pub(super) async fn download_internal_url_with_progress<F>(
@@ -289,6 +321,42 @@ pub(super) async fn download_internal_url_with_progress<F>(
 where
     F: FnMut(DownloadProgress) + Send,
 {
+    if let Some(payload) = url.strip_prefix(APPLE_WIDEVINE_SCHEME) {
+        let (track_id, query) = payload.split_once('?').unwrap_or((payload, ""));
+        if track_id.trim().is_empty() {
+            return Err(BotError::Custom(
+                "Apple Music Widevine URL 缺少 track id".to_string(),
+            ));
+        }
+        let quality = query
+            .split('&')
+            .filter_map(|part| part.split_once('='))
+            .find_map(|(key, value)| (key == "quality").then_some(value))
+            .map(quality_from_str)
+            .unwrap_or(AppleMusicQuality::High);
+        match download_via_widevine_with_progress(track_id, progress).await {
+            Ok(data) => return Ok(data),
+            Err(err) if quality == AppleMusicQuality::High => {
+                if let Some(host) = apple_wrapper_host_opt() {
+                    return download_via_wrapper_with_progress(
+                        &host,
+                        track_id,
+                        AppleMusicQuality::High,
+                        progress,
+                    )
+                    .await
+                    .map_err(|wrapper_err| {
+                        BotError::Custom(format!(
+                            "Apple Music Widevine 解密失败：{err}；wrapper fallback 也失败：{wrapper_err}"
+                        ))
+                    });
+                }
+                return Err(err);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
     let payload = url
         .strip_prefix(APPLE_WRAPPER_SCHEME)
         .ok_or_else(|| BotError::Custom("Unknown Apple Music internal URL".to_string()))?;
@@ -303,8 +371,8 @@ where
         .split('&')
         .filter_map(|part| part.split_once('='))
         .find_map(|(key, value)| (key == "quality").then_some(value))
-        .map(apple_quality_from_str)
-        .unwrap_or_else(apple_quality);
+        .map(quality_from_str)
+        .unwrap_or(AppleMusicQuality::High);
     download_via_wrapper_with_progress(host, track_id, quality, progress).await
 }
 
@@ -315,6 +383,37 @@ async fn download_via_wrapper(
 ) -> Result<Vec<u8>, BotError> {
     let mut progress = |_| {};
     download_via_wrapper_with_progress(host, track_id, quality, &mut progress).await
+}
+
+async fn download_via_widevine_with_progress<F>(
+    track_id: &str,
+    progress: &mut F,
+) -> Result<Vec<u8>, BotError>
+where
+    F: FnMut(DownloadProgress) + Send,
+{
+    let media_user_token =
+        normalize_media_user_token(SETTINGS.music.applemusic.media_user_token.trim());
+    if media_user_token.is_empty() {
+        return Err(BotError::Custom(
+            "Apple Music Widevine 下载需要配置 media_user_token".to_string(),
+        ));
+    }
+    let assets = get_apple_webplayback_assets(track_id, media_user_token.clone()).await?;
+    let asset = select_widevine_asset(&assets)
+        .ok_or_else(|| BotError::Custom("Apple Music 没有返回 Widevine AAC 资源".to_string()))?;
+    let hls = download_text(&asset.url).await?;
+    let widevine_media = parse_widevine_hls(&asset.url, &hls)?;
+    let encrypted = download_bytes_with_progress(&widevine_media.mp4_url, progress).await?;
+    let key = acquire_widevine_content_key(
+        track_id,
+        &widevine_media.kid,
+        &widevine_media.uri_prefix,
+        &widevine_media.kid_b64,
+        &media_user_token,
+    )
+    .await?;
+    decrypt_cenc_fmp4(encrypted, &key)
 }
 
 async fn download_via_wrapper_with_progress<F>(
@@ -357,6 +456,304 @@ where
     Err(last_error.unwrap_or_else(|| BotError::Custom("Apple Music wrapper 解密失败".to_string())))
 }
 
+fn select_widevine_asset(assets: &[WebPlaybackAsset]) -> Option<&WebPlaybackAsset> {
+    assets
+        .iter()
+        .find(|asset| asset.flavor.as_deref() == Some("28:ctrp256"))
+        .or_else(|| assets.iter().max_by_key(|asset| asset.metadata.bit_rate))
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct WidevineHlsMedia {
+    mp4_url: String,
+    kid_b64: String,
+    kid: [u8; 16],
+    uri_prefix: String,
+}
+
+fn parse_widevine_hls(m3u8_url: &str, content: &str) -> Result<WidevineHlsMedia, BotError> {
+    let mut mp4_url = String::new();
+    let mut kid_b64 = String::new();
+    let mut uri_prefix = String::new();
+    for line in content.lines().map(str::trim) {
+        if line.contains("#EXT-X-KEY")
+            && let Some(uri) = extract_quoted_attr(line, "URI")
+            && let Some((prefix, kid)) = uri.split_once(',')
+        {
+            uri_prefix = prefix.to_string();
+            kid_b64 = kid.to_string();
+        }
+        if line.contains("#EXT-X-MAP")
+            && let Some(uri) = extract_quoted_attr(line, "URI")
+        {
+            mp4_url = absolute_hls_url(m3u8_url, &uri);
+        }
+        if !line.starts_with('#')
+            && !line.is_empty()
+            && (line.ends_with(".mp4") || line.ends_with(".m4a") || line.ends_with(".m4s"))
+            && mp4_url.is_empty()
+        {
+            mp4_url = absolute_hls_url(m3u8_url, line);
+        }
+    }
+    if mp4_url.is_empty() {
+        return Err(BotError::Custom(
+            "Apple Music Widevine playlist 缺少 MP4 URL".to_string(),
+        ));
+    }
+    let kid_vec = general_purpose::STANDARD
+        .decode(kid_b64.as_bytes())
+        .map_err(|e| BotError::Custom(format!("Apple Music Widevine KID 解码失败：{e}")))?;
+    let kid: [u8; 16] = kid_vec
+        .try_into()
+        .map_err(|_| BotError::Custom("Apple Music Widevine KID 长度错误".to_string()))?;
+    Ok(WidevineHlsMedia {
+        mp4_url,
+        kid_b64,
+        kid,
+        uri_prefix,
+    })
+}
+
+fn extract_quoted_attr(line: &str, attr: &str) -> Option<String> {
+    let marker = format!(r#"{attr}=""#);
+    let start = line.find(&marker)? + marker.len();
+    let end = line[start..].find('"')?;
+    Some(line[start..start + end].to_string())
+}
+
+async fn acquire_widevine_content_key(
+    track_id: &str,
+    kid: &[u8; 16],
+    uri_prefix: &str,
+    kid_b64: &str,
+    media_user_token: &str,
+) -> Result<Vec<u8>, BotError> {
+    let device = load_widevine_device()?;
+    let pssh = build_widevine_pssh(kid)?;
+    let request = Cdm::new(device)
+        .open()
+        .get_license_request(pssh, LicenseType::AUTOMATIC)
+        .map_err(|e| BotError::Custom(format!("Apple Music Widevine challenge 生成失败：{e}")))?;
+    let challenge = request
+        .challenge()
+        .map_err(|e| BotError::Custom(format!("Apple Music Widevine challenge 签名失败：{e}")))?;
+    let developer_token = ensure_developer_token().await?;
+    let response = CLIENT
+        .post(WEB_PLAYBACK_LICENSE_URL)
+        .header("Authorization", format!("Bearer {developer_token}"))
+        .header("Content-Type", "application/json")
+        .header("Origin", APPLE_MUSIC_ORIGIN)
+        .header("User-Agent", APPLE_MUSIC_UA)
+        .header("media-user-token", media_user_token)
+        .json(&serde_json::json!({
+            "challenge": general_purpose::STANDARD.encode(challenge),
+            "key-system": "com.widevine.alpha",
+            "uri": format!("{uri_prefix},{kid_b64}"),
+            "adamId": track_id,
+            "isLibrary": false,
+            "user-initiated": true,
+        }))
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        return Err(BotError::Custom(format!(
+            "Apple Music Widevine license 请求失败：HTTP {}",
+            response.status()
+        )));
+    }
+    let response: WidevineLicenseResponse = response.json().await?;
+    if response.status != 0 {
+        return Err(BotError::Custom(format!(
+            "Apple Music Widevine license 状态异常：{}",
+            response.status
+        )));
+    }
+    let license = general_purpose::STANDARD
+        .decode(response.license.as_bytes())
+        .map_err(|e| BotError::Custom(format!("Apple Music Widevine license 解码失败：{e}")))?;
+    let keys = request
+        .get_keys(&license)
+        .map_err(|e| BotError::Custom(format!("Apple Music Widevine license 解析失败：{e}")))?;
+    let key = keys
+        .content_key(kid)
+        .or_else(|_| keys.first_of_type(KeyType::CONTENT))
+        .map_err(|e| BotError::Custom(format!("Apple Music Widevine content key 缺失：{e}")))?;
+    Ok(key.key.clone())
+}
+
+#[derive(Deserialize)]
+struct WidevineLicenseResponse {
+    license: String,
+    status: i32,
+}
+
+fn build_widevine_pssh(kid: &[u8; 16]) -> Result<Pssh, BotError> {
+    let mut data = WidevinePsshData::new();
+    data.key_ids.push(kid.to_vec());
+    data.set_algorithm(widevine_pssh_data::Algorithm::AESCTR);
+    let bytes = data
+        .write_to_bytes()
+        .map_err(|e| BotError::Custom(format!("Apple Music Widevine PSSH 序列化失败：{e}")))?;
+    Pssh::from_bytes(&bytes)
+        .map_err(|e| BotError::Custom(format!("Apple Music Widevine PSSH 解析失败：{e}")))
+}
+
+fn load_widevine_device() -> Result<Device, BotError> {
+    let client_id_path = SETTINGS.music.applemusic.wv_client_id.trim();
+    let private_key_path = SETTINGS.music.applemusic.wv_private_key.trim();
+    if !client_id_path.is_empty() && !private_key_path.is_empty() {
+        let client_id = fs::read(client_id_path).map_err(|e| {
+            BotError::Custom(format!("Apple Music Widevine client_id 读取失败：{e}"))
+        })?;
+        let private_key = fs::read_to_string(private_key_path).map_err(|e| {
+            BotError::Custom(format!("Apple Music Widevine private_key 读取失败：{e}"))
+        })?;
+        let private_key = RsaPrivateKey::from_pkcs1_pem(&private_key).map_err(|e| {
+            BotError::Custom(format!("Apple Music Widevine private_key 解析失败：{e}"))
+        })?;
+        return Device::new(
+            DeviceType::ANDROID,
+            SecurityLevel::L3,
+            private_key,
+            &client_id,
+        )
+        .map_err(|e| BotError::Custom(format!("Apple Music Widevine device 初始化失败：{e}")));
+    }
+
+    let bytes = general_purpose::STANDARD
+        .decode(DEFAULT_WV_DEVICE_WVD_BASE64.as_bytes())
+        .map_err(|e| BotError::Custom(format!("Apple Music 默认 Widevine device 解码失败：{e}")))?;
+    Device::read_wvd(Cursor::new(bytes))
+        .map_err(|e| BotError::Custom(format!("Apple Music 默认 Widevine device 初始化失败：{e}")))
+}
+
+fn decrypt_cenc_fmp4(mut data: Vec<u8>, key: &[u8]) -> Result<Vec<u8>, BotError> {
+    if key.len() != 16 {
+        return Err(BotError::Custom(
+            "Apple Music Widevine content key 长度错误".to_string(),
+        ));
+    }
+    let tenc = parse_tenc_from_init(&data)?;
+    if tenc.default_crypt_byte_block != 0 || tenc.default_skip_byte_block != 0 {
+        return Err(BotError::Custom(
+            "Apple Music Widevine native 解密暂不支持 pattern encryption".to_string(),
+        ));
+    }
+
+    let mut pos = 0usize;
+    while let Some(box_info) = read_mp4_box(&data, pos)? {
+        if &box_info.typ != b"moof" {
+            pos = box_info.end();
+            continue;
+        }
+        let moof = box_info;
+        let mdat = read_mp4_box(&data, moof.end())?
+            .filter(|next| &next.typ == b"mdat")
+            .ok_or_else(|| BotError::Custom("MP4 moof 后缺少 mdat".to_string()))?;
+        let mut traf_pos = moof.payload_start();
+        while let Some(traf) = read_mp4_box(&data, traf_pos)? {
+            if traf.end() > moof.end() {
+                break;
+            }
+            if &traf.typ == b"traf" {
+                let parsed = parse_traf(&data, traf, &tenc)?;
+                let start = parsed
+                    .data_offset
+                    .map(|offset| (moof.start as i64 + offset as i64) as usize)
+                    .unwrap_or_else(|| mdat.payload_start());
+                decrypt_cenc_samples(
+                    &mut data,
+                    start,
+                    &parsed.samples,
+                    parsed.senc.as_ref(),
+                    &tenc,
+                    key,
+                )?;
+            }
+            traf_pos = traf.end();
+        }
+        pos = mdat.end();
+    }
+
+    remux_decrypted_fmp4_to_progressive(&data)
+}
+
+fn decrypt_cenc_samples(
+    data: &mut [u8],
+    sample_start: usize,
+    samples: &[TrunSampleInfo],
+    senc: Option<&SencBox>,
+    tenc: &TencBox,
+    key: &[u8],
+) -> Result<(), BotError> {
+    let mut pos = sample_start;
+    for (index, sample) in samples.iter().enumerate() {
+        let end = pos + sample.size as usize;
+        if end > data.len() {
+            return Err(BotError::Custom("MP4 sample 超出文件范围".to_string()));
+        }
+        let senc_sample = senc.and_then(|senc| senc.samples.get(index));
+        let iv = cenc_sample_iv(senc_sample, tenc)?;
+        let subsamples = senc_sample
+            .map(|sample| sample.subsamples.as_slice())
+            .unwrap_or(&[]);
+        decrypt_cenc_sample(&mut data[pos..end], subsamples, key, &iv)?;
+        pos = end;
+    }
+    Ok(())
+}
+
+fn cenc_sample_iv(
+    sample: Option<&oxideav_mp4::cenc::SencSample>,
+    tenc: &TencBox,
+) -> Result<[u8; 16], BotError> {
+    let iv = sample
+        .map(|sample| sample.initialization_vector.as_slice())
+        .filter(|iv| !iv.is_empty())
+        .or(tenc.default_constant_iv.as_deref())
+        .ok_or_else(|| BotError::Custom("Apple Music Widevine sample IV 缺失".to_string()))?;
+    let mut out = [0u8; 16];
+    match iv.len() {
+        8 => out[..8].copy_from_slice(iv),
+        16 => out.copy_from_slice(iv),
+        len => {
+            return Err(BotError::Custom(format!(
+                "Apple Music Widevine sample IV 长度错误：{len}"
+            )));
+        }
+    }
+    Ok(out)
+}
+
+fn decrypt_cenc_sample(
+    sample: &mut [u8],
+    subsamples: &[SubsampleEntry],
+    key: &[u8],
+    iv: &[u8; 16],
+) -> Result<(), BotError> {
+    let mut cipher = Aes128Ctr::new_from_slices(key, iv)
+        .map_err(|e| BotError::Custom(format!("Apple Music Widevine AES-CTR 初始化失败：{e}")))?;
+    if subsamples.is_empty() {
+        cipher.apply_keystream(sample);
+        return Ok(());
+    }
+
+    let mut pos = 0usize;
+    for subsample in subsamples {
+        pos += subsample.bytes_of_clear_data as usize;
+        let end = pos + subsample.bytes_of_protected_data as usize;
+        if end > sample.len() {
+            return Err(BotError::Custom(
+                "MP4 subsample protected range 超出 sample".to_string(),
+            ));
+        }
+        cipher.apply_keystream(&mut sample[pos..end]);
+        pos = end;
+    }
+    Ok(())
+}
+
 fn is_retryable_wrapper_error(err: &BotError) -> bool {
     match err {
         BotError::Custom(message) => {
@@ -387,6 +784,7 @@ async fn wrapper_get_m3u8_url(host: &str, track_id: &str) -> Result<String, BotE
     let mut stream = tokio::time::timeout(apple_timeout(), tokio::net::TcpStream::connect(&addr))
         .await
         .map_err(|_| BotError::Custom(format!("Apple Music wrapper m3u8 连接超时：{addr}")))??;
+    stream.set_nodelay(true)?;
     let id = track_id.as_bytes();
     if id.len() > u8::MAX as usize {
         return Err(BotError::Custom("Apple Music track id 过长".to_string()));
@@ -447,38 +845,6 @@ where
         });
     }
     Ok(buf)
-}
-
-async fn resolve_hls_to_media(m3u8_url: &str) -> Result<String, BotError> {
-    let response = CLIENT
-        .get(m3u8_url)
-        .header("User-Agent", APPLE_MUSIC_UA)
-        .send()
-        .await?;
-    if !response.status().is_success() {
-        return Err(BotError::Custom(format!(
-            "Apple Music HLS 请求失败：HTTP {}",
-            response.status()
-        )));
-    }
-    let text = response.text().await?;
-    let media = text
-        .lines()
-        .map(str::trim)
-        .find(|line| {
-            !line.is_empty()
-                && !line.starts_with('#')
-                && (line.ends_with(".mp4") || line.ends_with(".m4a") || line.ends_with(".m4s"))
-        })
-        .ok_or_else(|| BotError::Custom("Apple Music HLS 没有找到媒体片段".to_string()))?;
-    if media.starts_with("http://") || media.starts_with("https://") {
-        return Ok(media.to_string());
-    }
-    let base = m3u8_url
-        .rsplit_once('/')
-        .map(|(base, _)| format!("{base}/"))
-        .unwrap_or_else(|| m3u8_url.to_string());
-    Ok(format!("{base}{media}"))
 }
 
 async fn apple_get_json<T: serde::de::DeserializeOwned>(
@@ -676,7 +1042,6 @@ fn ensure_apple_enabled() -> Result<(), BotError> {
 
 fn validate_apple_download_environment() -> Result<(), BotError> {
     let config = &SETTINGS.music.applemusic;
-    let has_wrapper = !config.wrapper_host.trim().is_empty();
     let has_widevine_override =
         !config.wv_client_id.trim().is_empty() || !config.wv_private_key.trim().is_empty();
     if has_widevine_override
@@ -684,12 +1049,6 @@ fn validate_apple_download_environment() -> Result<(), BotError> {
     {
         return Err(BotError::Custom(
             "Apple Music Widevine 覆盖配置需要同时填写 music.applemusic.wv_client_id 和 music.applemusic.wv_private_key"
-                .to_string(),
-        ));
-    }
-    if !has_wrapper && !has_widevine_override {
-        return Err(BotError::Custom(
-            "Apple Music 完整下载环境未配置：请配置 wrapper_host，或同时配置 wv_client_id/wv_private_key"
                 .to_string(),
         ));
     }
@@ -724,10 +1083,6 @@ enum AppleMusicQuality {
 }
 
 impl AppleMusicQuality {
-    fn needs_wrapper(self) -> bool {
-        matches!(self, Self::Lossless | Self::HiRes)
-    }
-
     fn as_str(self) -> &'static str {
         match self {
             Self::Standard => "standard",
@@ -738,11 +1093,7 @@ impl AppleMusicQuality {
     }
 }
 
-fn apple_quality() -> AppleMusicQuality {
-    apple_quality_from_str(SETTINGS.music.applemusic.quality.trim())
-}
-
-fn apple_quality_from_str(value: &str) -> AppleMusicQuality {
+fn quality_from_str(value: &str) -> AppleMusicQuality {
     match value.trim().to_ascii_lowercase().as_str() {
         "standard" | "std" | "128" => AppleMusicQuality::Standard,
         "lossless" | "alac" | "无损" => AppleMusicQuality::Lossless,
@@ -1232,9 +1583,11 @@ async fn decrypt_fmp4_with_wrapper(
 ) -> Result<Vec<u8>, BotError> {
     let tenc = parse_tenc_from_init(&data)?;
     let addr = format!("{host}:{APPLE_WRAPPER_DECRYPT_PORT}");
-    let mut stream = tokio::time::timeout(apple_timeout(), tokio::net::TcpStream::connect(&addr))
+    let stream = tokio::time::timeout(apple_timeout(), tokio::net::TcpStream::connect(&addr))
         .await
         .map_err(|_| BotError::Custom(format!("Apple Music wrapper decrypt 连接超时：{addr}")))??;
+    stream.set_nodelay(true)?;
+    let mut stream = BufStream::new(stream);
 
     let mut pos = 0usize;
     let mut fragment_index = 0usize;
@@ -1280,6 +1633,7 @@ async fn decrypt_fmp4_with_wrapper(
         pos = mdat.end();
     }
     wrapper_write_all(&mut stream, &[0, 0, 0, 0, 0], "decrypt finish").await?;
+    wrapper_flush(&mut stream, "decrypt finish").await?;
     remux_decrypted_fmp4_to_progressive(&data)
 }
 
@@ -2003,12 +2357,15 @@ fn alac_patch_in_place(data: &mut [u8], offset: usize, size: usize, body_end_bit
     true
 }
 
-async fn send_fragment_key(
-    stream: &mut tokio::net::TcpStream,
+async fn send_fragment_key<W>(
+    stream: &mut W,
     track_id: &str,
     key_uri: &str,
     fragment_index: usize,
-) -> Result<(), BotError> {
+) -> Result<(), BotError>
+where
+    W: AsyncWrite + Unpin,
+{
     if key_uri.trim().is_empty() {
         return Err(BotError::Custom("Apple Music segment key 为空".to_string()));
     }
@@ -2024,10 +2381,10 @@ async fn send_fragment_key(
     write_len_prefixed(stream, key_uri).await
 }
 
-async fn write_len_prefixed(
-    stream: &mut tokio::net::TcpStream,
-    value: &str,
-) -> Result<(), BotError> {
+async fn write_len_prefixed<W>(stream: &mut W, value: &str) -> Result<(), BotError>
+where
+    W: AsyncWrite + Unpin,
+{
     let bytes = value.as_bytes();
     if bytes.len() > u8::MAX as usize {
         return Err(BotError::Custom(
@@ -2039,14 +2396,17 @@ async fn write_len_prefixed(
     Ok(())
 }
 
-async fn decrypt_samples(
-    stream: &mut tokio::net::TcpStream,
+async fn decrypt_samples<S>(
+    stream: &mut S,
     data: &mut [u8],
     sample_start: usize,
     samples: &[TrunSampleInfo],
     senc: Option<&SencBox>,
     tenc: &TencBox,
-) -> Result<(), BotError> {
+) -> Result<(), BotError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let mut pos = sample_start;
     for (index, sample) in samples.iter().enumerate() {
         let end = pos + sample.size as usize;
@@ -2063,12 +2423,15 @@ async fn decrypt_samples(
     Ok(())
 }
 
-async fn decrypt_sample(
-    stream: &mut tokio::net::TcpStream,
+async fn decrypt_sample<S>(
+    stream: &mut S,
     sample: &mut [u8],
     subsamples: &[SubsampleEntry],
     tenc: &TencBox,
-) -> Result<(), BotError> {
+) -> Result<(), BotError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     if subsamples.is_empty() {
         return decrypt_cbcs_raw(stream, sample, tenc).await;
     }
@@ -2087,11 +2450,14 @@ async fn decrypt_sample(
     Ok(())
 }
 
-async fn decrypt_cbcs_raw(
-    stream: &mut tokio::net::TcpStream,
+async fn decrypt_cbcs_raw<S>(
+    stream: &mut S,
     data: &mut [u8],
     tenc: &TencBox,
-) -> Result<(), BotError> {
+) -> Result<(), BotError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let decrypt_block_len = tenc.default_crypt_byte_block as usize * 16;
     let skip_block_len = tenc.default_skip_byte_block as usize * 16;
     if skip_block_len == 0 {
@@ -2137,22 +2503,35 @@ async fn decrypt_cbcs_raw(
     Ok(())
 }
 
-async fn wrapper_write_all(
-    stream: &mut tokio::net::TcpStream,
-    data: &[u8],
-    context: &str,
-) -> Result<(), BotError> {
+async fn wrapper_write_all<W>(stream: &mut W, data: &[u8], context: &str) -> Result<(), BotError>
+where
+    W: AsyncWrite + Unpin,
+{
     tokio::time::timeout(APPLE_WRAPPER_IO_TIMEOUT, stream.write_all(data))
         .await
         .map_err(|_| BotError::Custom(format!("Apple Music wrapper 写入超时：{context}")))??;
     Ok(())
 }
 
-async fn wrapper_read_exact(
-    stream: &mut tokio::net::TcpStream,
+async fn wrapper_flush<W>(stream: &mut W, context: &str) -> Result<(), BotError>
+where
+    W: AsyncWrite + Unpin,
+{
+    tokio::time::timeout(APPLE_WRAPPER_IO_TIMEOUT, stream.flush())
+        .await
+        .map_err(|_| BotError::Custom(format!("Apple Music wrapper flush 超时：{context}")))??;
+    Ok(())
+}
+
+async fn wrapper_read_exact<S>(
+    stream: &mut S,
     data: &mut [u8],
     context: &str,
-) -> Result<(), BotError> {
+) -> Result<(), BotError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    wrapper_flush(stream, context).await?;
     tokio::time::timeout(APPLE_WRAPPER_IO_TIMEOUT, stream.read_exact(data))
         .await
         .map_err(|_| BotError::Custom(format!("Apple Music wrapper 读取超时：{context}")))??;
@@ -2216,16 +2595,32 @@ mod tests {
 
     #[test]
     fn parses_user_quality_values() {
-        assert_eq!(
-            apple_quality_from_str("standard"),
-            AppleMusicQuality::Standard
-        );
-        assert_eq!(
-            apple_quality_from_str("lossless"),
-            AppleMusicQuality::Lossless
-        );
-        assert_eq!(apple_quality_from_str("hires"), AppleMusicQuality::HiRes);
+        assert_eq!(quality_from_str("standard"), AppleMusicQuality::Standard);
+        assert_eq!(quality_from_str("lossless"), AppleMusicQuality::Lossless);
+        assert_eq!(quality_from_str("hires"), AppleMusicQuality::HiRes);
         assert_eq!(AppleMusicQuality::Lossless.as_str(), "lossless");
+    }
+
+    #[test]
+    fn apple_wrapper_route_matches_source_bot_priority() {
+        assert!(should_prefer_apple_wrapper(
+            AppleMusicQuality::Standard,
+            true
+        ));
+        assert!(should_prefer_apple_wrapper(
+            AppleMusicQuality::Lossless,
+            true
+        ));
+        assert!(should_prefer_apple_wrapper(AppleMusicQuality::HiRes, true));
+        assert!(!should_prefer_apple_wrapper(AppleMusicQuality::High, true));
+        assert!(!should_prefer_apple_wrapper(
+            AppleMusicQuality::Lossless,
+            false
+        ));
+        assert_eq!(
+            apple_wrapper_internal_url("127.0.0.1", "1624001324", AppleMusicQuality::Lossless),
+            "applemusic-wrapper://127.0.0.1/1624001324?quality=lossless"
+        );
     }
 
     #[test]
@@ -2409,14 +2804,14 @@ track.m4a
     }
 
     #[tokio::test]
-    #[ignore = "requires live Apple Music credentials, wrapper, and ffprobe"]
-    async fn live_wrapper_high_specific_track_id_is_aac_without_telegram() {
+    #[ignore = "requires live Apple Music credentials, ffprobe, and ffmpeg"]
+    async fn live_high_specific_track_id_is_aac_without_telegram() {
         let track_id =
             std::env::var("APPLE_MUSIC_TEST_ID").unwrap_or_else(|_| "1624001324".to_string());
         let track = resolve_with_quality(&track_id, Some(&track_id), "high")
             .await
             .unwrap();
-        assert!(track.url.starts_with(APPLE_WRAPPER_SCHEME));
+        assert!(!track.url.starts_with(APPLE_WRAPPER_SCHEME));
         let media = download_track_media(&track).await.unwrap();
         let path = std::env::temp_dir().join(format!("bot-rs-applemusic-high-{track_id}.m4a"));
         std::fs::write(&path, &media.audio).unwrap();
@@ -2440,6 +2835,17 @@ track.m4a
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("codec_name=aac"), "{stdout}");
         assert!(stdout.contains("duration="), "{stdout}");
+        let decode = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-t", "5", "-i"])
+            .arg(&path)
+            .args(["-f", "null", "-"])
+            .output()
+            .unwrap();
+        assert!(
+            decode.status.success(),
+            "{}",
+            String::from_utf8_lossy(&decode.stderr)
+        );
         eprintln!(
             "{} -> {} bytes\n{stdout}",
             track.file_name(),

@@ -2,16 +2,16 @@ use super::*;
 use crate::index_builder;
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_PLATFORM: &str = "tencent";
-const DEFAULT_APPLE_QUALITY: &str = "high";
+const DEFAULT_PLATFORM: &str = "soda";
+const DEFAULT_QUALITY: &str = "high";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct UserMusicSettings {
     pub user_id: i64,
     #[serde(default = "default_platform")]
     pub default_platform: String,
-    #[serde(default = "default_apple_quality")]
-    pub apple_quality: String,
+    #[serde(default = "default_quality")]
+    pub quality: String,
     #[serde(default = "default_true")]
     pub send_cover: bool,
 }
@@ -21,7 +21,7 @@ impl UserMusicSettings {
         Self {
             user_id,
             default_platform: DEFAULT_PLATFORM.to_string(),
-            apple_quality: default_apple_quality(),
+            quality: default_quality(),
             send_cover: true,
         }
     }
@@ -31,14 +31,8 @@ pub fn default_platform() -> String {
     DEFAULT_PLATFORM.to_string()
 }
 
-pub fn default_apple_quality() -> String {
-    SETTINGS
-        .music
-        .applemusic
-        .quality
-        .trim()
-        .to_string()
-        .if_empty(DEFAULT_APPLE_QUALITY)
+pub fn default_quality() -> String {
+    DEFAULT_QUALITY.to_string()
 }
 
 fn default_true() -> bool {
@@ -46,9 +40,7 @@ fn default_true() -> bool {
 }
 
 async fn async_collection() -> Collection<UserMusicSettings> {
-    DB.get()
-        .await
-        .collection::<UserMusicSettings>("music_settings")
+    db().await.collection::<UserMusicSettings>("music_settings")
 }
 
 pub async fn create_index(db: &mongodb::Database) {
@@ -112,22 +104,21 @@ fn normalize_settings(mut settings: UserMusicSettings) -> UserMusicSettings {
     if settings.default_platform.trim().is_empty() {
         settings.default_platform = default_platform();
     }
-    if settings.apple_quality.trim().is_empty() {
-        settings.apple_quality = default_apple_quality();
+    if settings.quality.trim().is_empty() {
+        settings.quality = default_quality();
     }
     settings
 }
 
-trait IfEmpty {
-    fn if_empty(self, fallback: &str) -> String;
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl IfEmpty for String {
-    fn if_empty(self, fallback: &str) -> String {
-        if self.trim().is_empty() {
-            fallback.to_string()
-        } else {
-            self
-        }
+    #[test]
+    fn defaults_use_soda_and_high_quality() {
+        let settings = UserMusicSettings::defaults_for(1);
+
+        assert_eq!(settings.default_platform, "soda");
+        assert_eq!(settings.quality, "high");
     }
 }

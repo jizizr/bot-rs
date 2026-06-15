@@ -26,11 +26,11 @@ mod tencent;
 const CALLBACK_PREFIX: &str = "music";
 const CALLBACK_LIMIT: usize = 64;
 const MUSIC_PLATFORM_OPTIONS: &[(&str, &str)] = &[
+    ("soda", "汽水"),
     ("tencent", "QQ音乐"),
     ("netease", "网易云"),
     ("kugou", "酷狗"),
     ("bilibili", "Bilibili"),
-    ("soda", "汽水"),
     ("applemusic", "Apple Music"),
 ];
 const MUSIC_QUALITY_OPTIONS: &[(&str, &str)] = &[
@@ -246,12 +246,11 @@ async fn resolve_track(
     settings: &UserMusicSettings,
 ) -> Result<MusicTrack, BotError> {
     if query.platform == MusicPlatform::AppleMusic {
-        return applemusic::resolve_with_quality(
-            &query.keyword,
-            selected_id,
-            &settings.apple_quality,
-        )
-        .await;
+        return applemusic::resolve_with_quality(&query.keyword, selected_id, &settings.quality)
+            .await;
+    }
+    if query.platform == MusicPlatform::Soda {
+        return soda::resolve_with_quality(&query.keyword, selected_id, &settings.quality).await;
     }
     provider_for(query.platform)
         .resolve(&query.keyword, selected_id)
@@ -270,7 +269,7 @@ fn music_settings_text(settings: &UserMusicSettings) -> String {
     format!(
         "音乐设置\n\n🎵 默认平台: {}\n🎧 默认音质: {}\n🖼️ 发送封面: {}\n\n点击下方按钮修改设置",
         platform_label(&settings.default_platform),
-        quality_label(&settings.apple_quality),
+        quality_label(&settings.quality),
         if settings.send_cover {
             "开启"
         } else {
@@ -308,7 +307,7 @@ fn music_settings_menu(settings: &UserMusicSettings) -> InlineKeyboardMarkup {
                     .encode()
                     .map(|callback| {
                         InlineKeyboardButton::callback(
-                            selected_label(label, settings.apple_quality == *value),
+                            selected_label(label, settings.quality == *value),
                             callback,
                         )
                     })
@@ -432,8 +431,8 @@ async fn handle_setting_callback(
                     .await?;
                 return Ok(());
             }
-            if settings.apple_quality != quality {
-                settings.apple_quality = quality.clone();
+            if settings.quality != quality {
+                settings.quality = quality.clone();
                 changed = true;
             }
             format!("音质已设置为 {}", quality_label(&quality))
@@ -757,30 +756,36 @@ fn download_progress_updater(
 
     let mut last_progress_text = String::new();
     let mut last_progress_at: Option<Instant> = None;
-    let mut has_reported = false;
+    let mut reported_complete = false;
     let progress = move |progress: DownloadProgress| {
         let now = Instant::now();
-        if last_progress_at
-            .map(|last| now.duration_since(last) < DOWNLOAD_PROGRESS_MIN_INTERVAL)
-            .unwrap_or(false)
-        {
+        let is_complete = progress
+            .total
+            .map(|total| total > 0 && progress.written >= total)
+            .unwrap_or(false);
+        if is_complete && reported_complete {
             return;
         }
-        if progress
-            .total
-            .map(|total| progress.written >= total && has_reported)
-            .unwrap_or(false)
+        if !is_complete
+            && last_progress_at
+                .map(|last| now.duration_since(last) < DOWNLOAD_PROGRESS_MIN_INTERVAL)
+                .unwrap_or(false)
         {
             return;
         }
 
         let text = format_download_progress(&title, progress);
         if text == last_progress_text {
+            if is_complete {
+                reported_complete = true;
+            }
             return;
         }
         last_progress_text = text.clone();
         last_progress_at = Some(now);
-        has_reported = true;
+        if is_complete {
+            reported_complete = true;
+        }
         let _ = tx.send(text);
     };
 
@@ -1131,7 +1136,7 @@ mod tests {
         UserMusicSettings {
             user_id: 1,
             default_platform: default_platform.to_string(),
-            apple_quality: "high".to_string(),
+            quality: "high".to_string(),
             send_cover: true,
         }
     }

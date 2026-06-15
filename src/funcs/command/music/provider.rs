@@ -283,8 +283,11 @@ pub async fn download_url_with_headers_progress<F>(
 where
     F: FnMut(DownloadProgress) + Send,
 {
-    if url.starts_with("applemusic-wrapper://") {
+    if url.starts_with("applemusic-wrapper://") || url.starts_with("applemusic-widevine://") {
         return super::applemusic::download_internal_url_with_progress(url, progress).await;
+    }
+    if url.starts_with("soda-download://") {
+        return super::soda::download_internal_url_with_progress(url, progress).await;
     }
 
     let mut request = CLIENT.get(url);
