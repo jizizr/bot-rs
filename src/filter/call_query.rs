@@ -25,10 +25,7 @@ pub async fn call_query_handler(bot: Bot, mut q: CallbackQuery) -> BotResult {
     let Some(binding) = q.data.clone() else {
         return Ok(());
     };
-    let (command, payload) = binding
-        .split_once(' ')
-        .map(|(command, payload)| (command, payload))
-        .unwrap_or((binding.as_str(), ""));
+    let (command, payload) = binding.split_once(' ').unwrap_or((binding.as_str(), ""));
     q.data = Some(payload.to_string());
 
     let mut blog = BotLogBuilder::from(&q);

@@ -54,6 +54,8 @@ pub struct AppleMusic {
     pub timeout: u64,
     #[serde(default)]
     pub wrapper_host: String,
+    #[serde(default = "default_apple_wrapper_track_concurrency")]
+    pub wrapper_track_concurrency: usize,
     #[serde(default)]
     pub wv_client_id: String,
     #[serde(default)]
@@ -69,6 +71,7 @@ impl Default for AppleMusic {
             language: default_apple_language(),
             timeout: default_apple_timeout(),
             wrapper_host: String::new(),
+            wrapper_track_concurrency: default_apple_wrapper_track_concurrency(),
             wv_client_id: String::new(),
             wv_private_key: String::new(),
         }
@@ -122,6 +125,10 @@ fn default_apple_language() -> String {
 
 fn default_apple_timeout() -> u64 {
     30
+}
+
+fn default_apple_wrapper_track_concurrency() -> usize {
+    1
 }
 
 impl Default for Settings {
@@ -183,5 +190,6 @@ mod tests {
         assert_eq!(settings.music.applemusic.storefront, "us");
         assert_eq!(settings.music.applemusic.language, "en-US");
         assert_eq!(settings.music.applemusic.timeout, 30);
+        assert_eq!(settings.music.applemusic.wrapper_track_concurrency, 1);
     }
 }

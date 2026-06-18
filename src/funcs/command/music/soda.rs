@@ -70,7 +70,7 @@ async fn resolve_soda_track(
                     .all(|c| c.is_ascii_digit())
                     .then(|| keyword.trim().to_string())
             })
-            .unwrap_or_else(|| String::new()),
+            .unwrap_or_default(),
     };
     let id = if id.is_empty() {
         SODA_PROVIDER
@@ -916,8 +916,12 @@ fn parse_soda_sample_ranges(
         {
             chunk_end = next.first_chunk as usize - 1;
         }
-        for chunk_index in chunk_start..chunk_end.min(chunk_offsets.len()) {
-            let mut offset = chunk_offsets[chunk_index] as usize;
+        for chunk_offset in chunk_offsets
+            .iter()
+            .take(chunk_end.min(chunk_offsets.len()))
+            .skip(chunk_start)
+        {
+            let mut offset = *chunk_offset as usize;
             for _ in 0..entry.samples_per_chunk {
                 if sample_index >= sample_sizes.len() {
                     break;

@@ -188,6 +188,7 @@ pub struct DownloadProgress {
     pub total: Option<u64>,
 }
 
+#[cfg(test)]
 pub fn build_query(platform_alias: &str, keyword_parts: &[String]) -> Result<MusicQuery, BotError> {
     let platform = MusicPlatform::from_alias(platform_alias)
         .ok_or_else(|| BotError::Custom(format!("暂不支持音乐平台：{platform_alias}")))?;
@@ -208,6 +209,7 @@ pub fn build_query_with_platform(
     Ok(MusicQuery { platform, keyword })
 }
 
+#[cfg(test)]
 pub fn build_legacy_query(args: &[String]) -> Result<MusicQuery, BotError> {
     build_legacy_query_with_default(MusicPlatform::default(), args)
 }
@@ -224,10 +226,12 @@ pub fn build_legacy_query_with_default(
     build_query_with_platform(default_platform, args)
 }
 
+#[cfg(test)]
 pub async fn download_track_media(track: &MusicTrack) -> Result<MusicMedia, BotError> {
     download_track_media_with_cover(track, true).await
 }
 
+#[cfg(test)]
 pub async fn download_track_media_with_cover(
     track: &MusicTrack,
     include_cover: bool,

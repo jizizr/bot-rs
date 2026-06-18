@@ -1,0 +1,75 @@
+diff --git a/main.c b/main.c
+index fbc7931..089cb68 100644
+--- a/main.c
++++ b/main.c
+@@ -436,12 +436,53 @@ static inline void writefull(const int connfd, void *const buf,
+ static void *FHinstance = NULL;
+ static void *preshareCtx = NULL;
+ 
++#define KD_CONTEXT_CACHE_MAX 64
++struct kd_context_cache_entry {
++    char adam[256];
++    char uri[256];
++    void *ctx;
++};
++static struct kd_context_cache_entry kdContextCache[KD_CONTEXT_CACHE_MAX];
++static size_t kdContextCacheLen = 0;
++
++static void clearKdContextCache(void) {
++    memset(kdContextCache, 0, sizeof(kdContextCache));
++    kdContextCacheLen = 0;
++    preshareCtx = NULL;
++}
++
++static void *findCachedKdContext(const char *const adam, const char *const uri) {
++    for (size_t i = 0; i < kdContextCacheLen; i++) {
++        if (strcmp(kdContextCache[i].adam, adam) == 0 &&
++            strcmp(kdContextCache[i].uri, uri) == 0) {
++            return kdContextCache[i].ctx;
++        }
++    }
++    return NULL;
++}
++
++static void cacheKdContext(const char *const adam, const char *const uri, void *ctx) {
++    if (ctx == NULL || kdContextCacheLen >= KD_CONTEXT_CACHE_MAX) {
++        return;
++    }
++    snprintf(kdContextCache[kdContextCacheLen].adam,
++             sizeof(kdContextCache[kdContextCacheLen].adam), "%s", adam);
++    snprintf(kdContextCache[kdContextCacheLen].uri,
++             sizeof(kdContextCache[kdContextCacheLen].uri), "%s", uri);
++    kdContextCache[kdContextCacheLen].ctx = ctx;
++    kdContextCacheLen++;
++}
++
+ inline static void *getKdContext(const char *const adam,
+                                  const char *const uri) {
+     uint8_t isPreshare = (strcmp("0", adam) == 0);
+     if (isPreshare && preshareCtx != NULL) {
+         return preshareCtx;
+     }
++    void *cachedCtx = findCachedKdContext(adam, uri);
++    if (cachedCtx != NULL) {
++        return cachedCtx;
++    }
+     fprintf(stderr, "[.] adamId: %s, uri: %s\n", adam, uri);
+ 
+     union std_string defaultId = new_std_string(adam);
+@@ -473,6 +514,7 @@ inline static void *getKdContext(const char *const adam,
+         *_ZNK18SVFootHillPContext9kdContextEv(SVFootHillPContext.obj);
+     if (kdContext != NULL && isPreshare)
+         preshareCtx = kdContext;
++    cacheKdContext(adam, uri, kdContext);
+     return kdContext;
+ }
+ 
+@@ -480,7 +522,7 @@ void refresh_decrypt_ctx() {
+     uint8_t autom = 1;
+     _ZN22SVPlaybackLeaseManager12requestLeaseERKb(leaseMgr, &autom);
+     _ZN21SVFootHillSessionCtrl16resetAllContextsEv(FHinstance);
+-    preshareCtx = NULL;
++    clearKdContextCache();
+     preshareCtx = getKdContext("0", "skd://itunes.apple.com/P000000000/s1/e1");
+     fprintf(stderr, "[!] refreshed context\n");
+ }

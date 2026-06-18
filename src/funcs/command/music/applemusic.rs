@@ -12,8 +12,8 @@ use regex::Regex;
 use reqwest::Client;
 use rsa::{RsaPrivateKey, pkcs1::DecodeRsaPrivateKey};
 use serde::Deserialize;
-use std::{collections::HashMap, fs, io::Cursor, sync::RwLock, time::Duration};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream};
+use std::{collections::HashMap, fs, io::Cursor, ops::Range, sync::RwLock, time::Duration};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use url::Url;
 use widevine::{
     Cdm, Device, KeyType, LicenseType, Pssh,
@@ -33,6 +33,7 @@ const APPLE_WIDEVINE_SCHEME: &str = "applemusic-widevine://";
 const APPLE_WRAPPER_M3U8_PORT: u16 = 20020;
 const APPLE_WRAPPER_DECRYPT_PORT: u16 = 10020;
 const APPLE_PREFETCH_KEY_URI: &str = "skd://itunes.apple.com/P000000000/s1/e1";
+const APPLE_WRAPPER_M3U8_TIMEOUT: Duration = Duration::from_secs(5);
 const APPLE_WRAPPER_IO_TIMEOUT: Duration = Duration::from_secs(15);
 type Aes128Ctr = ctr::Ctr128BE<aes::Aes128>;
 
@@ -62,6 +63,10 @@ lazy_static! {
     static ref ENHANCED_AVG_BW_RE: Regex = Regex::new(r#"AVERAGE-BANDWIDTH=(\d+)"#).unwrap();
     static ref MEDIA_KEY_RE: Regex = Regex::new(r#"#EXT-X-KEY:[^\n]*URI="(skd://[^"]+)""#).unwrap();
     static ref MEDIA_MAP_RE: Regex = Regex::new(r#"URI="([^"]+)""#).unwrap();
+    static ref APPLE_WRAPPER_TRACK_DECRYPT_SEMAPHORE: tokio::sync::Semaphore =
+        tokio::sync::Semaphore::new(SETTINGS.music.applemusic.wrapper_track_concurrency.max(1));
+    static ref APPLE_WRAPPER_DECRYPT_SEMAPHORE: tokio::sync::Semaphore =
+        tokio::sync::Semaphore::new(2);
 }
 
 pub static APPLE_MUSIC_PROVIDER: AppleMusicProvider = AppleMusicProvider;
@@ -112,7 +117,7 @@ async fn resolve_apple_track(
     let id = match selected_id {
         Some(id) => id.to_string(),
         None => parse_apple_track_id(keyword)
-            .unwrap_or_else(|| String::new())
+            .unwrap_or_default()
             .trim()
             .to_string(),
     };
@@ -376,6 +381,7 @@ where
     download_via_wrapper_with_progress(host, track_id, quality, progress).await
 }
 
+#[cfg(test)]
 async fn download_via_wrapper(
     host: &str,
     track_id: &str,
@@ -781,9 +787,12 @@ async fn enhanced_hls_master_url(track_id: &str) -> Result<String, BotError> {
 
 async fn wrapper_get_m3u8_url(host: &str, track_id: &str) -> Result<String, BotError> {
     let addr = format!("{host}:{APPLE_WRAPPER_M3U8_PORT}");
-    let mut stream = tokio::time::timeout(apple_timeout(), tokio::net::TcpStream::connect(&addr))
-        .await
-        .map_err(|_| BotError::Custom(format!("Apple Music wrapper m3u8 连接超时：{addr}")))??;
+    let mut stream = tokio::time::timeout(
+        APPLE_WRAPPER_M3U8_TIMEOUT,
+        tokio::net::TcpStream::connect(&addr),
+    )
+    .await
+    .map_err(|_| BotError::Custom(format!("Apple Music wrapper m3u8 连接超时：{addr}")))??;
     stream.set_nodelay(true)?;
     let id = track_id.as_bytes();
     if id.len() > u8::MAX as usize {
@@ -792,7 +801,7 @@ async fn wrapper_get_m3u8_url(host: &str, track_id: &str) -> Result<String, BotE
     wrapper_write_all(&mut stream, &[id.len() as u8], "m3u8 track id length").await?;
     wrapper_write_all(&mut stream, id, "m3u8 track id").await?;
     let mut buf = Vec::new();
-    tokio::time::timeout(apple_timeout(), stream.read_to_end(&mut buf))
+    tokio::time::timeout(APPLE_WRAPPER_M3U8_TIMEOUT, stream.read_to_end(&mut buf))
         .await
         .map_err(|_| BotError::Custom("Apple Music wrapper m3u8 读取超时".to_string()))??;
     let url = String::from_utf8_lossy(&buf).trim().to_string();
@@ -956,13 +965,12 @@ fn parse_apple_track_id(text: &str) -> Option<String> {
     if text.chars().all(|c| c.is_ascii_digit()) && text.len() >= 6 {
         return Some(text.to_string());
     }
-    if let Some((prefix, value)) = text.split_once(':') {
-        if MusicPlatform::from_alias(prefix).is_some()
-            && value.len() >= 6
-            && value.chars().all(|c| c.is_ascii_digit())
-        {
-            return Some(value.trim().to_string());
-        }
+    if let Some((prefix, value)) = text.split_once(':')
+        && MusicPlatform::from_alias(prefix).is_some()
+        && value.len() >= 6
+        && value.chars().all(|c| c.is_ascii_digit())
+    {
+        return Some(value.trim().to_string());
     }
     let url_text = APPLE_URL_PATTERN
         .find(text)
@@ -1583,48 +1591,79 @@ async fn decrypt_fmp4_with_wrapper(
 ) -> Result<Vec<u8>, BotError> {
     let tenc = parse_tenc_from_init(&data)?;
     let addr = format!("{host}:{APPLE_WRAPPER_DECRYPT_PORT}");
-    let stream = tokio::time::timeout(apple_timeout(), tokio::net::TcpStream::connect(&addr))
-        .await
-        .map_err(|_| BotError::Custom(format!("Apple Music wrapper decrypt 连接超时：{addr}")))??;
-    stream.set_nodelay(true)?;
-    let mut stream = BufStream::new(stream);
+    let commands = collect_wrapper_decrypt_commands(&data, track_id, seg_keys, &tenc)?;
 
+    let _track_permit = APPLE_WRAPPER_TRACK_DECRYPT_SEMAPHORE
+        .acquire()
+        .await
+        .map_err(|_| BotError::Custom("Apple Music wrapper track semaphore closed".into()))?;
+    run_wrapper_decrypt_fragment_parallel(&addr, &commands, &mut data, 2).await?;
+
+    remux_decrypted_fmp4_to_progressive(&data)
+}
+
+#[derive(Clone)]
+enum AppleWrapperDecryptCommand {
+    Key { adam: String, uri: String },
+    Job(AppleWrapperDecryptJob),
+}
+
+#[derive(Clone)]
+struct AppleWrapperDecryptJob {
+    payload: Vec<u8>,
+    ranges: Vec<Range<usize>>,
+}
+
+fn collect_wrapper_decrypt_commands(
+    data: &[u8],
+    track_id: &str,
+    seg_keys: &[String],
+    tenc: &TencBox,
+) -> Result<Vec<AppleWrapperDecryptCommand>, BotError> {
+    let mut commands = Vec::new();
     let mut pos = 0usize;
     let mut fragment_index = 0usize;
-    while let Some(box_info) = read_mp4_box(&data, pos)? {
+    while let Some(box_info) = read_mp4_box(data, pos)? {
         if &box_info.typ != b"moof" {
             pos = box_info.end();
             continue;
         }
         let moof = box_info;
-        let mdat = read_mp4_box(&data, moof.end())?
+        let mdat = read_mp4_box(data, moof.end())?
             .filter(|next| &next.typ == b"mdat")
             .ok_or_else(|| BotError::Custom("MP4 moof 后缺少 mdat".to_string()))?;
         let key_uri = seg_keys
             .get(fragment_index)
             .ok_or_else(|| BotError::Custom("Apple Music segment key 数量不足".to_string()))?;
-        send_fragment_key(&mut stream, track_id, key_uri, fragment_index).await?;
+        let adam = if key_uri == APPLE_PREFETCH_KEY_URI {
+            "0"
+        } else {
+            track_id
+        };
+        commands.push(AppleWrapperDecryptCommand::Key {
+            adam: adam.to_string(),
+            uri: key_uri.to_string(),
+        });
 
         let mut traf_pos = moof.payload_start();
-        while let Some(traf) = read_mp4_box(&data, traf_pos)? {
+        while let Some(traf) = read_mp4_box(data, traf_pos)? {
             if traf.end() > moof.end() {
                 break;
             }
             if &traf.typ == b"traf" {
-                let parsed = parse_traf(&data, traf, &tenc)?;
+                let parsed = parse_traf(data, traf, tenc)?;
                 let start = parsed
                     .data_offset
                     .map(|offset| (moof.start as i64 + offset as i64) as usize)
                     .unwrap_or_else(|| mdat.payload_start());
-                decrypt_samples(
-                    &mut stream,
-                    &mut data,
+                collect_wrapper_decrypt_sample_jobs(
+                    &mut commands,
+                    data,
                     start,
                     &parsed.samples,
                     parsed.senc.as_ref(),
-                    &tenc,
-                )
-                .await?;
+                    tenc,
+                )?;
             }
             traf_pos = traf.end();
         }
@@ -1632,9 +1671,129 @@ async fn decrypt_fmp4_with_wrapper(
         fragment_index += 1;
         pos = mdat.end();
     }
-    wrapper_write_all(&mut stream, &[0, 0, 0, 0, 0], "decrypt finish").await?;
-    wrapper_flush(&mut stream, "decrypt finish").await?;
-    remux_decrypted_fmp4_to_progressive(&data)
+    Ok(commands)
+}
+
+#[derive(Clone)]
+struct AppleWrapperDecryptFragmentGroup {
+    adam: String,
+    uri: String,
+    jobs: Vec<AppleWrapperDecryptJob>,
+}
+
+struct AppleWrapperDecryptFragmentResult {
+    jobs: Vec<AppleWrapperDecryptFragmentJobResult>,
+}
+
+struct AppleWrapperDecryptFragmentJobResult {
+    ranges: Vec<Range<usize>>,
+    decrypted: Vec<u8>,
+}
+
+fn group_wrapper_commands_by_fragment(
+    commands: &[AppleWrapperDecryptCommand],
+) -> Result<Vec<AppleWrapperDecryptFragmentGroup>, BotError> {
+    let mut groups = Vec::new();
+    let mut current: Option<AppleWrapperDecryptFragmentGroup> = None;
+    for command in commands {
+        match command {
+            AppleWrapperDecryptCommand::Key { adam, uri } => {
+                if let Some(group) = current.take() {
+                    groups.push(group);
+                }
+                current = Some(AppleWrapperDecryptFragmentGroup {
+                    adam: adam.clone(),
+                    uri: uri.clone(),
+                    jobs: Vec::new(),
+                });
+            }
+            AppleWrapperDecryptCommand::Job(job) => {
+                let group = current.as_mut().ok_or_else(|| {
+                    BotError::Custom("Apple Music wrapper fragment 缺少 key".to_string())
+                })?;
+                group.jobs.push(job.clone());
+            }
+        }
+    }
+    if let Some(group) = current {
+        groups.push(group);
+    }
+    Ok(groups)
+}
+
+async fn decrypt_fragment_group_over_wrapper(
+    addr: String,
+    group: AppleWrapperDecryptFragmentGroup,
+) -> Result<AppleWrapperDecryptFragmentResult, BotError> {
+    let _global_permit = APPLE_WRAPPER_DECRYPT_SEMAPHORE
+        .acquire()
+        .await
+        .map_err(|_| BotError::Custom("Apple Music wrapper decrypt semaphore closed".into()))?;
+    let stream = tokio::time::timeout(apple_timeout(), tokio::net::TcpStream::connect(&addr))
+        .await
+        .map_err(|_| BotError::Custom(format!("Apple Music wrapper decrypt 连接超时：{addr}")))??;
+    stream.set_nodelay(false)?;
+    let mut stream = stream;
+    write_len_prefixed(&mut stream, &group.adam).await?;
+    write_len_prefixed(&mut stream, &group.uri).await?;
+
+    let mut decrypted = Vec::new();
+    let mut out = Vec::with_capacity(group.jobs.len());
+    for job in group.jobs {
+        let len = u32::try_from(job.payload.len()).map_err(|_| {
+            BotError::Custom("Apple Music wrapper decrypt payload 过大".to_string())
+        })?;
+        wrapper_write_all(&mut stream, &len.to_le_bytes(), "fragment decrypt length").await?;
+        wrapper_write_all(&mut stream, &job.payload, "fragment decrypt payload").await?;
+        wrapper_flush(&mut stream, "fragment decrypt").await?;
+        decrypted.resize(job.payload.len(), 0);
+        wrapper_read_exact(&mut stream, &mut decrypted, "fragment decrypt result").await?;
+        out.push(AppleWrapperDecryptFragmentJobResult {
+            ranges: job.ranges,
+            decrypted: decrypted.clone(),
+        });
+    }
+    wrapper_write_all(&mut stream, &[0, 0, 0, 0, 0], "fragment decrypt finish").await?;
+    wrapper_flush(&mut stream, "fragment decrypt finish").await?;
+    Ok(AppleWrapperDecryptFragmentResult { jobs: out })
+}
+
+async fn run_wrapper_decrypt_fragment_parallel(
+    addr: &str,
+    commands: &[AppleWrapperDecryptCommand],
+    data: &mut [u8],
+    parallelism: usize,
+) -> Result<(), BotError> {
+    let groups = group_wrapper_commands_by_fragment(commands)?;
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(parallelism.max(1)));
+    let mut join_set = tokio::task::JoinSet::new();
+
+    for group in groups {
+        let addr = addr.to_string();
+        let semaphore = semaphore.clone();
+        join_set.spawn(async move {
+            let _permit = semaphore
+                .acquire_owned()
+                .await
+                .map_err(|_| BotError::Custom("Apple Music fragment semaphore closed".into()))?;
+            decrypt_fragment_group_over_wrapper(addr, group).await
+        });
+    }
+
+    while let Some(result) = join_set.join_next().await {
+        let fragment = result.map_err(|err| {
+            BotError::Custom(format!("Apple Music fragment decrypt task failed: {err}"))
+        })??;
+        for job in fragment.jobs {
+            let mut src = 0usize;
+            for range in job.ranges {
+                let len = range.end - range.start;
+                data[range].copy_from_slice(&job.decrypted[src..src + len]);
+                src += len;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -1682,14 +1841,14 @@ fn remux_decrypted_fmp4_to_progressive(data: &[u8]) -> Result<Vec<u8>, BotError>
     let mdat_payload_offset = ftyp_bytes.len() + moov_bytes.len() + 8;
     patch_first_stco_offset(&mut moov_bytes, mdat_payload_offset as u32)?;
 
-    let mut out = Vec::new();
+    let mdat_payload_size = samples
+        .iter()
+        .map(|sample| sample.data.len())
+        .sum::<usize>();
+    let mut out = Vec::with_capacity(ftyp_bytes.len() + moov_bytes.len() + 8 + mdat_payload_size);
     out.extend_from_slice(&ftyp_bytes);
     out.extend_from_slice(&moov_bytes);
-    let mdat_size = 8usize
-        + samples
-            .iter()
-            .map(|sample| sample.data.len())
-            .sum::<usize>();
+    let mdat_size = 8usize + mdat_payload_size;
     out.extend_from_slice(&(mdat_size as u32).to_be_bytes());
     out.extend_from_slice(b"mdat");
     for sample in samples {
@@ -2357,30 +2516,6 @@ fn alac_patch_in_place(data: &mut [u8], offset: usize, size: usize, body_end_bit
     true
 }
 
-async fn send_fragment_key<W>(
-    stream: &mut W,
-    track_id: &str,
-    key_uri: &str,
-    fragment_index: usize,
-) -> Result<(), BotError>
-where
-    W: AsyncWrite + Unpin,
-{
-    if key_uri.trim().is_empty() {
-        return Err(BotError::Custom("Apple Music segment key 为空".to_string()));
-    }
-    if fragment_index != 0 {
-        wrapper_write_all(stream, &[0, 0, 0, 0], "segment delimiter").await?;
-    }
-    let adam = if key_uri == APPLE_PREFETCH_KEY_URI {
-        "0"
-    } else {
-        track_id
-    };
-    write_len_prefixed(stream, adam).await?;
-    write_len_prefixed(stream, key_uri).await
-}
-
 async fn write_len_prefixed<W>(stream: &mut W, value: &str) -> Result<(), BotError>
 where
     W: AsyncWrite + Unpin,
@@ -2396,17 +2531,14 @@ where
     Ok(())
 }
 
-async fn decrypt_samples<S>(
-    stream: &mut S,
-    data: &mut [u8],
+fn collect_wrapper_decrypt_sample_jobs(
+    commands: &mut Vec<AppleWrapperDecryptCommand>,
+    data: &[u8],
     sample_start: usize,
     samples: &[TrunSampleInfo],
     senc: Option<&SencBox>,
     tenc: &TencBox,
-) -> Result<(), BotError>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
+) -> Result<(), BotError> {
     let mut pos = sample_start;
     for (index, sample) in samples.iter().enumerate() {
         let end = pos + sample.size as usize;
@@ -2417,89 +2549,105 @@ where
             .and_then(|senc| senc.samples.get(index))
             .map(|sample| sample.subsamples.as_slice())
             .unwrap_or(&[]);
-        decrypt_sample(stream, &mut data[pos..end], subsamples, tenc).await?;
+        collect_wrapper_decrypt_sample_job(
+            commands,
+            data,
+            pos,
+            sample.size as usize,
+            subsamples,
+            tenc,
+        )?;
         pos = end;
     }
     Ok(())
 }
 
-async fn decrypt_sample<S>(
-    stream: &mut S,
-    sample: &mut [u8],
+fn collect_wrapper_decrypt_sample_job(
+    commands: &mut Vec<AppleWrapperDecryptCommand>,
+    data: &[u8],
+    sample_start: usize,
+    sample_size: usize,
     subsamples: &[SubsampleEntry],
     tenc: &TencBox,
-) -> Result<(), BotError>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
+) -> Result<(), BotError> {
     if subsamples.is_empty() {
-        return decrypt_cbcs_raw(stream, sample, tenc).await;
+        return collect_wrapper_decrypt_raw_job(commands, data, sample_start, sample_size, tenc);
     }
     let mut pos = 0usize;
     for subsample in subsamples {
         pos += subsample.bytes_of_clear_data as usize;
         let end = pos + subsample.bytes_of_protected_data as usize;
-        if end > sample.len() {
+        if end > sample_size {
             return Err(BotError::Custom(
                 "MP4 subsample protected range 超出 sample".to_string(),
             ));
         }
-        decrypt_cbcs_raw(stream, &mut sample[pos..end], tenc).await?;
+        collect_wrapper_decrypt_raw_job(commands, data, sample_start + pos, end - pos, tenc)?;
         pos = end;
     }
     Ok(())
 }
 
-async fn decrypt_cbcs_raw<S>(
-    stream: &mut S,
-    data: &mut [u8],
+fn collect_wrapper_decrypt_raw_job(
+    commands: &mut Vec<AppleWrapperDecryptCommand>,
+    data: &[u8],
+    start: usize,
+    size: usize,
     tenc: &TencBox,
-) -> Result<(), BotError>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
+) -> Result<(), BotError> {
     let decrypt_block_len = tenc.default_crypt_byte_block as usize * 16;
     let skip_block_len = tenc.default_skip_byte_block as usize * 16;
     if skip_block_len == 0 {
-        let len = data.len() & !0x0f;
+        let len = size & !0x0f;
         if len == 0 {
             return Ok(());
         }
-        wrapper_write_all(stream, &(len as u32).to_le_bytes(), "raw decrypt length").await?;
-        wrapper_write_all(stream, &data[..len], "raw decrypt payload").await?;
-        wrapper_read_exact(stream, &mut data[..len], "raw decrypt result").await?;
+        let end = start + len;
+        if end > data.len() {
+            return Err(BotError::Custom(
+                "MP4 decrypt range 超出文件范围".to_string(),
+            ));
+        }
+        commands.push(AppleWrapperDecryptCommand::Job(AppleWrapperDecryptJob {
+            payload: data[start..end].to_vec(),
+            ranges: std::iter::once(start..end).collect(),
+        }));
         return Ok(());
     }
 
-    if data.len() < decrypt_block_len {
+    if size < decrypt_block_len {
         return Ok(());
     }
-    let mut spans = Vec::new();
+    let mut ranges = Vec::new();
     let mut pos = 0usize;
-    while data.len().saturating_sub(pos) >= decrypt_block_len {
-        spans.push((pos, pos + decrypt_block_len));
+    while size.saturating_sub(pos) >= decrypt_block_len {
+        ranges.push(start + pos..start + pos + decrypt_block_len);
         pos += decrypt_block_len;
-        if data.len().saturating_sub(pos) < skip_block_len {
+        if size.saturating_sub(pos) < skip_block_len {
             break;
         }
         pos += skip_block_len;
     }
-    let total_len = spans.iter().map(|(start, end)| end - start).sum::<usize>();
+    let total_len = ranges
+        .iter()
+        .map(|range| range.end - range.start)
+        .sum::<usize>();
     if total_len == 0 {
         return Ok(());
     }
-    wrapper_write_all(
-        stream,
-        &(total_len as u32).to_le_bytes(),
-        "pattern decrypt length",
-    )
-    .await?;
-    for (start, end) in &spans {
-        wrapper_write_all(stream, &data[*start..*end], "pattern decrypt payload").await?;
+    let mut payload = Vec::with_capacity(total_len);
+    for range in &ranges {
+        if range.end > data.len() {
+            return Err(BotError::Custom(
+                "MP4 decrypt range 超出文件范围".to_string(),
+            ));
+        }
+        payload.extend_from_slice(&data[range.clone()]);
     }
-    for (start, end) in spans {
-        wrapper_read_exact(stream, &mut data[start..end], "pattern decrypt result").await?;
-    }
+    commands.push(AppleWrapperDecryptCommand::Job(AppleWrapperDecryptJob {
+        payload,
+        ranges,
+    }));
     Ok(())
 }
 
@@ -2529,9 +2677,8 @@ async fn wrapper_read_exact<S>(
     context: &str,
 ) -> Result<(), BotError>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + Unpin,
 {
-    wrapper_flush(stream, context).await?;
     tokio::time::timeout(APPLE_WRAPPER_IO_TIMEOUT, stream.read_exact(data))
         .await
         .map_err(|_| BotError::Custom(format!("Apple Music wrapper 读取超时：{context}")))??;
@@ -2771,7 +2918,7 @@ track.m4a
     }
 
     #[tokio::test]
-    #[ignore = "requires live Apple Music credentials, wrapper, and ffprobe"]
+    #[ignore = "requires live Apple Music credentials, wrapper, ffprobe, and ffmpeg"]
     async fn live_wrapper_lossless_specific_track_id_without_telegram() {
         let track_id =
             std::env::var("APPLE_MUSIC_TEST_ID").unwrap_or_else(|_| "1624001324".to_string());

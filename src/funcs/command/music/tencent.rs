@@ -56,7 +56,7 @@ impl MusicProvider for TencentProvider {
     ) -> Result<MusicTrack, BotError> {
         let id = match selected_id {
             Some(id) => id.to_string(),
-            None => parse_qq_track_id(keyword).unwrap_or_else(|| String::new()),
+            None => parse_qq_track_id(keyword).unwrap_or_default(),
         };
         let id = if id.is_empty() {
             self.search(keyword, 1)

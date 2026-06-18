@@ -62,9 +62,8 @@ pub async fn get_user_settings(user_id: i64) -> Result<UserMusicSettings, BotErr
                 .replace_one(filter, settings.clone())
                 .upsert(true)
                 .await
-                .map_err(|e| {
+                .inspect_err(|_| {
                     disable_mongo();
-                    e
                 })?;
             Ok(settings)
         }
@@ -93,9 +92,8 @@ pub async fn save_user_settings(settings: &UserMusicSettings) -> Result<(), BotE
         .replace_one(doc! {"user_id": settings.user_id}, settings)
         .upsert(true)
         .await
-        .map_err(|e| {
+        .inspect_err(|_| {
             disable_mongo();
-            e
         })?;
     Ok(())
 }
