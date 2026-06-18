@@ -73,7 +73,13 @@ lazy_static! {
     static ref APPLE_WRAPPER_TRACK_DECRYPT_SEMAPHORE: tokio::sync::Semaphore =
         tokio::sync::Semaphore::new(SETTINGS.music.applemusic.wrapper_track_concurrency.max(1));
     static ref APPLE_WRAPPER_DECRYPT_SEMAPHORE: tokio::sync::Semaphore =
-        tokio::sync::Semaphore::new(2);
+        tokio::sync::Semaphore::new(
+            SETTINGS
+                .music
+                .applemusic
+                .wrapper_connection_concurrency
+                .max(1)
+        );
 }
 
 pub static APPLE_MUSIC_PROVIDER: AppleMusicProvider = AppleMusicProvider;
@@ -522,7 +528,7 @@ async fn prewarm_wrapper_key(host: &str, adam: &str, key_uri: &str) -> Result<()
     let stream = tokio::time::timeout(apple_timeout(), tokio::net::TcpStream::connect(&addr))
         .await
         .map_err(|_| BotError::Custom(format!("Apple Music wrapper prewarm 连接超时：{addr}")))??;
-    stream.set_nodelay(false)?;
+    stream.set_nodelay(true)?;
     let mut stream = stream;
     write_len_prefixed(&mut stream, adam).await?;
     write_len_prefixed(&mut stream, key_uri).await?;
@@ -1672,7 +1678,17 @@ async fn decrypt_fmp4_with_wrapper(
         .await
         .map_err(|_| BotError::Custom("Apple Music wrapper track semaphore closed".into()))?;
     let started = Instant::now();
-    run_wrapper_decrypt_fragment_parallel(&addr, &commands, &mut data, 2).await?;
+    run_wrapper_decrypt_fragment_parallel(
+        &addr,
+        &commands,
+        &mut data,
+        SETTINGS
+            .music
+            .applemusic
+            .wrapper_fragment_concurrency
+            .max(1),
+    )
+    .await?;
     let decrypt_elapsed = started.elapsed();
 
     Ok(AppleWrapperDecryptOutput {
@@ -1811,7 +1827,7 @@ async fn decrypt_fragment_group_over_wrapper(
     let stream = tokio::time::timeout(apple_timeout(), tokio::net::TcpStream::connect(&addr))
         .await
         .map_err(|_| BotError::Custom(format!("Apple Music wrapper decrypt 连接超时：{addr}")))??;
-    stream.set_nodelay(false)?;
+    stream.set_nodelay(true)?;
     let mut stream = stream;
     write_len_prefixed(&mut stream, &group.adam).await?;
     write_len_prefixed(&mut stream, &group.uri).await?;
