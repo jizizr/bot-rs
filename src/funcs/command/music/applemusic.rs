@@ -470,7 +470,16 @@ where
         .ok_or_else(|| BotError::Custom("Apple Music enhancedHls 没有匹配的音质".to_string()))?;
     let media_url = absolute_hls_url(&master_url, &variant.uri);
     let media = parse_enhanced_hls_media(&media_url, &download_text(&media_url).await?)?;
+    let prewarm_task = {
+        let host = host.to_string();
+        let track_id = track_id.to_string();
+        let seg_keys = media.seg_keys.clone();
+        tokio::spawn(async move {
+            let _ = prewarm_wrapper_keys(&host, &track_id, &seg_keys).await;
+        })
+    };
     let encrypted = download_bytes_with_progress(&media.mp4_url, progress).await?;
+    let _ = prewarm_task.await;
     let mut last_error = None;
     for attempt in 0..2 {
         match decrypt_fmp4_with_wrapper(host, track_id, encrypted.clone(), &media.seg_keys).await {
@@ -482,6 +491,44 @@ where
         }
     }
     Err(last_error.unwrap_or_else(|| BotError::Custom("Apple Music wrapper 解密失败".to_string())))
+}
+
+async fn prewarm_wrapper_keys(
+    host: &str,
+    track_id: &str,
+    seg_keys: &[String],
+) -> Result<(), BotError> {
+    let mut seen = Vec::<(&str, &str)>::new();
+    for key_uri in seg_keys {
+        let adam = if key_uri == APPLE_PREFETCH_KEY_URI {
+            "0"
+        } else {
+            track_id
+        };
+        if seen
+            .iter()
+            .any(|(seen_adam, seen_uri)| *seen_adam == adam && *seen_uri == key_uri)
+        {
+            continue;
+        }
+        seen.push((adam, key_uri));
+        prewarm_wrapper_key(host, adam, key_uri).await?;
+    }
+    Ok(())
+}
+
+async fn prewarm_wrapper_key(host: &str, adam: &str, key_uri: &str) -> Result<(), BotError> {
+    let addr = format!("{host}:{APPLE_WRAPPER_DECRYPT_PORT}");
+    let stream = tokio::time::timeout(apple_timeout(), tokio::net::TcpStream::connect(&addr))
+        .await
+        .map_err(|_| BotError::Custom(format!("Apple Music wrapper prewarm 连接超时：{addr}")))??;
+    stream.set_nodelay(false)?;
+    let mut stream = stream;
+    write_len_prefixed(&mut stream, adam).await?;
+    write_len_prefixed(&mut stream, key_uri).await?;
+    wrapper_write_all(&mut stream, &[0, 0, 0, 0, 0], "prewarm finish").await?;
+    wrapper_flush(&mut stream, "prewarm finish").await?;
+    Ok(())
 }
 
 fn select_widevine_asset(assets: &[WebPlaybackAsset]) -> Option<&WebPlaybackAsset> {
