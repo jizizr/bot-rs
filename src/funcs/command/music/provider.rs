@@ -5,7 +5,7 @@ use reqwest::Client;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use serde::de::DeserializeOwned;
-use std::{collections::HashMap, fmt};
+use std::{collections::HashMap, fmt, time::Duration};
 
 lazy_static! {
     static ref CLIENT: ClientWithMiddleware = {
@@ -180,6 +180,12 @@ impl MusicTrack {
 pub struct MusicMedia {
     pub audio: Vec<u8>,
     pub cover: Vec<u8>,
+    pub decrypt_elapsed: Option<Duration>,
+}
+
+struct MusicAudio {
+    bytes: Vec<u8>,
+    decrypt_elapsed: Option<Duration>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -260,11 +266,15 @@ where
         }
     };
     let (audio, cover) = tokio::join!(
-        download_url_with_headers_progress(&track.url, &track.headers, progress),
+        download_audio_with_headers_progress(&track.url, &track.headers, progress),
         cover_download,
     );
     let audio = audio?;
-    Ok(MusicMedia { audio, cover })
+    Ok(MusicMedia {
+        audio: audio.bytes,
+        cover,
+        decrypt_elapsed: audio.decrypt_elapsed,
+    })
 }
 
 pub async fn download_url(url: &str) -> Result<Vec<u8>, BotError> {
@@ -287,11 +297,32 @@ pub async fn download_url_with_headers_progress<F>(
 where
     F: FnMut(DownloadProgress) + Send,
 {
+    download_audio_with_headers_progress(url, headers, progress)
+        .await
+        .map(|audio| audio.bytes)
+}
+
+async fn download_audio_with_headers_progress<F>(
+    url: &str,
+    headers: &HashMap<String, String>,
+    progress: &mut F,
+) -> Result<MusicAudio, BotError>
+where
+    F: FnMut(DownloadProgress) + Send,
+{
     if url.starts_with("applemusic-wrapper://") || url.starts_with("applemusic-widevine://") {
-        return super::applemusic::download_internal_url_with_progress(url, progress).await;
+        let (bytes, decrypt_elapsed) =
+            super::applemusic::download_internal_url_with_progress_stats(url, progress).await?;
+        return Ok(MusicAudio {
+            bytes,
+            decrypt_elapsed,
+        });
     }
     if url.starts_with("soda-download://") {
-        return super::soda::download_internal_url_with_progress(url, progress).await;
+        return Ok(MusicAudio {
+            bytes: super::soda::download_internal_url_with_progress(url, progress).await?,
+            decrypt_elapsed: None,
+        });
     }
 
     let mut request = CLIENT.get(url);
@@ -319,7 +350,10 @@ where
     if buf.is_empty() {
         return Err(BotError::Custom("下载失败：文件为空".to_string()));
     }
-    Ok(buf)
+    Ok(MusicAudio {
+        bytes: buf,
+        decrypt_elapsed: None,
+    })
 }
 
 pub(crate) async fn get_json<T: DeserializeOwned>(url: &str) -> Result<T, BotError> {

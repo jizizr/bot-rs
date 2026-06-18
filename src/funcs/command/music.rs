@@ -472,7 +472,11 @@ async fn send_track(
     media: MusicMedia,
 ) -> Result<(), BotError> {
     let caption = build_music_caption(&track, &media);
-    let MusicMedia { audio, cover } = media;
+    let MusicMedia {
+        audio,
+        cover,
+        decrypt_elapsed: _,
+    } = media;
     let thumbnail_task = if cover.is_empty() {
         None
     } else {
@@ -538,6 +542,10 @@ fn build_music_caption(track: &MusicTrack, media: &MusicMedia) -> String {
     if let Some(bitrate) = bitrate.filter(|bitrate| *bitrate > 0) {
         info_parts.push(format!("{:.2}kbps", bitrate as f64 / 1000.0));
     }
+    let decrypt_line = media
+        .decrypt_elapsed
+        .map(|elapsed| format!("解密: {}\n", format_duration(elapsed)))
+        .unwrap_or_default();
     let info_line = if info_parts.is_empty() {
         String::new()
     } else {
@@ -549,7 +557,7 @@ fn build_music_caption(track: &MusicTrack, media: &MusicMedia) -> String {
         html_escape(&track.file_extension())
     );
     format!(
-        "<b>「{song_html}」- {singer}</b>\n{album_line}<blockquote>{info_line}{tags}\n</blockquote>"
+        "<b>「{song_html}」- {singer}</b>\n{album_line}<blockquote>{info_line}{decrypt_line}{tags}\n</blockquote>"
     )
 }
 
@@ -566,6 +574,14 @@ fn platform_tag(platform: MusicPlatform) -> &'static str {
 
 fn format_file_size(bytes: usize) -> String {
     format!("{:.2}MB", bytes as f64 / 1024.0 / 1024.0)
+}
+
+fn format_duration(duration: Duration) -> String {
+    if duration.as_secs() > 0 {
+        format!("{:.2}s", duration.as_secs_f64())
+    } else {
+        format!("{}ms", duration.as_millis())
+    }
 }
 
 fn estimate_bitrate(bytes: usize, duration: Option<u32>) -> Option<u32> {
@@ -1387,10 +1403,38 @@ mod tests {
         let media = MusicMedia {
             audio: vec![0; 1024 * 1024],
             cover: Vec::new(),
+            decrypt_elapsed: None,
         };
         assert_eq!(
             build_music_caption(&track, &media),
             "<b>「<a href=\"https://music.apple.com/song/1624001324\">稻香</a>」- 周杰伦</b>\n专辑: 魔杰座\n<blockquote>1.00MB 4194.30kbps\n#AppleMusic #m4a\n</blockquote>"
+        );
+    }
+
+    #[test]
+    fn builds_music_caption_with_decrypt_elapsed() {
+        let track = MusicTrack {
+            id: "1624001324".to_string(),
+            platform: MusicPlatform::AppleMusic,
+            song: "稻香".to_string(),
+            singer: "周杰伦".to_string(),
+            album: "魔杰座".to_string(),
+            cover: String::new(),
+            link: "https://music.apple.com/song/1624001324".to_string(),
+            url: "applemusic-wrapper://127.0.0.1/1624001324".to_string(),
+            headers: Default::default(),
+            duration: Some(2),
+            bitrate: None,
+            format: Some("m4a".to_string()),
+        };
+        let media = MusicMedia {
+            audio: vec![0; 1024 * 1024],
+            cover: Vec::new(),
+            decrypt_elapsed: Some(Duration::from_millis(7850)),
+        };
+        assert_eq!(
+            build_music_caption(&track, &media),
+            "<b>「<a href=\"https://music.apple.com/song/1624001324\">稻香</a>」- 周杰伦</b>\n专辑: 魔杰座\n<blockquote>1.00MB 4194.30kbps\n解密: 7.85s\n#AppleMusic #m4a\n</blockquote>"
         );
     }
 

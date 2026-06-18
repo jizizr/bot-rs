@@ -12,7 +12,14 @@ use regex::Regex;
 use reqwest::Client;
 use rsa::{RsaPrivateKey, pkcs1::DecodeRsaPrivateKey};
 use serde::Deserialize;
-use std::{collections::HashMap, fs, io::Cursor, ops::Range, sync::RwLock, time::Duration};
+use std::{
+    collections::HashMap,
+    fs,
+    io::Cursor,
+    ops::Range,
+    sync::RwLock,
+    time::{Duration, Instant},
+};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use url::Url;
 use widevine::{
@@ -319,10 +326,10 @@ fn apple_widevine_internal_url(id: &str, quality: AppleMusicQuality) -> String {
     format!("{APPLE_WIDEVINE_SCHEME}{id}?quality={}", quality.as_str())
 }
 
-pub(super) async fn download_internal_url_with_progress<F>(
+pub(super) async fn download_internal_url_with_progress_stats<F>(
     url: &str,
     progress: &mut F,
-) -> Result<Vec<u8>, BotError>
+) -> Result<(Vec<u8>, Option<Duration>), BotError>
 where
     F: FnMut(DownloadProgress) + Send,
 {
@@ -340,10 +347,10 @@ where
             .map(quality_from_str)
             .unwrap_or(AppleMusicQuality::High);
         match download_via_widevine_with_progress(track_id, progress).await {
-            Ok(data) => return Ok(data),
+            Ok(data) => return Ok((data, None)),
             Err(err) if quality == AppleMusicQuality::High => {
                 if let Some(host) = apple_wrapper_host_opt() {
-                    return download_via_wrapper_with_progress(
+                    return download_via_wrapper_with_progress_stats(
                         &host,
                         track_id,
                         AppleMusicQuality::High,
@@ -378,7 +385,7 @@ where
         .find_map(|(key, value)| (key == "quality").then_some(value))
         .map(quality_from_str)
         .unwrap_or(AppleMusicQuality::High);
-    download_via_wrapper_with_progress(host, track_id, quality, progress).await
+    download_via_wrapper_with_progress_stats(host, track_id, quality, progress).await
 }
 
 #[cfg(test)]
@@ -422,12 +429,27 @@ where
     decrypt_cenc_fmp4(encrypted, &key)
 }
 
+#[cfg(test)]
 async fn download_via_wrapper_with_progress<F>(
     host: &str,
     track_id: &str,
     quality: AppleMusicQuality,
     progress: &mut F,
 ) -> Result<Vec<u8>, BotError>
+where
+    F: FnMut(DownloadProgress) + Send,
+{
+    download_via_wrapper_with_progress_stats(host, track_id, quality, progress)
+        .await
+        .map(|(audio, _)| audio)
+}
+
+async fn download_via_wrapper_with_progress_stats<F>(
+    host: &str,
+    track_id: &str,
+    quality: AppleMusicQuality,
+    progress: &mut F,
+) -> Result<(Vec<u8>, Option<Duration>), BotError>
 where
     F: FnMut(DownloadProgress) + Send,
 {
@@ -452,7 +474,7 @@ where
     let mut last_error = None;
     for attempt in 0..2 {
         match decrypt_fmp4_with_wrapper(host, track_id, encrypted.clone(), &media.seg_keys).await {
-            Ok(data) => return Ok(data),
+            Ok(data) => return Ok((data.audio, Some(data.decrypt_elapsed))),
             Err(e) if attempt == 0 && is_retryable_wrapper_error(&e) => {
                 last_error = Some(e);
             }
@@ -467,6 +489,11 @@ fn select_widevine_asset(assets: &[WebPlaybackAsset]) -> Option<&WebPlaybackAsse
         .iter()
         .find(|asset| asset.flavor.as_deref() == Some("28:ctrp256"))
         .or_else(|| assets.iter().max_by_key(|asset| asset.metadata.bit_rate))
+}
+
+struct AppleWrapperDecryptOutput {
+    audio: Vec<u8>,
+    decrypt_elapsed: Duration,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1588,7 +1615,7 @@ async fn decrypt_fmp4_with_wrapper(
     track_id: &str,
     mut data: Vec<u8>,
     seg_keys: &[String],
-) -> Result<Vec<u8>, BotError> {
+) -> Result<AppleWrapperDecryptOutput, BotError> {
     let tenc = parse_tenc_from_init(&data)?;
     let addr = format!("{host}:{APPLE_WRAPPER_DECRYPT_PORT}");
     let commands = collect_wrapper_decrypt_commands(&data, track_id, seg_keys, &tenc)?;
@@ -1597,9 +1624,14 @@ async fn decrypt_fmp4_with_wrapper(
         .acquire()
         .await
         .map_err(|_| BotError::Custom("Apple Music wrapper track semaphore closed".into()))?;
+    let started = Instant::now();
     run_wrapper_decrypt_fragment_parallel(&addr, &commands, &mut data, 2).await?;
+    let decrypt_elapsed = started.elapsed();
 
-    remux_decrypted_fmp4_to_progressive(&data)
+    Ok(AppleWrapperDecryptOutput {
+        audio: remux_decrypted_fmp4_to_progressive(&data)?,
+        decrypt_elapsed,
+    })
 }
 
 #[derive(Clone)]

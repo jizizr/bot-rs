@@ -1,11 +1,14 @@
 diff --git a/main.c b/main.c
-index fbc7931..089cb68 100644
+index fbc7931..960d09f 100644
 --- a/main.c
 +++ b/main.c
-@@ -436,12 +436,53 @@ static inline void writefull(const int connfd, void *const buf,
+@@ -435,13 +435,59 @@ static inline void writefull(const int connfd, void *const buf,
+ 
  static void *FHinstance = NULL;
  static void *preshareCtx = NULL;
- 
++static pthread_mutex_t kdContextCacheMutex = PTHREAD_MUTEX_INITIALIZER;
++static pthread_mutex_t leaseMutex = PTHREAD_MUTEX_INITIALIZER;
++
 +#define KD_CONTEXT_CACHE_MAX 64
 +struct kd_context_cache_entry {
 +    char adam[256];
@@ -42,34 +45,148 @@ index fbc7931..089cb68 100644
 +    kdContextCache[kdContextCacheLen].ctx = ctx;
 +    kdContextCacheLen++;
 +}
-+
+ 
  inline static void *getKdContext(const char *const adam,
                                   const char *const uri) {
++    pthread_mutex_lock(&kdContextCacheMutex);
      uint8_t isPreshare = (strcmp("0", adam) == 0);
      if (isPreshare && preshareCtx != NULL) {
++        pthread_mutex_unlock(&kdContextCacheMutex);
          return preshareCtx;
      }
 +    void *cachedCtx = findCachedKdContext(adam, uri);
 +    if (cachedCtx != NULL) {
++        pthread_mutex_unlock(&kdContextCacheMutex);
 +        return cachedCtx;
 +    }
      fprintf(stderr, "[.] adamId: %s, uri: %s\n", adam, uri);
  
      union std_string defaultId = new_std_string(adam);
-@@ -473,6 +514,7 @@ inline static void *getKdContext(const char *const adam,
+@@ -459,28 +505,38 @@ inline static void *getKdContext(const char *const adam,
+         &persistK, FHinstance, &defaultId, &defaultId, &keyUri, &keyFormat,
+         &keyFormatVer, &serverUri, &protocolType, &fpsCert);
+ 
+-    if (persistK.obj == NULL)
++    if (persistK.obj == NULL) {
++        pthread_mutex_unlock(&kdContextCacheMutex);
+         return NULL;
++    }
+ 
+     struct shared_ptr SVFootHillPContext;
+     _ZN21SVFootHillSessionCtrl14decryptContextERKNSt6__ndk112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEERKN11SVDecryptor15SVDecryptorTypeERKb(
+         &SVFootHillPContext, FHinstance, persistK.obj);
+ 
+-    if (SVFootHillPContext.obj == NULL)
++    if (SVFootHillPContext.obj == NULL) {
++        pthread_mutex_unlock(&kdContextCacheMutex);
+         return NULL;
++    }
+ 
+     void *kdContext =
          *_ZNK18SVFootHillPContext9kdContextEv(SVFootHillPContext.obj);
      if (kdContext != NULL && isPreshare)
          preshareCtx = kdContext;
 +    cacheKdContext(adam, uri, kdContext);
++    pthread_mutex_unlock(&kdContextCacheMutex);
      return kdContext;
  }
  
-@@ -480,7 +522,7 @@ void refresh_decrypt_ctx() {
+ void refresh_decrypt_ctx() {
      uint8_t autom = 1;
++    pthread_mutex_lock(&leaseMutex);
++    pthread_mutex_lock(&kdContextCacheMutex);
      _ZN22SVPlaybackLeaseManager12requestLeaseERKb(leaseMgr, &autom);
      _ZN21SVFootHillSessionCtrl16resetAllContextsEv(FHinstance);
 -    preshareCtx = NULL;
 +    clearKdContextCache();
++    pthread_mutex_unlock(&kdContextCacheMutex);
++    pthread_mutex_unlock(&leaseMutex);
      preshareCtx = getKdContext("0", "skd://itunes.apple.com/P000000000/s1/e1");
      fprintf(stderr, "[!] refreshed context\n");
  }
+@@ -541,6 +597,28 @@ void handle(const int connfd) {
+ 
+ extern uint8_t handle_cpp(int);
+ 
++struct decrypt_connection_args {
++    int connfd;
++};
++
++static void *handle_decrypt_connection(void *arg) {
++    struct decrypt_connection_args *conn = (struct decrypt_connection_args *)arg;
++    const int connfd = conn->connfd;
++    free(conn);
++
++    if (!handle_cpp(connfd)) {
++        uint8_t autom = 1;
++        pthread_mutex_lock(&leaseMutex);
++        _ZN22SVPlaybackLeaseManager12requestLeaseERKb(leaseMgr, &autom);
++        pthread_mutex_unlock(&leaseMutex);
++    }
++
++    if (close(connfd) == -1) {
++        perror("close");
++    }
++    return NULL;
++}
++
+ inline static int new_socket() {
+     const int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
+     if (fd == -1) {
+@@ -558,7 +636,7 @@ inline static int new_socket() {
+         return EXIT_FAILURE;
+     }
+ 
+-    if (listen(fd, 5) == -1) {
++    if (listen(fd, 64) == -1) {
+         perror("listen");
+         return EXIT_FAILURE;
+     }
+@@ -566,9 +644,9 @@ inline static int new_socket() {
+     fprintf(stderr, "[!] listening %s:%d\n", args_info.host_arg, args_info.decrypt_port_arg);
+     // close(STDOUT_FILENO);
+ 
+-    static struct sockaddr_in peer_addr;
+-    static socklen_t peer_addr_size = sizeof(peer_addr);
+     while (1) {
++        struct sockaddr_in peer_addr;
++        socklen_t peer_addr_size = sizeof(peer_addr);
+         const int connfd = accept4(fd, (struct sockaddr *)&peer_addr,
+                                    &peer_addr_size, SOCK_CLOEXEC);
+         if (connfd == -1) {
+@@ -581,20 +659,23 @@ inline static int new_socket() {
+             return EXIT_FAILURE;
+         }
+ 
+-        if (!handle_cpp(connfd)) {
+-            uint8_t autom = 1;
+-            _ZN22SVPlaybackLeaseManager12requestLeaseERKb(leaseMgr, &autom);
++        struct decrypt_connection_args *conn =
++            malloc(sizeof(struct decrypt_connection_args));
++        if (conn == NULL) {
++            perror("malloc");
++            close(connfd);
++            continue;
+         }
+-        // if (sigsetjmp(catcher.env, 0) == 0) {
+-        //     catcher.do_jump = 1;
+-        //     handle(connfd);
+-        // }
+-        // catcher.do_jump = 0;
+-
+-        if (close(connfd) == -1) {
+-            perror("close");
+-            return EXIT_FAILURE;
++        conn->connfd = connfd;
++
++        pthread_t thread;
++        if (pthread_create(&thread, NULL, &handle_decrypt_connection, conn) != 0) {
++            perror("pthread_create");
++            close(connfd);
++            free(conn);
++            continue;
+         }
++        pthread_detach(thread);
+     }
+ }
+ 
