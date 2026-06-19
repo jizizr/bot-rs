@@ -21,6 +21,43 @@ also tested concurrently:
 - `535824738` (`晴天`): succeeded in about `15.6s`
 - `536115195` (`七里香`): succeeded in about `14.5s`
 
+For real multi-track parallelism, run multiple wrapper processes and configure
+the bot to use a wrapper pool. The FairPlay session inside one wrapper process
+is not stable when several tracks decrypt through it at once; spreading tracks
+across processes avoids that shared native state.
+
+Example bot config:
+
+```toml
+[music.applemusic]
+wrapper_hosts = [
+  "127.0.0.1:10020",
+  "127.0.0.1:10022",
+  "127.0.0.1:10023",
+  "127.0.0.1:10024",
+]
+wrapper_track_concurrency = 1
+wrapper_fragment_concurrency = 1
+wrapper_connection_concurrency = 4
+```
+
+The bot maps `127.0.0.1:10024` to decrypt port `10024` and m3u8 port `20024`.
+When more than one endpoint is configured, Apple Music internal URLs use
+`applemusic-wrapper://pool/...` and each track is round-robin assigned to one
+wrapper process.
+
+Each wrapper process must mount an independent copy of `/app/rootfs/data`.
+Sharing the same data directory across wrapper processes can still reset the
+native FairPlay session even when the bot queues one track per process.
+
+Cached 20-track lossless decrypt benchmark on local Docker:
+
+- one wrapper process, `track=2`: `40.73s`, 0 failures
+- one wrapper process, `track=3` or `track=4`: wrapper reset/broken pipe
+- four wrapper processes sharing one data directory: reset/timeouts
+- four wrapper processes with independent data directories, `track=1` and
+  `fragment=1`: `39.72s`, 0 failures
+
 Build locally:
 
 ```sh

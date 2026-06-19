@@ -17,7 +17,10 @@ use std::{
     fs,
     io::Cursor,
     ops::Range,
-    sync::RwLock,
+    sync::{
+        RwLock,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -70,8 +73,24 @@ lazy_static! {
     static ref ENHANCED_AVG_BW_RE: Regex = Regex::new(r#"AVERAGE-BANDWIDTH=(\d+)"#).unwrap();
     static ref MEDIA_KEY_RE: Regex = Regex::new(r#"#EXT-X-KEY:[^\n]*URI="(skd://[^"]+)""#).unwrap();
     static ref MEDIA_MAP_RE: Regex = Regex::new(r#"URI="([^"]+)""#).unwrap();
+    static ref APPLE_WRAPPER_ENDPOINTS: Vec<AppleWrapperEndpoint> = configured_wrapper_endpoints();
+    static ref APPLE_WRAPPER_ENDPOINT_DECRYPT_SEMAPHORES: Vec<tokio::sync::Semaphore> =
+        APPLE_WRAPPER_ENDPOINTS
+            .iter()
+            .map(|_| tokio::sync::Semaphore::new(
+                SETTINGS.music.applemusic.wrapper_track_concurrency.max(1)
+            ))
+            .collect();
+    static ref APPLE_WRAPPER_NEXT_ENDPOINT: AtomicUsize = AtomicUsize::new(0);
     static ref APPLE_WRAPPER_TRACK_DECRYPT_SEMAPHORE: tokio::sync::Semaphore =
-        tokio::sync::Semaphore::new(SETTINGS.music.applemusic.wrapper_track_concurrency.max(1));
+        tokio::sync::Semaphore::new(
+            SETTINGS
+                .music
+                .applemusic
+                .wrapper_track_concurrency
+                .max(1)
+                .saturating_mul(APPLE_WRAPPER_ENDPOINTS.len().max(1))
+        );
     static ref APPLE_WRAPPER_DECRYPT_SEMAPHORE: tokio::sync::Semaphore =
         tokio::sync::Semaphore::new(
             SETTINGS
@@ -79,12 +98,104 @@ lazy_static! {
                 .applemusic
                 .wrapper_connection_concurrency
                 .max(1)
+                .saturating_mul(APPLE_WRAPPER_ENDPOINTS.len().max(1))
         );
 }
 
 pub static APPLE_MUSIC_PROVIDER: AppleMusicProvider = AppleMusicProvider;
 
 pub struct AppleMusicProvider;
+
+#[derive(Clone, Debug)]
+struct AppleWrapperEndpoint {
+    index: Option<usize>,
+    spec: String,
+    decrypt_addr: String,
+    m3u8_addr: String,
+}
+
+fn configured_wrapper_endpoints() -> Vec<AppleWrapperEndpoint> {
+    let mut specs = SETTINGS
+        .music
+        .applemusic
+        .wrapper_hosts
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if specs.is_empty() {
+        let host = SETTINGS.music.applemusic.wrapper_host.trim();
+        if !host.is_empty() {
+            specs.push(host.to_string());
+        }
+    }
+    specs
+        .into_iter()
+        .filter_map(|spec| parse_wrapper_endpoint(&spec))
+        .enumerate()
+        .map(|(index, mut endpoint)| {
+            endpoint.index = Some(index);
+            endpoint
+        })
+        .collect()
+}
+
+fn parse_wrapper_endpoint(spec: &str) -> Option<AppleWrapperEndpoint> {
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return None;
+    }
+    let (host, decrypt_port) = split_host_port(spec).unwrap_or((spec, APPLE_WRAPPER_DECRYPT_PORT));
+    if host.trim().is_empty() {
+        return None;
+    }
+    let m3u8_port = if decrypt_port == APPLE_WRAPPER_DECRYPT_PORT {
+        APPLE_WRAPPER_M3U8_PORT
+    } else {
+        decrypt_port.saturating_add(APPLE_WRAPPER_M3U8_PORT - APPLE_WRAPPER_DECRYPT_PORT)
+    };
+    Some(AppleWrapperEndpoint {
+        index: None,
+        spec: if decrypt_port == APPLE_WRAPPER_DECRYPT_PORT {
+            host.to_string()
+        } else {
+            format!("{host}:{decrypt_port}")
+        },
+        decrypt_addr: format!("{host}:{decrypt_port}"),
+        m3u8_addr: format!("{host}:{m3u8_port}"),
+    })
+}
+
+fn split_host_port(value: &str) -> Option<(&str, u16)> {
+    let (host, port) = value.rsplit_once(':')?;
+    if host.contains(']') || value.matches(':').count() > 1 && !host.ends_with(']') {
+        return None;
+    }
+    port.parse::<u16>().ok().map(|port| (host, port))
+}
+
+fn select_wrapper_endpoint(spec: &str) -> Result<AppleWrapperEndpoint, BotError> {
+    if spec == "pool" {
+        let endpoints = &*APPLE_WRAPPER_ENDPOINTS;
+        if endpoints.is_empty() {
+            return Err(BotError::Custom(
+                "Apple Music wrapper pool 未配置".to_string(),
+            ));
+        }
+        let index = APPLE_WRAPPER_NEXT_ENDPOINT.fetch_add(1, Ordering::Relaxed) % endpoints.len();
+        return Ok(endpoints[index].clone());
+    }
+    if let Some(endpoint) = APPLE_WRAPPER_ENDPOINTS
+        .iter()
+        .find(|endpoint| endpoint.spec == spec)
+    {
+        return Ok(endpoint.clone());
+    }
+    parse_wrapper_endpoint(spec)
+        .ok_or_else(|| BotError::Custom(format!("Apple Music wrapper endpoint 无效：{spec}")))
+}
 
 #[async_trait]
 impl MusicProvider for AppleMusicProvider {
@@ -459,9 +570,10 @@ async fn download_via_wrapper_with_progress_stats<F>(
 where
     F: FnMut(DownloadProgress) + Send,
 {
+    let endpoint = select_wrapper_endpoint(host)?;
     let mut master_url = String::new();
     if quality == AppleMusicQuality::HiRes
-        && let Ok(device_url) = wrapper_get_m3u8_url(host, track_id).await
+        && let Ok(device_url) = wrapper_get_m3u8_url(&endpoint, track_id).await
         && device_url.ends_with(".m3u8")
     {
         master_url = device_url;
@@ -477,18 +589,20 @@ where
     let media_url = absolute_hls_url(&master_url, &variant.uri);
     let media = parse_enhanced_hls_media(&media_url, &download_text(&media_url).await?)?;
     let prewarm_task = {
-        let host = host.to_string();
+        let endpoint = endpoint.clone();
         let track_id = track_id.to_string();
         let seg_keys = media.seg_keys.clone();
         tokio::spawn(async move {
-            let _ = prewarm_wrapper_keys(&host, &track_id, &seg_keys).await;
+            let _ = prewarm_wrapper_keys(&endpoint, &track_id, &seg_keys).await;
         })
     };
     let encrypted = download_bytes_with_progress(&media.mp4_url, progress).await?;
     let _ = prewarm_task.await;
     let mut last_error = None;
     for attempt in 0..2 {
-        match decrypt_fmp4_with_wrapper(host, track_id, encrypted.clone(), &media.seg_keys).await {
+        match decrypt_fmp4_with_wrapper(&endpoint, track_id, encrypted.clone(), &media.seg_keys)
+            .await
+        {
             Ok(data) => return Ok((data.audio, Some(data.decrypt_elapsed))),
             Err(e) if attempt == 0 && is_retryable_wrapper_error(&e) => {
                 last_error = Some(e);
@@ -500,7 +614,7 @@ where
 }
 
 async fn prewarm_wrapper_keys(
-    host: &str,
+    endpoint: &AppleWrapperEndpoint,
     track_id: &str,
     seg_keys: &[String],
 ) -> Result<(), BotError> {
@@ -518,16 +632,27 @@ async fn prewarm_wrapper_keys(
             continue;
         }
         seen.push((adam, key_uri));
-        prewarm_wrapper_key(host, adam, key_uri).await?;
+        prewarm_wrapper_key(endpoint, adam, key_uri).await?;
     }
     Ok(())
 }
 
-async fn prewarm_wrapper_key(host: &str, adam: &str, key_uri: &str) -> Result<(), BotError> {
-    let addr = format!("{host}:{APPLE_WRAPPER_DECRYPT_PORT}");
-    let stream = tokio::time::timeout(apple_timeout(), tokio::net::TcpStream::connect(&addr))
-        .await
-        .map_err(|_| BotError::Custom(format!("Apple Music wrapper prewarm 连接超时：{addr}")))??;
+async fn prewarm_wrapper_key(
+    endpoint: &AppleWrapperEndpoint,
+    adam: &str,
+    key_uri: &str,
+) -> Result<(), BotError> {
+    let stream = tokio::time::timeout(
+        apple_timeout(),
+        tokio::net::TcpStream::connect(&endpoint.decrypt_addr),
+    )
+    .await
+    .map_err(|_| {
+        BotError::Custom(format!(
+            "Apple Music wrapper prewarm 连接超时：{}",
+            endpoint.decrypt_addr
+        ))
+    })??;
     stream.set_nodelay(true)?;
     let mut stream = stream;
     write_len_prefixed(&mut stream, adam).await?;
@@ -865,14 +990,21 @@ async fn enhanced_hls_master_url(track_id: &str) -> Result<String, BotError> {
         .ok_or_else(|| BotError::Custom("Apple Music 没有返回 enhancedHls 资源".to_string()))
 }
 
-async fn wrapper_get_m3u8_url(host: &str, track_id: &str) -> Result<String, BotError> {
-    let addr = format!("{host}:{APPLE_WRAPPER_M3U8_PORT}");
+async fn wrapper_get_m3u8_url(
+    endpoint: &AppleWrapperEndpoint,
+    track_id: &str,
+) -> Result<String, BotError> {
     let mut stream = tokio::time::timeout(
         APPLE_WRAPPER_M3U8_TIMEOUT,
-        tokio::net::TcpStream::connect(&addr),
+        tokio::net::TcpStream::connect(&endpoint.m3u8_addr),
     )
     .await
-    .map_err(|_| BotError::Custom(format!("Apple Music wrapper m3u8 连接超时：{addr}")))??;
+    .map_err(|_| {
+        BotError::Custom(format!(
+            "Apple Music wrapper m3u8 连接超时：{}",
+            endpoint.m3u8_addr
+        ))
+    })??;
     stream.set_nodelay(true)?;
     let id = track_id.as_bytes();
     if id.len() > u8::MAX as usize {
@@ -1120,6 +1252,10 @@ fn apple_timeout() -> Duration {
     Duration::from_secs(SETTINGS.music.applemusic.timeout.max(1))
 }
 
+fn apple_wrapper_io_timeout() -> Duration {
+    APPLE_WRAPPER_IO_TIMEOUT.max(apple_timeout())
+}
+
 fn ensure_apple_enabled() -> Result<(), BotError> {
     if SETTINGS.music.applemusic.enabled {
         Ok(())
@@ -1191,8 +1327,12 @@ fn quality_from_str(value: &str) -> AppleMusicQuality {
 }
 
 fn apple_wrapper_host_opt() -> Option<String> {
-    let host = SETTINGS.music.applemusic.wrapper_host.trim();
-    (!host.is_empty()).then(|| host.to_string())
+    if APPLE_WRAPPER_ENDPOINTS.len() > 1 {
+        return Some("pool".to_string());
+    }
+    APPLE_WRAPPER_ENDPOINTS
+        .first()
+        .map(|endpoint| endpoint.spec.clone())
 }
 
 #[derive(Clone, Debug)]
@@ -1664,19 +1804,35 @@ fn parse_traf(data: &[u8], traf: Mp4Box, tenc: &TencBox) -> Result<ParsedTraf, B
 }
 
 async fn decrypt_fmp4_with_wrapper(
-    host: &str,
+    endpoint: &AppleWrapperEndpoint,
     track_id: &str,
     mut data: Vec<u8>,
     seg_keys: &[String],
 ) -> Result<AppleWrapperDecryptOutput, BotError> {
     let tenc = parse_tenc_from_init(&data)?;
-    let addr = format!("{host}:{APPLE_WRAPPER_DECRYPT_PORT}");
+    let addr = endpoint.decrypt_addr.clone();
     let commands = collect_wrapper_decrypt_commands(&data, track_id, seg_keys, &tenc)?;
 
     let _track_permit = APPLE_WRAPPER_TRACK_DECRYPT_SEMAPHORE
         .acquire()
         .await
         .map_err(|_| BotError::Custom("Apple Music wrapper track semaphore closed".into()))?;
+    let _endpoint_permit = if let Some(index) = endpoint.index {
+        Some(
+            APPLE_WRAPPER_ENDPOINT_DECRYPT_SEMAPHORES
+                .get(index)
+                .ok_or_else(|| {
+                    BotError::Custom("Apple Music wrapper endpoint semaphore missing".into())
+                })?
+                .acquire()
+                .await
+                .map_err(|_| {
+                    BotError::Custom("Apple Music wrapper endpoint semaphore closed".into())
+                })?,
+        )
+    } else {
+        None
+    };
     let started = Instant::now();
     run_wrapper_decrypt_fragment_parallel(
         &addr,
@@ -2076,6 +2232,7 @@ fn sanitize_stsd(data: &[u8], stsd: Mp4Box) -> Result<Vec<u8>, BotError> {
         .ok_or_else(|| BotError::Custom("MP4 stsd 缺少 sample entry".to_string()))?;
     let sanitized_entry = sanitize_sample_entry(data, entry)?;
     let mut out_payload = payload[..8].to_vec();
+    out_payload[4..8].copy_from_slice(&1u32.to_be_bytes());
     out_payload.extend_from_slice(&sanitized_entry);
     Ok(build_box(b"stsd", out_payload))
 }
@@ -2532,12 +2689,13 @@ fn alac_rice_decompress(
         if k > limit {
             k = limit;
         }
-        let mut x = alac_decode_scalar(reader, k, bps)? + sign_mod;
+        let x = alac_decode_scalar(reader, k, bps)? + sign_mod;
         sign_mod = 0;
         if x > 0xffff {
-            x = 0xffff;
+            history = 0xffff;
+        } else {
+            history = history + x * rhm_eff - ((history * rhm_eff) >> 9);
         }
-        history = history + x * rhm_eff - ((history * rhm_eff) >> 9);
         if history < 128 && i + 1 < nb_samples {
             let mut k2 = 7usize
                 .saturating_sub(alac_log2(history))
@@ -2750,7 +2908,7 @@ async fn wrapper_write_all<W>(stream: &mut W, data: &[u8], context: &str) -> Res
 where
     W: AsyncWrite + Unpin,
 {
-    tokio::time::timeout(APPLE_WRAPPER_IO_TIMEOUT, stream.write_all(data))
+    tokio::time::timeout(apple_wrapper_io_timeout(), stream.write_all(data))
         .await
         .map_err(|_| BotError::Custom(format!("Apple Music wrapper 写入超时：{context}")))??;
     Ok(())
@@ -2760,7 +2918,7 @@ async fn wrapper_flush<W>(stream: &mut W, context: &str) -> Result<(), BotError>
 where
     W: AsyncWrite + Unpin,
 {
-    tokio::time::timeout(APPLE_WRAPPER_IO_TIMEOUT, stream.flush())
+    tokio::time::timeout(apple_wrapper_io_timeout(), stream.flush())
         .await
         .map_err(|_| BotError::Custom(format!("Apple Music wrapper flush 超时：{context}")))??;
     Ok(())
@@ -2774,7 +2932,7 @@ async fn wrapper_read_exact<S>(
 where
     S: AsyncRead + Unpin,
 {
-    tokio::time::timeout(APPLE_WRAPPER_IO_TIMEOUT, stream.read_exact(data))
+    tokio::time::timeout(apple_wrapper_io_timeout(), stream.read_exact(data))
         .await
         .map_err(|_| BotError::Custom(format!("Apple Music wrapper 读取超时：{context}")))??;
     Ok(())
@@ -2866,6 +3024,17 @@ mod tests {
     }
 
     #[test]
+    fn parses_wrapper_pool_endpoint_ports() {
+        let default = parse_wrapper_endpoint("127.0.0.1").unwrap();
+        assert_eq!(default.decrypt_addr, "127.0.0.1:10020");
+        assert_eq!(default.m3u8_addr, "127.0.0.1:20020");
+
+        let shifted = parse_wrapper_endpoint("127.0.0.1:10024").unwrap();
+        assert_eq!(shifted.decrypt_addr, "127.0.0.1:10024");
+        assert_eq!(shifted.m3u8_addr, "127.0.0.1:20024");
+    }
+
+    #[test]
     fn parses_enhanced_hls_master_and_selects_lossless() {
         let master = r#"#EXTM3U
 #EXT-X-STREAM-INF:BANDWIDTH=64000,AVERAGE-BANDWIDTH=64000,CODECS="mp4a.40.2",AUDIO="audio-stereo-44100"
@@ -2948,6 +3117,32 @@ track.m4a
         assert_eq!(parsed.default_kid, [7u8; 16]);
     }
 
+    #[test]
+    fn sanitized_stsd_rewrites_entry_count_to_one() {
+        fn mp4_box(typ: &[u8; 4], payload: Vec<u8>) -> Vec<u8> {
+            let mut out = Vec::new();
+            out.extend_from_slice(&((payload.len() + 8) as u32).to_be_bytes());
+            out.extend_from_slice(typ);
+            out.extend_from_slice(&payload);
+            out
+        }
+
+        let enca = mp4_box(b"enca", vec![0u8; 28]);
+        let mp4a = mp4_box(b"mp4a", vec![0u8; 28]);
+        let mut stsd_payload = vec![0, 0, 0, 0];
+        stsd_payload.extend_from_slice(&2u32.to_be_bytes());
+        stsd_payload.extend_from_slice(&enca);
+        stsd_payload.extend_from_slice(&mp4a);
+        let data = mp4_box(b"stsd", stsd_payload);
+        let stsd = read_mp4_box(&data, 0).unwrap().unwrap();
+
+        let sanitized = sanitize_stsd(&data, stsd).unwrap();
+        assert_eq!(&sanitized[12..16], &1u32.to_be_bytes());
+        let entry = read_mp4_box(&sanitized, 16).unwrap().unwrap();
+        assert_eq!(&entry.typ, b"alac");
+        assert_eq!(entry.end(), sanitized.len());
+    }
+
     #[tokio::test]
     #[ignore = "requires live Apple Music credentials and wrapper"]
     async fn live_search_resolve_and_download_without_telegram() {
@@ -3010,6 +3205,17 @@ track.m4a
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(!String::from_utf8_lossy(&output.stdout).trim().is_empty());
+        let decode = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(&path)
+            .args(["-f", "null", "-"])
+            .output()
+            .unwrap();
+        assert!(
+            decode.status.success(),
+            "{}",
+            String::from_utf8_lossy(&decode.stderr)
+        );
     }
 
     #[tokio::test]

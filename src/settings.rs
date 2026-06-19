@@ -54,6 +54,8 @@ pub struct AppleMusic {
     pub timeout: u64,
     #[serde(default)]
     pub wrapper_host: String,
+    #[serde(default)]
+    pub wrapper_hosts: Vec<String>,
     #[serde(default = "default_apple_wrapper_track_concurrency")]
     pub wrapper_track_concurrency: usize,
     #[serde(default = "default_apple_wrapper_fragment_concurrency")]
@@ -75,6 +77,7 @@ impl Default for AppleMusic {
             language: default_apple_language(),
             timeout: default_apple_timeout(),
             wrapper_host: String::new(),
+            wrapper_hosts: Vec::new(),
             wrapper_track_concurrency: default_apple_wrapper_track_concurrency(),
             wrapper_fragment_concurrency: default_apple_wrapper_fragment_concurrency(),
             wrapper_connection_concurrency: default_apple_wrapper_connection_concurrency(),
@@ -205,6 +208,7 @@ mod tests {
         assert_eq!(settings.music.applemusic.language, "en-US");
         assert_eq!(settings.music.applemusic.timeout, 30);
         assert_eq!(settings.music.applemusic.wrapper_track_concurrency, 1);
+        assert!(settings.music.applemusic.wrapper_hosts.is_empty());
         assert_eq!(settings.music.applemusic.wrapper_fragment_concurrency, 2);
         assert_eq!(settings.music.applemusic.wrapper_connection_concurrency, 2);
     }
