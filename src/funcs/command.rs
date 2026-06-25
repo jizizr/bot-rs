@@ -13,10 +13,10 @@ use std::{
     ops::Deref,
 };
 use teloxide::types::{
-    ChatKind, InlineKeyboardButton, InlineKeyboardButtonKind::CallbackData, InlineKeyboardMarkup,
-    InlineQueryResult, InlineQueryResultArticle, InputFile, InputMessageContent,
-    InputMessageContentText, LinkPreviewOptions, MediaKind, Message, MessageId, MessageKind,
-    ParseMode,
+    ChatKind, ChosenInlineResult, InlineKeyboardButton, InlineKeyboardButtonKind::CallbackData,
+    InlineKeyboardMarkup, InlineQuery, InlineQueryResult, InlineQueryResultArticle, InputFile,
+    InputMessageContent, InputMessageContentText, LinkPreviewOptions, MediaKind, Message,
+    MessageId, MessageKind, ParseMode,
 };
 
 pub mod chat;
@@ -38,6 +38,14 @@ pub mod translate;
 pub mod vv;
 pub mod wcloud;
 pub mod wiki;
+
+pub async fn inline_query_handler(bot: Bot, q: InlineQuery) -> BotResult {
+    music::music_inline_query_handler(bot, q).await
+}
+
+pub async fn chosen_inline_handler(bot: Bot, chosen: ChosenInlineResult) -> BotResult {
+    music::music_chosen_inline_handler(bot, chosen).await
+}
 
 lazy_static! {
     static ref LIMITER: BottomLocker = BottomLocker(DashSet::new());

@@ -3,7 +3,7 @@ use bot_rs::{
     filter::call_query::call_query_handler,
     funcs::{
         // SendErrorHandler,
-        command::{Cmd, coin},
+        command::{self, Cmd},
         pkg::{self, cron},
         text::init,
     },
@@ -11,7 +11,11 @@ use bot_rs::{
     settings::{self},
 };
 use std::error::Error;
-use teloxide::{prelude::*, update_listeners::webhooks, utils::command::BotCommands};
+use teloxide::{
+    payloads::SetWebhookSetters, prelude::*, types::AllowedUpdate, update_listeners::webhooks,
+    utils::command::BotCommands,
+};
+use tokio::time::{Duration, sleep};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -22,7 +26,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .branch(Update::filter_message().endpoint(msg_handler))
         .branch(Update::filter_edited_message().endpoint(msg_handler))
         .branch(Update::filter_callback_query().endpoint(call_query_handler))
-        .branch(Update::filter_inline_query().endpoint(coin::inline_query_handler));
+        .branch(Update::filter_inline_query().endpoint(command::inline_query_handler))
+        .branch(Update::filter_chosen_inline_result().endpoint(command::chosen_inline_handler));
 
     // let err_handler = SendErrorHandler::new(BOT.clone(), ChatId(SETTINGS.bot.owner));
 
@@ -42,10 +47,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .expect("Couldn't set commands");
         let addr = ([127, 0, 0, 1], 12345).into();
         let url = &settings::SETTINGS.url.url;
-        let url = url.parse().unwrap();
-        let listener = webhooks::axum(BOT.clone(), webhooks::Options::new(addr, url))
+        let url: url::Url = url.parse().unwrap();
+        BOT.set_webhook(url.clone())
+            .allowed_updates(vec![
+                AllowedUpdate::Message,
+                AllowedUpdate::EditedMessage,
+                AllowedUpdate::CallbackQuery,
+                AllowedUpdate::InlineQuery,
+                AllowedUpdate::ChosenInlineResult,
+            ])
             .await
-            .expect("Couldn't setup webhook");
+            .expect("Couldn't set webhook allowed updates");
+        sleep(Duration::from_secs(2)).await;
+        let listener = loop {
+            match webhooks::axum(BOT.clone(), webhooks::Options::new(addr, url.clone())).await {
+                Ok(listener) => break listener,
+                Err(err) => {
+                    log::warn!("Couldn't setup webhook, retrying: {err}");
+                    sleep(Duration::from_secs(2)).await;
+                }
+            }
+        };
         dispatcher
             .dispatch_with_listener(
                 listener,
