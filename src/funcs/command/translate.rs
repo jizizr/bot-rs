@@ -202,8 +202,7 @@ async fn get_translate<'a>(
                         msg.reply_to_message().and_then(|msg| msg.text())
                     }
                     .ok_or(e)?,
-                ]
-                .into_iter(),
+                ],
                 language_tag,
             )?,
             match msg.reply_to_message() {

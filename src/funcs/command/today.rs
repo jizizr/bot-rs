@@ -24,20 +24,11 @@ async fn get_today(msg: &Message) -> Result<String, BotError> {
     let language_tag = Some("zh-CN");
     let today =
         TodayCmd::parse_i18n_from_bot(getor(msg).unwrap().split_whitespace(), language_tag)?;
-    let his = if today.month.is_some() {
-        if today.day.is_some() {
+    let his = if let Some(month) = today.month {
+        if let Some(day) = today.day {
             get_history(
-                format!(
-                    "{}{:02}{:02}.html",
-                    base_url,
-                    today.month.unwrap(),
-                    today.day.unwrap()
-                ),
-                Some(format!(
-                    "{}月{}日",
-                    today.month.unwrap(),
-                    today.day.unwrap()
-                )),
+                format!("{base_url}{month:02}{day:02}.html"),
+                Some(format!("{month}月{day}日")),
             )
             .await?
         } else {
