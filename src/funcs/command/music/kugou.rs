@@ -32,6 +32,7 @@ impl MusicProvider for KugouProvider {
                     id: encode_kugou_id(hash, item.album_id_string().as_deref()),
                     song: item.song_name,
                     singer: item.singer_name.unwrap_or_else(|| "未知歌手".to_string()),
+                    cover: String::new(),
                 })
             })
             .collect())

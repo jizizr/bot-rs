@@ -22,6 +22,8 @@ pub struct Settings {
 pub struct Bot {
     pub owner: i64,
     pub token: String,
+    #[serde(default)]
+    pub api_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -38,6 +40,8 @@ pub struct Api {
 pub struct Music {
     #[serde(default)]
     pub applemusic: AppleMusic,
+    #[serde(default)]
+    pub inline_upload_chat_id: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -211,5 +215,6 @@ mod tests {
         assert!(settings.music.applemusic.wrapper_hosts.is_empty());
         assert_eq!(settings.music.applemusic.wrapper_fragment_concurrency, 2);
         assert_eq!(settings.music.applemusic.wrapper_connection_concurrency, 2);
+        assert!(settings.bot.api_url.is_none());
     }
 }

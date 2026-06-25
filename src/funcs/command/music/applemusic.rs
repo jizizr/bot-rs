@@ -1,5 +1,6 @@
 use super::provider::{
-    DownloadProgress, MusicPlatform, MusicProvider, MusicSearchItem, MusicTrack,
+    DownloadProgress, MusicCollection, MusicLyrics, MusicPlatform, MusicProvider, MusicSearchItem,
+    MusicTrack,
 };
 use crate::{BotError, settings::SETTINGS};
 use aes::cipher::{KeyIvInit, StreamCipher};
@@ -66,6 +67,13 @@ lazy_static! {
         Regex::new(r"eyJ[A-Za-z0-9_-]{40,}\.[A-Za-z0-9_-]{40,}\.[A-Za-z0-9_-]{40,}").unwrap();
     static ref APPLE_URL_PATTERN: Regex = Regex::new(r"https?://[^\s]+").unwrap();
     static ref APPLE_SONG_PATH_RE: Regex = Regex::new(r"^/[a-z]{2}/song/[^/]+/(\d{6,})$").unwrap();
+    static ref APPLE_ALBUM_PATH_RE: Regex =
+        Regex::new(r"^/[a-z]{2}/album/[^/]+/(\d{6,})$").unwrap();
+    static ref APPLE_PLAYLIST_PATH_RE: Regex =
+        Regex::new(r"^/[a-z]{2}/playlist/[^/]+/(pl\.[a-zA-Z0-9-]+)$").unwrap();
+    static ref APPLE_TTML_P_RE: Regex = Regex::new(r#"(?s)<p\b([^>]*)>(.*?)</p>"#).unwrap();
+    static ref APPLE_TTML_BEGIN_RE: Regex = Regex::new(r#"\bbegin\s*=\s*"([^"]+)""#).unwrap();
+    static ref APPLE_XML_TAG_RE: Regex = Regex::new(r#"(?s)<[^>]+>"#).unwrap();
     static ref ENHANCED_STREAM_INF_RE: Regex = Regex::new(r#"^#EXT-X-STREAM-INF:(.*)$"#).unwrap();
     static ref ENHANCED_AUDIO_RE: Regex = Regex::new(r#"AUDIO="([^"]*)""#).unwrap();
     static ref ENHANCED_CODEC_RE: Regex = Regex::new(r#"CODECS="([^"]*)""#).unwrap();
@@ -215,6 +223,35 @@ impl MusicProvider for AppleMusicProvider {
             .collect())
     }
 
+    async fn collection(
+        &self,
+        keyword: &str,
+        limit: usize,
+    ) -> Result<Option<MusicCollection>, BotError> {
+        ensure_apple_enabled()?;
+        let Some(collection) = parse_apple_collection_id(keyword) else {
+            return Ok(None);
+        };
+        get_apple_collection(collection, limit).await.map(Some)
+    }
+
+    async fn lyrics(&self, track_id: &str) -> Result<Option<MusicLyrics>, BotError> {
+        ensure_apple_enabled()?;
+        let id = parse_apple_track_id(track_id).unwrap_or_else(|| track_id.trim().to_string());
+        if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
+            return Ok(None);
+        }
+        let ttml = get_apple_lyrics_ttml(&id).await?;
+        let plain = parse_ttml_to_lrc(&ttml);
+        if plain.trim().is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(MusicLyrics {
+            plain,
+            translation: String::new(),
+        }))
+    }
+
     async fn resolve(
         &self,
         keyword: &str,
@@ -309,6 +346,48 @@ struct AppleMusicResource {
 }
 
 #[derive(Deserialize)]
+struct AppleMusicCollectionResponse {
+    #[serde(default)]
+    data: Vec<AppleMusicCollectionResource>,
+}
+
+#[derive(Deserialize)]
+struct AppleMusicLyricsResponse {
+    #[serde(default)]
+    data: Vec<AppleMusicLyricsResource>,
+}
+
+#[derive(Deserialize)]
+struct AppleMusicLyricsResource {
+    attributes: AppleMusicLyricsAttributes,
+}
+
+#[derive(Deserialize)]
+struct AppleMusicLyricsAttributes {
+    #[serde(default)]
+    ttml: String,
+}
+
+#[derive(Deserialize)]
+struct AppleMusicCollectionResource {
+    id: String,
+    attributes: AppleMusicCollectionAttributes,
+    relationships: Option<AppleMusicRelationships>,
+}
+
+#[derive(Deserialize)]
+struct AppleMusicCollectionAttributes {
+    name: String,
+    #[serde(default, rename = "artistName")]
+    artist_name: String,
+}
+
+#[derive(Deserialize)]
+struct AppleMusicRelationships {
+    tracks: Option<AppleMusicResourceList>,
+}
+
+#[derive(Deserialize)]
 struct AppleMusicAttributes {
     name: String,
     #[serde(default, rename = "artistName")]
@@ -369,6 +448,66 @@ async fn get_apple_song(id: &str) -> Result<AppleMusicResource, BotError> {
         .into_iter()
         .next()
         .ok_or_else(|| BotError::Custom("没有找到 Apple Music 歌曲详情".to_string()))
+}
+
+async fn get_apple_collection(
+    collection: AppleCollectionId,
+    limit: usize,
+) -> Result<MusicCollection, BotError> {
+    let url = apple_collection_url(&collection);
+    let response: AppleMusicCollectionResponse = apple_get_json(&url, true).await?;
+    let resource = response
+        .data
+        .into_iter()
+        .next()
+        .ok_or_else(|| BotError::Custom("没有找到 Apple Music 歌单或专辑".to_string()))?;
+    let title = match collection.kind {
+        AppleCollectionKind::Album => {
+            let artist = resource.attributes.artist_name.trim();
+            if artist.is_empty() {
+                resource.attributes.name
+            } else {
+                format!("{} - {}", resource.attributes.name, artist)
+            }
+        }
+        AppleCollectionKind::Playlist => resource.attributes.name,
+    };
+    let items = resource
+        .relationships
+        .and_then(|relationships| relationships.tracks)
+        .map(|tracks| tracks.data)
+        .unwrap_or_default()
+        .into_iter()
+        .take(limit.clamp(1, 25))
+        .map(song_to_item)
+        .filter(|item| !item.id.trim().is_empty())
+        .collect();
+    Ok(MusicCollection {
+        platform: MusicPlatform::AppleMusic,
+        id: resource.id,
+        title,
+        items,
+    })
+}
+
+async fn get_apple_lyrics_ttml(id: &str) -> Result<String, BotError> {
+    let media_user_token =
+        normalize_media_user_token(SETTINGS.music.applemusic.media_user_token.trim());
+    if media_user_token.is_empty() {
+        return Err(BotError::Custom(
+            "Apple Music 歌词需要配置 music.applemusic.media_user_token".to_string(),
+        ));
+    }
+    let url = apple_lyrics_url(id);
+    let response: AppleMusicLyricsResponse =
+        apple_get_json_with_media_user_token(&url, &media_user_token, true).await?;
+    response
+        .data
+        .into_iter()
+        .next()
+        .map(|resource| resource.attributes.ttml)
+        .filter(|ttml| !ttml.trim().is_empty())
+        .ok_or_else(|| BotError::Custom("Apple Music 没有返回歌词".to_string()))
 }
 
 async fn get_apple_download_url_with_quality(
@@ -1093,6 +1232,39 @@ async fn apple_get_json<T: serde::de::DeserializeOwned>(
     Ok(response.json().await?)
 }
 
+async fn apple_get_json_with_media_user_token<T: serde::de::DeserializeOwned>(
+    url: &str,
+    media_user_token: &str,
+    retry: bool,
+) -> Result<T, BotError> {
+    let token = ensure_developer_token().await?;
+    let response = CLIENT
+        .get(url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Origin", APPLE_MUSIC_ORIGIN)
+        .header("User-Agent", APPLE_MUSIC_UA)
+        .header("media-user-token", media_user_token)
+        .header("Cookie", format!("media-user-token={media_user_token}"))
+        .send()
+        .await?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED && retry {
+        clear_developer_token();
+        return Box::pin(apple_get_json_with_media_user_token(
+            url,
+            media_user_token,
+            false,
+        ))
+        .await;
+    }
+    if !response.status().is_success() {
+        return Err(BotError::Custom(format!(
+            "Apple Music API 请求失败：HTTP {}",
+            response.status()
+        )));
+    }
+    Ok(response.json().await?)
+}
+
 async fn ensure_developer_token() -> Result<String, BotError> {
     if let Some(token) = DEVELOPER_TOKEN.read().unwrap().clone() {
         return Ok(token);
@@ -1159,16 +1331,46 @@ fn apple_song_url(id: &str) -> String {
     url.to_string()
 }
 
+fn apple_collection_url(collection: &AppleCollectionId) -> String {
+    let resource = match collection.kind {
+        AppleCollectionKind::Album => "albums",
+        AppleCollectionKind::Playlist => "playlists",
+    };
+    let mut url = Url::parse(&format!(
+        "{APPLE_MUSIC_API}/v1/catalog/{}/{resource}/{}",
+        apple_storefront(),
+        collection.id
+    ))
+    .unwrap();
+    url.query_pairs_mut()
+        .append_pair("include", "tracks")
+        .append_pair("l", &apple_language());
+    url.to_string()
+}
+
+fn apple_lyrics_url(id: &str) -> String {
+    let mut url = Url::parse(&format!(
+        "{APPLE_MUSIC_API}/v1/catalog/{}/songs/{id}/lyrics",
+        apple_storefront()
+    ))
+    .unwrap();
+    url.query_pairs_mut().append_pair("l", &apple_language());
+    url.to_string()
+}
+
 fn song_to_item(song: AppleMusicResource) -> MusicSearchItem {
+    let AppleMusicResource { id, attributes } = song;
+    let cover = format_artwork_url(attributes.artwork.as_ref(), DEFAULT_ARTWORK_SIZE);
     MusicSearchItem {
         platform: MusicPlatform::AppleMusic,
-        id: song.id,
-        song: song.attributes.name,
-        singer: if song.attributes.artist_name.trim().is_empty() {
+        id,
+        song: attributes.name,
+        singer: if attributes.artist_name.trim().is_empty() {
             "未知歌手".to_string()
         } else {
-            song.attributes.artist_name
+            attributes.artist_name
         },
+        cover,
     }
 }
 
@@ -1211,6 +1413,169 @@ fn parse_apple_track_id(text: &str) -> Option<String> {
         .captures(url.path())
         .and_then(|captures| captures.get(1))
         .map(|value| value.as_str().to_string())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AppleCollectionKind {
+    Album,
+    Playlist,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AppleCollectionId {
+    kind: AppleCollectionKind,
+    id: String,
+}
+
+fn parse_apple_collection_id(text: &str) -> Option<AppleCollectionId> {
+    let text = text.trim();
+    if let Some(album_id) = text.strip_prefix("album:")
+        && is_apple_numeric_id(album_id)
+    {
+        return Some(AppleCollectionId {
+            kind: AppleCollectionKind::Album,
+            id: album_id.trim().to_string(),
+        });
+    }
+    if text.starts_with("pl.") {
+        return Some(AppleCollectionId {
+            kind: AppleCollectionKind::Playlist,
+            id: text.to_string(),
+        });
+    }
+    let url_text = APPLE_URL_PATTERN
+        .find(text)
+        .map(|value| {
+            value
+                .as_str()
+                .trim_end_matches(&['.', ',', '!', '?', ')', ']', '}'][..])
+        })
+        .unwrap_or(text);
+    let url = Url::parse(url_text).ok()?;
+    let host = url.host_str()?.to_ascii_lowercase();
+    if host != "music.apple.com" && !host.ends_with(".music.apple.com") {
+        return None;
+    }
+    if url
+        .query_pairs()
+        .any(|(key, value)| (key == "i" || key == "songId") && is_apple_numeric_id(&value))
+    {
+        return None;
+    }
+    if let Some(id) = APPLE_ALBUM_PATH_RE
+        .captures(url.path())
+        .and_then(|captures| captures.get(1))
+        .map(|value| value.as_str())
+        .filter(|id| is_apple_numeric_id(id))
+    {
+        return Some(AppleCollectionId {
+            kind: AppleCollectionKind::Album,
+            id: id.to_string(),
+        });
+    }
+    APPLE_PLAYLIST_PATH_RE
+        .captures(url.path())
+        .and_then(|captures| captures.get(1))
+        .map(|value| AppleCollectionId {
+            kind: AppleCollectionKind::Playlist,
+            id: value.as_str().to_string(),
+        })
+}
+
+fn is_apple_numeric_id(value: &str) -> bool {
+    let value = value.trim();
+    value.len() >= 6 && value.chars().all(|c| c.is_ascii_digit())
+}
+
+fn parse_ttml_to_lrc(ttml: &str) -> String {
+    let mut lines = Vec::new();
+    for captures in APPLE_TTML_P_RE.captures_iter(ttml) {
+        let attrs = captures
+            .get(1)
+            .map(|value| value.as_str())
+            .unwrap_or_default();
+        let body = captures
+            .get(2)
+            .map(|value| value.as_str())
+            .unwrap_or_default();
+        let text = decode_xml_entities(&strip_xml_tags(body));
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        if let Some(begin) = APPLE_TTML_BEGIN_RE
+            .captures(attrs)
+            .and_then(|captures| captures.get(1))
+            .map(|value| value.as_str())
+        {
+            lines.push(format!("[{}]{}", format_lrc_timestamp(begin), text));
+        } else {
+            lines.push(text.to_string());
+        }
+    }
+    if lines.is_empty() && !ttml.trim().is_empty() {
+        return ttml.trim().to_string();
+    }
+    lines.join("\n")
+}
+
+fn strip_xml_tags(value: &str) -> String {
+    APPLE_XML_TAG_RE.replace_all(value, "").to_string()
+}
+
+fn decode_xml_entities(value: &str) -> String {
+    value
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+}
+
+fn format_lrc_timestamp(value: &str) -> String {
+    let millis = parse_ttml_time_to_millis(value);
+    let minutes = millis / 60_000;
+    let seconds = (millis % 60_000) / 1000;
+    let centiseconds = (millis % 1000) / 10;
+    format!("{minutes:02}:{seconds:02}.{centiseconds:02}")
+}
+
+fn parse_ttml_time_to_millis(value: &str) -> u64 {
+    let value = value.trim();
+    if value.is_empty() {
+        return 0;
+    }
+    let parts = value.split(':').collect::<Vec<_>>();
+    let (hours, minutes, seconds) = match parts.as_slice() {
+        [seconds] => (0, 0, *seconds),
+        [minutes, seconds] => (0, parse_u64_or_zero(minutes), *seconds),
+        [hours, minutes, seconds] => (
+            parse_u64_or_zero(hours),
+            parse_u64_or_zero(minutes),
+            *seconds,
+        ),
+        _ => return 0,
+    };
+    let (seconds, millis) = seconds.split_once('.').unwrap_or((seconds, "0"));
+    let seconds = parse_u64_or_zero(seconds);
+    let millis = normalize_millis(millis);
+    ((hours * 3600 + minutes * 60 + seconds) * 1000) + millis
+}
+
+fn normalize_millis(value: &str) -> u64 {
+    let mut millis = value
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .take(3)
+        .collect::<String>();
+    while millis.len() < 3 {
+        millis.push('0');
+    }
+    parse_u64_or_zero(&millis)
+}
+
+fn parse_u64_or_zero(value: &str) -> u64 {
+    value.parse().unwrap_or(0)
 }
 
 fn format_artwork_url(artwork: Option<&AppleMusicArtwork>, size: usize) -> String {
@@ -1414,7 +1779,7 @@ fn parse_enhanced_hls_master(content: &str) -> Result<Vec<EnhancedHlsVariant>, B
             "Apple Music enhancedHls 没有 stream variant".to_string(),
         ));
     }
-    variants.sort_by(|a, b| b.avg_bw.cmp(&a.avg_bw));
+    variants.sort_by_key(|variant| std::cmp::Reverse(variant.avg_bw));
     Ok(variants)
 }
 
@@ -2970,6 +3335,42 @@ mod tests {
         assert_eq!(
             parse_apple_track_id("am:1440841363"),
             Some("1440841363".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_apple_collection_urls() {
+        assert_eq!(
+            parse_apple_collection_id("https://music.apple.com/us/album/1989/1440935467"),
+            Some(AppleCollectionId {
+                kind: AppleCollectionKind::Album,
+                id: "1440935467".to_string(),
+            })
+        );
+        assert_eq!(
+            parse_apple_collection_id("https://music.apple.com/us/playlist/test/pl.u-abc123DEF"),
+            Some(AppleCollectionId {
+                kind: AppleCollectionKind::Playlist,
+                id: "pl.u-abc123DEF".to_string(),
+            })
+        );
+        assert_eq!(
+            parse_apple_collection_id("https://music.apple.com/cn/album/x/1624000713?i=1624001324"),
+            None
+        );
+    }
+
+    #[test]
+    fn parses_apple_ttml_to_lrc() {
+        let ttml = r#"<tt xmlns="http://www.w3.org/ns/ttml">
+<body><div>
+<p begin="27.395" end="30.0"><span>Hello</span><span> world</span></p>
+<p begin="01:02.340" end="01:04.0">Rice &amp; Field</p>
+</div></body>
+</tt>"#;
+        assert_eq!(
+            parse_ttml_to_lrc(ttml),
+            "[00:27.39]Hello world\n[01:02.34]Rice & Field"
         );
     }
 

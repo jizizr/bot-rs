@@ -637,6 +637,7 @@ fn search_song_to_item(song: QQSearchSong) -> MusicSearchItem {
         .unwrap_or("未知歌曲")
         .to_string(),
         singer: singers_to_string(&song.singer),
+        cover: String::new(),
     }
 }
 

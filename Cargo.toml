@@ -39,7 +39,6 @@ reqwest-middleware = "0.4"
 reqwest-retry = "0.7"
 redis = { version = "0.29", features = ["tokio-comp"] }
 ping-server-rs = { git = "https://github.com/jizizr/ping-server-rs" }
-async_once = "0.2"
 futures = "0.3"
 lingua = { version = "1", default-features = false, features = [
     "chinese",
@@ -70,6 +69,8 @@ charts-rs = { version = "0.3", features = ["image-encoder"] }
 clap-i18n-richformatter = { git = "https://github.com/jizizr/clap-i18n-richformatter", features = [
     "derive",
 ] }
+sea-orm = { version = "1", default-features = false, features = ["sqlx-mysql", "runtime-tokio-rustls", "macros"] }
+ferrous-opencc = "0.4"
 [profile.release]
 lto = true
 panic = "abort"

@@ -31,6 +31,7 @@ impl MusicProvider for BilibiliProvider {
                     id: bvid,
                     song: strip_html_tags(&item.title),
                     singer: item.author.unwrap_or_else(|| "未知 UP".to_string()),
+                    cover: String::new(),
                 })
             })
             .collect())

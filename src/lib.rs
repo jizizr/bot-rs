@@ -58,6 +58,8 @@ pub enum BotError {
     #[error("{}", .0)]
     MySQLError(#[from] mysql_async::Error),
     #[error("{}", .0)]
+    SeaOrmError(#[from] sea_orm::DbErr),
+    #[error("{}", .0)]
     JoinError(#[from] tokio::task::JoinError),
     #[error("{}", .0)]
     ImageError(#[from] image::ImageError),
@@ -83,7 +85,21 @@ lazy_static! {
             .tcp_nodelay(true)
             .build()
             .expect("telegram client creation failed");
-        Bot::with_client(&SETTINGS.bot.token, client)
+        let bot = Bot::with_client(&SETTINGS.bot.token, client);
+        match SETTINGS
+            .bot
+            .api_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+        {
+            Some(api_url) => {
+                let api_url = api_url.trim_end_matches('/');
+                let api_url = reqwest::Url::parse(api_url).expect("invalid telegram bot api_url");
+                bot.set_api_url(api_url)
+            }
+            None => bot,
+        }
     };
 }
 

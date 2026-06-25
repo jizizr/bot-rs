@@ -383,6 +383,7 @@ fn soda_track_to_item(track: SodaTrack) -> Option<MusicSearchItem> {
         id: track.id.clone(),
         song: track.name.clone(),
         singer: soda_artists(&track),
+        cover: soda_cover_url(&track.album.url_cover),
     })
 }
 

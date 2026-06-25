@@ -20,6 +20,18 @@ lazy_static! {
 pub trait MusicProvider: Sync {
     async fn search(&self, keyword: &str, limit: usize) -> Result<Vec<MusicSearchItem>, BotError>;
 
+    async fn collection(
+        &self,
+        _keyword: &str,
+        _limit: usize,
+    ) -> Result<Option<MusicCollection>, BotError> {
+        Ok(None)
+    }
+
+    async fn lyrics(&self, _track_id: &str) -> Result<Option<MusicLyrics>, BotError> {
+        Ok(None)
+    }
+
     async fn resolve(
         &self,
         keyword: &str,
@@ -27,13 +39,14 @@ pub trait MusicProvider: Sync {
     ) -> Result<MusicTrack, BotError>;
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub enum MusicPlatform {
     AppleMusic,
     Bilibili,
     Kugou,
     Netease,
     Soda,
+    #[default]
     Tencent,
 }
 
@@ -106,12 +119,6 @@ impl MusicPlatform {
     }
 }
 
-impl Default for MusicPlatform {
-    fn default() -> Self {
-        Self::Tencent
-    }
-}
-
 impl fmt::Display for MusicPlatform {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.id())
@@ -130,6 +137,21 @@ pub struct MusicSearchItem {
     pub id: String,
     pub song: String,
     pub singer: String,
+    pub cover: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MusicCollection {
+    pub platform: MusicPlatform,
+    pub id: String,
+    pub title: String,
+    pub items: Vec<MusicSearchItem>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MusicLyrics {
+    pub plain: String,
+    pub translation: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
