@@ -1,8 +1,8 @@
 use super::provider::{
     MusicCollection, MusicLyrics, MusicPlatform, MusicProvider, MusicSearchItem, MusicTrack,
-    get_json, json_id_to_string,
+    get_json_with_headers, json_id_to_string,
 };
-use crate::BotError;
+use crate::{BotError, settings::SETTINGS};
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -14,19 +14,12 @@ pub struct NeteaseProvider;
 #[async_trait]
 impl MusicProvider for NeteaseProvider {
     async fn search(&self, keyword: &str, limit: usize) -> Result<Vec<MusicSearchItem>, BotError> {
-        let url = format!(
-            "https://music.163.com/api/search/get/web?csrf_token=&s={}&type=1&offset=0&total=true&limit={limit}",
-            urlencoding::encode(keyword)
-        );
-        let response: NeteaseSearchResponse = get_json(&url).await?;
-        Ok(response
-            .result
-            .and_then(|result| result.songs)
-            .unwrap_or_default()
-            .into_iter()
-            .map(netease_song_to_item)
-            .filter(|item| !item.id.is_empty())
-            .collect())
+        match search_netease_native(keyword, limit).await {
+            Ok(songs) if !songs.is_empty() => Ok(songs),
+            _ => search_netease_by_vkeys(keyword, limit)
+                .await
+                .map(|songs| vkeys_netease_to_items(songs, limit)),
+        }
     }
 
     async fn resolve(
@@ -34,42 +27,7 @@ impl MusicProvider for NeteaseProvider {
         keyword: &str,
         selected_id: Option<&str>,
     ) -> Result<MusicTrack, BotError> {
-        let id = match selected_id {
-            Some(id) => id.to_string(),
-            None => {
-                if let Some(id) = parse_netease_id(keyword) {
-                    id
-                } else {
-                    self.search(keyword, 1)
-                        .await?
-                        .into_iter()
-                        .next()
-                        .ok_or_else(|| BotError::Custom("没有找到可下载的音乐".to_string()))?
-                        .id
-                }
-            }
-        };
-        let (song, download_url) =
-            tokio::try_join!(get_netease_song(&id), get_netease_download_url(&id))?;
-        let singer = netease_artists(&song);
-        let album = song.album.unwrap_or_default();
-        Ok(MusicTrack {
-            id: id.clone(),
-            platform: MusicPlatform::Netease,
-            song: song.name,
-            singer,
-            album: album.name,
-            cover: album.pic_url.unwrap_or_default(),
-            link: format!("https://music.163.com/#/song?id={id}"),
-            url: download_url,
-            headers: HashMap::new(),
-            duration: song
-                .duration
-                .filter(|duration| *duration > 0)
-                .map(|duration| ((duration + 500) / 1000) as u32),
-            bitrate: None,
-            format: Some("mp3".to_string()),
-        })
+        resolve_with_quality(keyword, selected_id, "lossless").await
     }
 
     async fn collection(
@@ -88,14 +46,108 @@ impl MusicProvider for NeteaseProvider {
         if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
             return Ok(None);
         }
-        let response = get_netease_lyrics(&id).await?;
-        let plain = response.lrc.map(|lyric| lyric.lyric).unwrap_or_default();
-        let translation = response.tlyric.map(|lyric| lyric.lyric).unwrap_or_default();
-        if plain.trim().is_empty() && translation.trim().is_empty() {
-            return Ok(None);
+        match get_native_netease_lyrics(&id).await {
+            Ok(Some(lyrics)) => Ok(Some(lyrics)),
+            Ok(None) | Err(_) => get_vkeys_netease_lyrics(&id).await,
         }
-        Ok(Some(MusicLyrics { plain, translation }))
     }
+}
+
+pub(super) async fn resolve_with_quality(
+    keyword: &str,
+    selected_id: Option<&str>,
+    quality: &str,
+) -> Result<MusicTrack, BotError> {
+    let id = resolve_netease_id(keyword, selected_id).await?;
+    if should_prefer_vkeys_netease_download(quality)
+        && netease_cookie().is_none()
+        && vkeys_enabled()
+    {
+        match get_vkeys_netease_track(&id, quality).await {
+            Ok(track) => return Ok(track),
+            Err(vkeys_error) => match resolve_netease_native(&id, quality).await {
+                Ok(track) => return Ok(track),
+                Err(_) => return Err(vkeys_error),
+            },
+        }
+    }
+    match resolve_netease_native(&id, quality).await {
+        Ok(track) => Ok(track),
+        Err(native_error) if vkeys_enabled() => match get_vkeys_netease_track(&id, quality).await {
+            Ok(track) => Ok(track),
+            Err(_) => Err(native_error),
+        },
+        Err(native_error) => Err(native_error),
+    }
+}
+
+async fn resolve_netease_id(keyword: &str, selected_id: Option<&str>) -> Result<String, BotError> {
+    if let Some(id) = selected_id {
+        return Ok(id.to_string());
+    }
+    if let Some(id) = parse_netease_id(keyword) {
+        return Ok(id);
+    }
+    NETEASE_PROVIDER
+        .search(keyword, 1)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| BotError::Custom("没有找到可下载的音乐".to_string()))
+        .map(|item| item.id)
+}
+
+async fn resolve_netease_native(id: &str, quality: &str) -> Result<MusicTrack, BotError> {
+    let (song, download_url) =
+        tokio::try_join!(get_netease_song(id), get_netease_download_url(id, quality))?;
+    let singer = netease_artists(&song);
+    let album = song.album.unwrap_or_default();
+    Ok(MusicTrack {
+        id: id.to_string(),
+        platform: MusicPlatform::Netease,
+        song: song.name,
+        singer,
+        album: album.name,
+        cover: album.pic_url.unwrap_or_default(),
+        link: format!("https://music.163.com/#/song?id={id}"),
+        url: download_url,
+        headers: HashMap::new(),
+        duration: song
+            .duration
+            .filter(|duration| *duration > 0)
+            .map(|duration| ((duration + 500) / 1000) as u32),
+        bitrate: None,
+        format: Some("mp3".to_string()),
+    })
+}
+
+async fn search_netease_native(
+    keyword: &str,
+    limit: usize,
+) -> Result<Vec<MusicSearchItem>, BotError> {
+    let url = format!(
+        "https://music.163.com/api/search/get/web?csrf_token=&s={}&type=1&offset=0&total=true&limit={limit}",
+        urlencoding::encode(keyword)
+    );
+    let response: NeteaseSearchResponse = get_netease_json(&url).await?;
+    Ok(response
+        .result
+        .and_then(|result| result.songs)
+        .unwrap_or_default()
+        .into_iter()
+        .map(netease_song_to_item)
+        .filter(|item| !item.id.is_empty())
+        .collect())
+}
+
+async fn get_native_netease_lyrics(id: &str) -> Result<Option<MusicLyrics>, BotError> {
+    let response = get_netease_lyrics(id).await?;
+    let plain = response.lrc.map(|lyric| lyric.lyric).unwrap_or_default();
+    let translation = response.tlyric.map(|lyric| lyric.lyric).unwrap_or_default();
+    if plain.trim().is_empty() && translation.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(MusicLyrics { plain, translation }))
 }
 
 #[derive(Deserialize)]
@@ -186,12 +238,132 @@ struct NeteaseAlbum {
     pic_url: Option<String>,
 }
 
+#[derive(Clone, Default, Deserialize)]
+struct VkeysNeteaseTrack {
+    #[serde(default)]
+    id: serde_json::Value,
+    #[serde(default)]
+    song: String,
+    #[serde(default)]
+    singer: String,
+    #[serde(default)]
+    album: String,
+    #[serde(default)]
+    cover: String,
+    #[serde(default)]
+    interval: String,
+    #[serde(default)]
+    link: String,
+    #[serde(default)]
+    quality: String,
+    #[serde(default)]
+    size: String,
+    #[serde(default)]
+    kbps: String,
+    #[serde(default)]
+    url: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum VkeysNeteaseData {
+    List(Vec<VkeysNeteaseTrack>),
+    Track(Box<VkeysNeteaseTrack>),
+}
+
+#[derive(Deserialize)]
+struct VkeysNeteaseLyricsData {
+    #[serde(default)]
+    lrc: String,
+    #[serde(default)]
+    tlyric: String,
+}
+
+async fn search_netease_by_vkeys(
+    keyword: &str,
+    limit: usize,
+) -> Result<Vec<VkeysNeteaseTrack>, BotError> {
+    if !vkeys_enabled() {
+        return Err(BotError::Custom("vkeys 未启用".to_string()));
+    }
+    let mut url = vkeys_url("/v2/music/netease")?;
+    append_vkeys_auth(&mut url);
+    url.query_pairs_mut()
+        .append_pair("word", keyword)
+        .append_pair("page", "1")
+        .append_pair("num", &limit.clamp(1, 50).to_string());
+    let response: VkeysResponse<VkeysNeteaseData> = get_vkeys_json(url.as_str()).await?;
+    response.ensure_success("vkeys 网易云搜索")?;
+    match response.data {
+        Some(VkeysNeteaseData::List(list)) => Ok(list),
+        Some(VkeysNeteaseData::Track(track)) => Ok(vec![*track]),
+        None => Ok(Vec::new()),
+    }
+}
+
+async fn get_vkeys_netease_track(id: &str, quality: &str) -> Result<MusicTrack, BotError> {
+    let mut url = vkeys_url("/v2/music/netease")?;
+    append_vkeys_auth(&mut url);
+    url.query_pairs_mut()
+        .append_pair("id", id)
+        .append_pair("quality", &netease_vkeys_quality(quality).to_string());
+    let response: VkeysResponse<VkeysNeteaseTrack> = get_vkeys_json(url.as_str()).await?;
+    response.ensure_success("vkeys 网易云下载")?;
+    let track = response
+        .data
+        .ok_or_else(|| BotError::Custom("vkeys 网易云没有返回歌曲数据".to_string()))?;
+    let download_url = track
+        .url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .ok_or_else(|| BotError::Custom("vkeys 网易云没有返回可下载直链".to_string()))?
+        .to_string();
+    Ok(MusicTrack {
+        id: json_id_to_string(track.id).if_empty(|| id.to_string()),
+        platform: MusicPlatform::Netease,
+        song: track.song.if_empty(|| "未知歌曲".to_string()),
+        singer: track.singer.if_empty(|| "未知歌手".to_string()),
+        album: track.album,
+        cover: track.cover,
+        link: track
+            .link
+            .if_empty(|| format!("https://music.163.com/#/song?id={id}")),
+        url: download_url.clone(),
+        headers: HashMap::new(),
+        duration: parse_vkeys_duration(&track.interval),
+        bitrate: parse_vkeys_kbps(&track.kbps),
+        format: vkeys_track_format(&download_url, &track.quality, &track.size),
+    })
+}
+
+async fn get_vkeys_netease_lyrics(id: &str) -> Result<Option<MusicLyrics>, BotError> {
+    if !vkeys_enabled() {
+        return Ok(None);
+    }
+    let mut url = vkeys_url("/v2/music/netease/lyric")?;
+    append_vkeys_auth(&mut url);
+    url.query_pairs_mut().append_pair("id", id);
+    let response: VkeysResponse<VkeysNeteaseLyricsData> = get_vkeys_json(url.as_str()).await?;
+    response.ensure_success("vkeys 网易云歌词")?;
+    let Some(data) = response.data else {
+        return Ok(None);
+    };
+    if data.lrc.trim().is_empty() && data.tlyric.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(MusicLyrics {
+        plain: data.lrc,
+        translation: data.tlyric,
+    }))
+}
+
 async fn get_netease_song(id: &str) -> Result<NeteaseSong, BotError> {
     let url = format!(
         "https://music.163.com/api/song/detail?ids=[{}]",
         urlencoding::encode(id)
     );
-    let response: NeteaseDetailResponse = get_json(&url).await?;
+    let response: NeteaseDetailResponse = get_netease_json(&url).await?;
     response
         .songs
         .into_iter()
@@ -199,13 +371,14 @@ async fn get_netease_song(id: &str) -> Result<NeteaseSong, BotError> {
         .ok_or_else(|| BotError::Custom("没有找到歌曲详情".to_string()))
 }
 
-async fn get_netease_download_url(id: &str) -> Result<String, BotError> {
+async fn get_netease_download_url(id: &str, quality: &str) -> Result<String, BotError> {
     let url = format!(
-        "https://music.163.com/api/song/enhance/player/url?id={}&ids=[{}]&br=320000",
+        "https://music.163.com/api/song/enhance/player/url?id={}&ids=[{}]&br={}",
         urlencoding::encode(id),
-        urlencoding::encode(id)
+        urlencoding::encode(id),
+        netease_native_bitrate(quality)
     );
-    let response: NeteaseUrlResponse = get_json(&url).await?;
+    let response: NeteaseUrlResponse = get_netease_json(&url).await?;
     response
         .data
         .into_iter()
@@ -229,7 +402,7 @@ async fn get_netease_playlist(id: &str, limit: usize) -> Result<MusicCollection,
         "https://music.163.com/api/v6/playlist/detail?id={}",
         urlencoding::encode(id)
     );
-    let response: NeteasePlaylistResponse = get_json(&url).await?;
+    let response: NeteasePlaylistResponse = get_netease_json(&url).await?;
     let playlist = response
         .playlist
         .ok_or_else(|| BotError::Custom("没有找到网易云歌单".to_string()))?;
@@ -254,7 +427,7 @@ async fn get_netease_album_collection(id: &str, limit: usize) -> Result<MusicCol
         "https://music.163.com/api/album/{}",
         urlencoding::encode(id)
     );
-    let response: NeteaseAlbumResponse = get_json(&url).await?;
+    let response: NeteaseAlbumResponse = get_netease_json(&url).await?;
     let album = response
         .album
         .ok_or_else(|| BotError::Custom("没有找到网易云专辑".to_string()))?;
@@ -286,7 +459,161 @@ async fn get_netease_lyrics(id: &str) -> Result<NeteaseLyricResponse, BotError> 
         "https://music.163.com/api/song/lyric?id={}&lv=-1&kv=-1&tv=-1",
         urlencoding::encode(id)
     );
-    get_json(&url).await
+    get_netease_json(&url).await
+}
+
+async fn get_netease_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, BotError> {
+    get_json_with_headers(url, &netease_headers()).await
+}
+
+#[derive(Deserialize)]
+struct VkeysResponse<T> {
+    code: i64,
+    #[serde(default)]
+    message: String,
+    data: Option<T>,
+}
+
+impl<T> VkeysResponse<T> {
+    fn ensure_success(&self, context: &str) -> Result<(), BotError> {
+        if self.code == 0 || self.code == 200 {
+            Ok(())
+        } else {
+            Err(BotError::Custom(format!("{context}失败：{}", self.message)))
+        }
+    }
+}
+
+async fn get_vkeys_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, BotError> {
+    get_json_with_headers(url, &HashMap::new()).await
+}
+
+fn vkeys_enabled() -> bool {
+    SETTINGS.music.vkeys.enabled && !SETTINGS.music.vkeys.base_url.trim().is_empty()
+}
+
+fn vkeys_url(path: &str) -> Result<url::Url, BotError> {
+    let base = SETTINGS.music.vkeys.base_url.trim().trim_end_matches('/');
+    url::Url::parse(&format!("{base}/{}", path.trim_start_matches('/')))
+        .map_err(|err| BotError::Custom(format!("vkeys API 地址无效：{err}")))
+}
+
+fn append_vkeys_auth(url: &mut url::Url) {
+    let token = SETTINGS.music.vkeys.token.trim();
+    if !token.is_empty() {
+        url.query_pairs_mut().append_pair("token", token);
+    }
+}
+
+fn netease_vkeys_quality(quality: &str) -> i64 {
+    match quality.trim().to_ascii_lowercase().as_str() {
+        "standard" | "std" | "128" => 2,
+        "lossless" | "flac" | "无损" => 5,
+        _ => 4,
+    }
+}
+
+fn netease_native_bitrate(quality: &str) -> i64 {
+    match quality.trim().to_ascii_lowercase().as_str() {
+        "standard" | "std" | "128" => 128_000,
+        "lossless" | "flac" | "无损" => 999_000,
+        "hires" | "hi-res" | "master" => 1_999_000,
+        _ => 320_000,
+    }
+}
+
+fn should_prefer_vkeys_netease_download(quality: &str) -> bool {
+    matches!(
+        quality.trim().to_ascii_lowercase().as_str(),
+        "lossless" | "flac" | "无损" | "hires" | "hi-res" | "master"
+    )
+}
+
+fn parse_vkeys_kbps(value: &str) -> Option<u32> {
+    let numeric = value
+        .trim()
+        .trim_end_matches("kbps")
+        .trim()
+        .parse::<f32>()
+        .ok()?;
+    (numeric > 0.0).then(|| numeric.round() as u32)
+}
+
+fn parse_vkeys_duration(value: &str) -> Option<u32> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if let Ok(seconds) = value.parse::<u32>() {
+        return (seconds > 0).then_some(seconds);
+    }
+    let (minutes, rest) = value.split_once('分')?;
+    let seconds = rest.trim_end_matches('秒');
+    let total = minutes.trim().parse::<u32>().ok()? * 60 + seconds.trim().parse::<u32>().ok()?;
+    (total > 0).then_some(total)
+}
+
+fn vkeys_track_format(url: &str, quality: &str, size: &str) -> Option<String> {
+    let ext = url
+        .split('?')
+        .next()
+        .and_then(|path| path.rsplit('.').next())
+        .map(str::trim)
+        .filter(|ext| ext.len() <= 5 && ext.chars().all(|c| c.is_ascii_alphanumeric()))
+        .map(|ext| ext.to_ascii_lowercase());
+    if ext.is_some() {
+        return ext;
+    }
+    if quality.contains("无损") || size.to_ascii_lowercase().contains("flac") {
+        Some("flac".to_string())
+    } else {
+        Some("mp3".to_string())
+    }
+}
+
+trait IfEmpty {
+    fn if_empty<F>(self, fallback: F) -> String
+    where
+        F: FnOnce() -> String;
+}
+
+impl IfEmpty for String {
+    fn if_empty<F>(self, fallback: F) -> String
+    where
+        F: FnOnce() -> String,
+    {
+        if self.trim().is_empty() {
+            fallback()
+        } else {
+            self
+        }
+    }
+}
+
+fn netease_headers() -> HashMap<String, String> {
+    let mut headers = HashMap::from([
+        ("Referer".to_string(), "https://music.163.com/".to_string()),
+        (
+            "User-Agent".to_string(),
+            "Mozilla/5.0 AppleWebKit/537.36 Chrome/125 Safari/537.36".to_string(),
+        ),
+    ]);
+    if let Some(cookie) = netease_cookie() {
+        headers.insert("Cookie".to_string(), cookie);
+    }
+    headers
+}
+
+fn netease_cookie() -> Option<String> {
+    let configured_cookie = SETTINGS.music.netease.cookie.trim();
+    if configured_cookie.is_empty() {
+        std::env::var("NETEASE_MUSIC_COOKIE")
+            .ok()
+            .map(|cookie| cookie.trim().to_string())
+            .filter(|cookie| !cookie.is_empty())
+    } else {
+        Some(configured_cookie.to_string())
+    }
 }
 
 fn netease_song_to_item(song: NeteaseSong) -> MusicSearchItem {
@@ -303,6 +630,25 @@ fn netease_song_to_item(song: NeteaseSong) -> MusicSearchItem {
         singer,
         cover,
     }
+}
+
+fn vkeys_netease_to_item(song: VkeysNeteaseTrack) -> MusicSearchItem {
+    MusicSearchItem {
+        platform: MusicPlatform::Netease,
+        id: json_id_to_string(song.id),
+        song: song.song.if_empty(|| "未知歌曲".to_string()),
+        singer: song.singer.if_empty(|| "未知歌手".to_string()),
+        cover: song.cover,
+    }
+}
+
+fn vkeys_netease_to_items(songs: Vec<VkeysNeteaseTrack>, limit: usize) -> Vec<MusicSearchItem> {
+    songs
+        .into_iter()
+        .take(limit)
+        .map(vkeys_netease_to_item)
+        .filter(|item| !item.id.is_empty())
+        .collect()
 }
 
 fn netease_artists(song: &NeteaseSong) -> String {
@@ -441,5 +787,30 @@ mod tests {
             parse_netease_collection_id("https://music.163.com/#/song?id=449818741"),
             None
         );
+    }
+
+    #[test]
+    fn maps_vkeys_netease_quality_from_global_quality() {
+        assert_eq!(netease_vkeys_quality("standard"), 2);
+        assert_eq!(netease_vkeys_quality("high"), 4);
+        assert_eq!(netease_vkeys_quality("lossless"), 5);
+        assert_eq!(netease_native_bitrate("standard"), 128_000);
+        assert_eq!(netease_native_bitrate("high"), 320_000);
+        assert_eq!(netease_native_bitrate("lossless"), 999_000);
+    }
+
+    #[test]
+    fn parses_vkeys_netease_media_metadata() {
+        assert_eq!(parse_vkeys_duration("4分29秒"), Some(269));
+        assert_eq!(parse_vkeys_duration("183"), Some(183));
+        assert_eq!(parse_vkeys_kbps("3002kbps"), Some(3002));
+    }
+
+    #[test]
+    fn only_lossless_netease_prefers_vkeys_without_cookie() {
+        assert!(!should_prefer_vkeys_netease_download("standard"));
+        assert!(!should_prefer_vkeys_netease_download("high"));
+        assert!(should_prefer_vkeys_netease_download("lossless"));
+        assert!(should_prefer_vkeys_netease_download("hires"));
     }
 }

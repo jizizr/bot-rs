@@ -690,6 +690,12 @@ async fn resolve_track(
     if query.platform == MusicPlatform::Soda {
         return soda::resolve_with_quality(&query.keyword, selected_id, &settings.quality).await;
     }
+    if query.platform == MusicPlatform::Tencent {
+        return tencent::resolve_with_quality(&query.keyword, selected_id, &settings.quality).await;
+    }
+    if query.platform == MusicPlatform::Netease {
+        return netease::resolve_with_quality(&query.keyword, selected_id, &settings.quality).await;
+    }
     provider_for(query.platform)
         .resolve(&query.keyword, selected_id)
         .await
@@ -811,7 +817,7 @@ fn quality_label(value: &str) -> &'static str {
         .iter()
         .find(|(id, _)| *id == value)
         .map(|(_, label)| *label)
-        .unwrap_or("高品质")
+        .unwrap_or("无损")
 }
 
 fn lyric_script_label(value: &str) -> &'static str {
@@ -1534,7 +1540,7 @@ fn cache_to_track(cache: &MusicCache) -> Option<MusicTrack> {
 fn music_cache_quality(settings: &UserMusicSettings) -> String {
     let quality = settings.quality.trim();
     if quality.is_empty() {
-        "high".to_string()
+        "lossless".to_string()
     } else {
         quality.to_ascii_lowercase()
     }
@@ -3618,7 +3624,7 @@ mod tests {
         UserMusicSettings {
             user_id: 1,
             default_platform: default_platform.to_string(),
-            quality: "high".to_string(),
+            quality: "lossless".to_string(),
             send_cover: true,
             lyric_script: "simplified".to_string(),
         }
@@ -4201,7 +4207,7 @@ mod tests {
         let (keyword, platform, quality) = parse_inline_music_query("晴天", &settings);
         assert_eq!(keyword, "晴天");
         assert_eq!(platform, MusicPlatform::Soda);
-        assert_eq!(quality, "high");
+        assert_eq!(quality, "lossless");
     }
 
     #[test]

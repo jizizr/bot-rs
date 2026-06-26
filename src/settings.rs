@@ -41,7 +41,45 @@ pub struct Music {
     #[serde(default)]
     pub applemusic: AppleMusic,
     #[serde(default)]
+    pub vkeys: VkeysMusic,
+    #[serde(default)]
+    pub tencent: TencentMusic,
+    #[serde(default)]
+    pub netease: NeteaseMusic,
+    #[serde(default)]
     pub inline_upload_chat_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VkeysMusic {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_vkeys_base_url")]
+    pub base_url: String,
+    #[serde(default)]
+    pub token: String,
+}
+
+impl Default for VkeysMusic {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            base_url: default_vkeys_base_url(),
+            token: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct TencentMusic {
+    #[serde(default)]
+    pub cookie: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct NeteaseMusic {
+    #[serde(default)]
+    pub cookie: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,6 +164,10 @@ pub struct Vv {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_vkeys_base_url() -> String {
+    "https://api.vkeys.cn".to_string()
 }
 
 fn default_apple_storefront() -> String {
@@ -215,6 +257,10 @@ mod tests {
         assert!(settings.music.applemusic.wrapper_hosts.is_empty());
         assert_eq!(settings.music.applemusic.wrapper_fragment_concurrency, 2);
         assert_eq!(settings.music.applemusic.wrapper_connection_concurrency, 2);
+        assert!(settings.music.vkeys.enabled);
+        assert_eq!(settings.music.vkeys.base_url, "https://api.vkeys.cn");
+        assert!(settings.music.tencent.cookie.is_empty());
+        assert!(settings.music.netease.cookie.is_empty());
         assert!(settings.bot.api_url.is_none());
     }
 }

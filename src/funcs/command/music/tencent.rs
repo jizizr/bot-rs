@@ -1,5 +1,5 @@
 use super::provider::{MusicPlatform, MusicProvider, MusicSearchItem, MusicTrack};
-use crate::BotError;
+use crate::{BotError, settings::SETTINGS};
 use async_trait::async_trait;
 use base64::Engine;
 use lazy_static::lazy_static;
@@ -34,19 +34,12 @@ pub struct TencentProvider;
 impl MusicProvider for TencentProvider {
     async fn search(&self, keyword: &str, limit: usize) -> Result<Vec<MusicSearchItem>, BotError> {
         let limit = limit.max(1);
-        let songs = match search_by_meting_desktop(keyword, limit).await {
-            Ok(songs) if !songs.is_empty() => songs,
-            _ => match search_by_musicu(keyword, limit).await {
-                Ok(songs) if !songs.is_empty() => songs,
-                _ => search_by_legacy(keyword, limit).await?,
-            },
-        };
-        Ok(songs
-            .into_iter()
-            .take(limit)
-            .map(search_song_to_item)
-            .filter(|item| !item.id.is_empty())
-            .collect())
+        match search_by_native(keyword, limit).await {
+            Ok(songs) if !songs.is_empty() => Ok(songs),
+            _ => search_by_vkeys(keyword, limit)
+                .await
+                .map(|songs| vkeys_songs_to_items(songs, limit)),
+        }
     }
 
     async fn resolve(
@@ -54,78 +47,125 @@ impl MusicProvider for TencentProvider {
         keyword: &str,
         selected_id: Option<&str>,
     ) -> Result<MusicTrack, BotError> {
-        let id = match selected_id {
-            Some(id) => id.to_string(),
-            None => parse_qq_track_id(keyword).unwrap_or_default(),
-        };
-        let id = if id.is_empty() {
-            self.search(keyword, 1)
-                .await?
-                .into_iter()
-                .next()
-                .ok_or_else(|| BotError::Custom("没有找到可下载的音乐".to_string()))?
-                .id
-        } else {
-            id
-        };
-
-        let detail = get_song_detail(&id).await?;
-        let song_mid = if !detail.mid.trim().is_empty() {
-            detail.mid.clone()
-        } else if detail.id > 0 {
-            detail.id.to_string()
-        } else {
-            id.clone()
-        };
-        let file_info = get_song_file_info(&song_mid).await?;
-        let media_mid = if file_info.media_mid.trim().is_empty() {
-            song_mid.clone()
-        } else {
-            file_info.media_mid.clone()
-        };
-        let (uin, authst) = parse_qq_auth(&qq_cookie());
-        let mut last_error = None;
-        for quality in fallback_quality_profiles(&file_info) {
-            match get_vkey(
-                &song_mid,
-                &media_mid,
-                quality.code,
-                quality.ext,
-                &uin,
-                &authst,
-            )
-            .await
-            {
-                Ok(purl) => {
-                    let url = build_stream_url(&purl);
-                    if !url.trim().is_empty() {
-                        return Ok(MusicTrack {
-                            id: song_mid.clone(),
-                            platform: MusicPlatform::Tencent,
-                            song: detail.title(),
-                            singer: singers_to_string(&detail.singer),
-                            album: detail.album.name.clone(),
-                            cover: build_track_cover_url(
-                                first_non_empty([
-                                    file_info.cover_mid.as_deref(),
-                                    Some(detail.album.mid.as_str()),
-                                ])
-                                .unwrap_or_default(),
-                            ),
-                            link: build_track_url(&song_mid),
-                            url,
-                            headers: HashMap::new(),
-                            duration: None,
-                            bitrate: None,
-                            format: Some(quality.ext.to_string()),
-                        });
-                    }
-                }
-                Err(err) => last_error = Some(err),
-            }
-        }
-        Err(last_error.unwrap_or_else(|| BotError::Custom("QQ音乐没有返回可下载直链".to_string())))
+        resolve_tencent_track(keyword, selected_id, "lossless").await
     }
+}
+
+pub(super) async fn resolve_with_quality(
+    keyword: &str,
+    selected_id: Option<&str>,
+    quality: &str,
+) -> Result<MusicTrack, BotError> {
+    resolve_tencent_track(keyword, selected_id, quality).await
+}
+
+async fn resolve_tencent_track(
+    keyword: &str,
+    selected_id: Option<&str>,
+    quality: &str,
+) -> Result<MusicTrack, BotError> {
+    let id = match selected_id {
+        Some(id) => id.to_string(),
+        None => parse_qq_track_id(keyword).unwrap_or_default(),
+    };
+    let id = if id.is_empty() {
+        TENCENT_PROVIDER
+            .search(keyword, 1)
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| BotError::Custom("没有找到可下载的音乐".to_string()))?
+            .id
+    } else {
+        id
+    };
+
+    let cookie = qq_cookie();
+    if vkeys_enabled() {
+        return match resolve_by_vkeys(&id, quality).await {
+            Ok(track) => Ok(track),
+            Err(vkeys_error) if !cookie.trim().is_empty() => {
+                match resolve_native_with_cookie(&id, quality, &cookie).await {
+                    Ok(track) => Ok(track),
+                    Err(_) => Err(vkeys_error),
+                }
+            }
+            Err(vkeys_error) => Err(vkeys_error),
+        };
+    }
+
+    match resolve_native_with_cookie(&id, quality, &cookie).await {
+        Ok(track) => Ok(track),
+        Err(native_error) => Err(native_error),
+    }
+}
+
+async fn resolve_native_with_cookie(
+    id: &str,
+    requested_quality: &str,
+    cookie: &str,
+) -> Result<MusicTrack, BotError> {
+    let id = id.to_string();
+    let detail = get_song_detail(&id).await?;
+    let song_mid = if !detail.mid.trim().is_empty() {
+        detail.mid.clone()
+    } else if detail.id > 0 {
+        detail.id.to_string()
+    } else {
+        id.clone()
+    };
+    let file_info = get_song_file_info(&song_mid).await?;
+    let media_mid = if file_info.media_mid.trim().is_empty() {
+        song_mid.clone()
+    } else {
+        file_info.media_mid.clone()
+    };
+    let (uin, authst) = parse_qq_auth(cookie);
+    let mut last_error = None;
+    for quality in fallback_quality_profiles(&file_info, requested_quality) {
+        match get_vkey(
+            &song_mid,
+            &media_mid,
+            quality.code,
+            quality.ext,
+            &uin,
+            &authst,
+        )
+        .await
+        {
+            Ok(purl) => {
+                let url = build_stream_url(&purl);
+                if is_usable_download_url(&url) {
+                    if let Err(err) = verify_download_url(&url).await {
+                        last_error = Some(err);
+                        continue;
+                    }
+                    return Ok(MusicTrack {
+                        id: song_mid.clone(),
+                        platform: MusicPlatform::Tencent,
+                        song: detail.title(),
+                        singer: singers_to_string(&detail.singer),
+                        album: detail.album.name.clone(),
+                        cover: build_track_cover_url(
+                            first_non_empty([
+                                file_info.cover_mid.as_deref(),
+                                Some(detail.album.mid.as_str()),
+                            ])
+                            .unwrap_or_default(),
+                        ),
+                        link: build_track_url(&song_mid),
+                        url,
+                        headers: HashMap::new(),
+                        duration: None,
+                        bitrate: None,
+                        format: Some(quality.ext.to_string()),
+                    });
+                }
+            }
+            Err(err) => last_error = Some(err),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| BotError::Custom("QQ音乐没有返回可下载直链".to_string())))
 }
 
 #[derive(Clone, Deserialize)]
@@ -218,6 +258,223 @@ struct QualityProfile {
     code: &'static str,
     ext: &'static str,
     size_key: &'static str,
+}
+
+#[derive(Clone, Default, Deserialize)]
+struct VkeysTencentSong {
+    #[serde(default, rename = "songID", alias = "id")]
+    song_id: serde_json::Value,
+    #[serde(default, rename = "songMID", alias = "mid")]
+    song_mid: String,
+    #[serde(default, rename = "mediaMid")]
+    media_mid: String,
+    #[serde(default, alias = "song")]
+    title: String,
+    #[serde(default)]
+    album: String,
+    #[serde(default)]
+    singer: String,
+    #[serde(default, rename = "singerList", alias = "singer_list")]
+    singer_list: Vec<QQSinger>,
+    #[serde(default, alias = "albumImage")]
+    cover: String,
+    #[serde(default)]
+    interval: Option<u32>,
+    #[serde(default, rename = "type")]
+    song_type: i64,
+    #[serde(default, rename = "qualityInfo")]
+    quality_info: Vec<VkeysQualityInfo>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+struct VkeysQualityInfo {
+    #[serde(default, rename = "type")]
+    quality_type: i64,
+    #[serde(default)]
+    size: i64,
+}
+
+#[derive(Default, Deserialize)]
+struct VkeysLinkData {
+    #[serde(default, rename = "songID", alias = "id")]
+    song_id: serde_json::Value,
+    #[serde(default, rename = "songMID", alias = "mid")]
+    song_mid: String,
+    #[serde(default, alias = "song")]
+    title: String,
+    #[serde(default)]
+    album: String,
+    #[serde(default)]
+    singer: String,
+    #[serde(default)]
+    cover: String,
+    #[serde(default)]
+    link: String,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    interval: String,
+    #[serde(default)]
+    quality: String,
+    #[serde(default)]
+    size: String,
+    #[serde(default)]
+    kbps: String,
+}
+
+async fn search_by_vkeys(keyword: &str, limit: usize) -> Result<Vec<VkeysTencentSong>, BotError> {
+    if !vkeys_enabled() {
+        return Err(BotError::Custom("vkeys 未启用".to_string()));
+    }
+    let mut url = vkeys_url("/music/tencent/search/song")?;
+    append_vkeys_auth(&mut url);
+    url.query_pairs_mut()
+        .append_pair("keyword", keyword)
+        .append_pair("page", "1")
+        .append_pair("limit", &limit.clamp(1, 60).to_string());
+    let body = get_bytes(url.as_str(), false).await?;
+    #[derive(Deserialize)]
+    struct Resp {
+        code: i64,
+        #[serde(default)]
+        message: String,
+        data: Option<Data>,
+    }
+    #[derive(Deserialize)]
+    struct Data {
+        #[serde(default)]
+        list: Vec<VkeysTencentSong>,
+    }
+    let resp: Resp = serde_json::from_slice(&body)?;
+    if resp.code != 0 && resp.code != 200 {
+        return Err(BotError::Custom(format!(
+            "vkeys QQ 搜索失败：{}",
+            resp.message
+        )));
+    }
+    Ok(resp.data.map(|data| data.list).unwrap_or_default())
+}
+
+async fn search_by_native(keyword: &str, limit: usize) -> Result<Vec<MusicSearchItem>, BotError> {
+    let songs = match search_by_meting_desktop(keyword, limit).await {
+        Ok(songs) if !songs.is_empty() => songs,
+        _ => match search_by_musicu(keyword, limit).await {
+            Ok(songs) if !songs.is_empty() => songs,
+            _ => search_by_legacy(keyword, limit).await?,
+        },
+    };
+    Ok(songs
+        .into_iter()
+        .take(limit)
+        .map(search_song_to_item)
+        .filter(|item| !item.id.is_empty())
+        .collect())
+}
+
+async fn resolve_by_vkeys(id: &str, quality: &str) -> Result<MusicTrack, BotError> {
+    if !vkeys_enabled() {
+        return Err(BotError::Custom("vkeys 未启用".to_string()));
+    }
+    let detail = get_vkeys_song_info(id).await?;
+    let mut last_error = None;
+    let qualities = select_vkeys_quality_candidates(&detail, quality);
+    for quality_type in qualities {
+        match get_vkeys_song_link(&detail, id, quality_type).await {
+            Ok(track) => return Ok(track),
+            Err(err) => last_error = Some(err),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| BotError::Custom("vkeys QQ 没有返回可下载直链".to_string())))
+}
+
+async fn get_vkeys_song_info(id: &str) -> Result<VkeysTencentSong, BotError> {
+    let mut url = vkeys_url("/music/tencent/song/info")?;
+    append_vkeys_auth(&mut url);
+    append_vkeys_track_id(&mut url, id);
+    let body = get_bytes(url.as_str(), false).await?;
+    #[derive(Deserialize)]
+    struct Resp {
+        code: i64,
+        #[serde(default)]
+        message: String,
+        data: Option<VkeysTencentSong>,
+    }
+    let resp: Resp = serde_json::from_slice(&body)?;
+    if resp.code != 0 && resp.code != 200 {
+        return Err(BotError::Custom(format!(
+            "vkeys QQ 歌曲详情失败：{}",
+            resp.message
+        )));
+    }
+    resp.data
+        .ok_or_else(|| BotError::Custom("vkeys QQ 没有返回歌曲详情".to_string()))
+}
+
+async fn get_vkeys_song_link(
+    detail: &VkeysTencentSong,
+    fallback_id: &str,
+    quality_type: i64,
+) -> Result<MusicTrack, BotError> {
+    let mut url = vkeys_url("/music/tencent/song/link")?;
+    append_vkeys_auth(&mut url);
+    append_vkeys_track_id(&mut url, &detail.preferred_id(fallback_id));
+    url.query_pairs_mut()
+        .append_pair("quality", &quality_type.to_string())
+        .append_pair("type", &detail.song_type.to_string());
+    let body = get_bytes(url.as_str(), false).await?;
+    #[derive(Deserialize)]
+    struct Resp {
+        code: i64,
+        #[serde(default)]
+        message: String,
+        data: Option<VkeysLinkData>,
+    }
+    let resp: Resp = serde_json::from_slice(&body)?;
+    if resp.code != 0 && resp.code != 200 {
+        return Err(BotError::Custom(format!(
+            "vkeys QQ 获取直链失败：{}",
+            resp.message
+        )));
+    }
+    let link = resp
+        .data
+        .ok_or_else(|| BotError::Custom("vkeys QQ 没有返回直链数据".to_string()))?;
+    let download_url = link
+        .url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| is_usable_download_url(url))
+        .ok_or_else(|| BotError::Custom("vkeys QQ 没有返回可下载直链".to_string()))?
+        .to_string();
+    verify_download_url(&download_url).await?;
+    Ok(MusicTrack {
+        id: first_non_empty([Some(link.song_mid.as_str()), Some(detail.song_mid.as_str())])
+            .map(ToOwned::to_owned)
+            .or_else(|| json_value_to_string(&link.song_id))
+            .or_else(|| json_value_to_string(&detail.song_id))
+            .unwrap_or_else(|| fallback_id.to_string()),
+        platform: MusicPlatform::Tencent,
+        song: first_non_empty([Some(link.title.as_str()), Some(detail.title.as_str())])
+            .unwrap_or("未知歌曲")
+            .to_string(),
+        singer: first_non_empty([Some(link.singer.as_str()), Some(detail.singer.as_str())])
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| vkeys_singers_to_string(&detail.singer_list)),
+        album: first_non_empty([Some(link.album.as_str()), Some(detail.album.as_str())])
+            .unwrap_or_default()
+            .to_string(),
+        cover: first_non_empty([Some(link.cover.as_str()), Some(detail.cover.as_str())])
+            .unwrap_or_default()
+            .to_string(),
+        link: first_non_empty([Some(link.link.as_str())])
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| build_track_url(&detail.preferred_id(fallback_id))),
+        url: download_url.clone(),
+        headers: HashMap::new(),
+        duration: parse_vkeys_duration(&link.interval).or(detail.interval),
+        bitrate: parse_vkeys_kbps(&link.kbps),
+        format: vkeys_track_format(&download_url, &link.quality, &link.size),
+    })
 }
 
 async fn search_by_meting_desktop(
@@ -602,6 +859,19 @@ async fn post_json_raw(
     Ok(response.bytes().await?.to_vec())
 }
 
+async fn verify_download_url(url: &str) -> Result<(), BotError> {
+    let mut request = CLIENT.get(url);
+    request = apply_qq_headers(request, false).header("Range", "bytes=0-0");
+    let status = request.send().await?.status();
+    if status.is_success() {
+        Ok(())
+    } else {
+        Err(BotError::Custom(format!(
+            "QQ音乐直链不可下载：HTTP {status}"
+        )))
+    }
+}
+
 fn apply_qq_headers(
     mut request: reqwest::RequestBuilder,
     include_cookie: bool,
@@ -641,6 +911,155 @@ fn search_song_to_item(song: QQSearchSong) -> MusicSearchItem {
     }
 }
 
+fn vkeys_song_to_item(song: VkeysTencentSong) -> MusicSearchItem {
+    MusicSearchItem {
+        platform: MusicPlatform::Tencent,
+        id: song.preferred_id(""),
+        song: first_non_empty([Some(song.title.as_str())])
+            .unwrap_or("未知歌曲")
+            .to_string(),
+        singer: first_non_empty([Some(song.singer.as_str())])
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| vkeys_singers_to_string(&song.singer_list)),
+        cover: song.cover,
+    }
+}
+
+fn vkeys_songs_to_items(songs: Vec<VkeysTencentSong>, limit: usize) -> Vec<MusicSearchItem> {
+    songs
+        .into_iter()
+        .take(limit)
+        .map(vkeys_song_to_item)
+        .filter(|item| !item.id.is_empty())
+        .collect()
+}
+
+impl VkeysTencentSong {
+    fn preferred_id(&self, fallback: &str) -> String {
+        first_non_empty([Some(self.song_mid.as_str()), Some(self.media_mid.as_str())])
+            .map(ToOwned::to_owned)
+            .or_else(|| json_value_to_string(&self.song_id))
+            .unwrap_or_else(|| fallback.trim().to_string())
+    }
+}
+
+fn select_vkeys_quality_candidates(detail: &VkeysTencentSong, quality: &str) -> Vec<i64> {
+    let preferred = match quality.trim().to_ascii_lowercase().as_str() {
+        "standard" | "std" | "128" => &[6, 4, 5, 7, 3, 2, 1, 0][..],
+        "lossless" | "flac" | "无损" => &[14, 13, 12, 11, 10, 9, 8, 7, 6, 4, 3, 2, 0][..],
+        _ => &[8, 9, 7, 6, 4, 3, 2, 0][..],
+    };
+    let available = detail
+        .quality_info
+        .iter()
+        .filter(|item| item.size > 0)
+        .map(|item| item.quality_type)
+        .collect::<HashSet<_>>();
+    let mut selected = Vec::new();
+    for quality_type in preferred {
+        if (available.is_empty() || available.contains(quality_type))
+            && !selected.contains(quality_type)
+        {
+            selected.push(*quality_type);
+        }
+    }
+    for quality in &detail.quality_info {
+        if quality.size > 0 && !selected.contains(&quality.quality_type) {
+            selected.push(quality.quality_type);
+        }
+    }
+    if selected.is_empty() {
+        selected.extend_from_slice(preferred);
+    }
+    selected
+}
+
+fn vkeys_enabled() -> bool {
+    SETTINGS.music.vkeys.enabled && !SETTINGS.music.vkeys.base_url.trim().is_empty()
+}
+
+fn vkeys_url(path: &str) -> Result<Url, BotError> {
+    let base = SETTINGS.music.vkeys.base_url.trim().trim_end_matches('/');
+    Url::parse(&format!("{base}/{}", path.trim_start_matches('/')))
+        .map_err(|err| BotError::Custom(format!("vkeys API 地址无效：{err}")))
+}
+
+fn append_vkeys_auth(url: &mut Url) {
+    let token = SETTINGS.music.vkeys.token.trim();
+    if !token.is_empty() {
+        url.query_pairs_mut().append_pair("token", token);
+    }
+}
+
+fn append_vkeys_track_id(url: &mut Url, id: &str) {
+    if id.chars().all(|c| c.is_ascii_digit()) {
+        url.query_pairs_mut().append_pair("id", id);
+    } else {
+        url.query_pairs_mut().append_pair("mid", id);
+    }
+}
+
+fn vkeys_singers_to_string(singers: &[QQSinger]) -> String {
+    let value = singers_to_string(singers);
+    if value.trim().is_empty() {
+        "未知歌手".to_string()
+    } else {
+        value
+    }
+}
+
+fn json_value_to_string(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(value) => {
+            (!value.trim().is_empty()).then(|| value.trim().to_string())
+        }
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn parse_vkeys_kbps(value: &str) -> Option<u32> {
+    let numeric = value
+        .trim()
+        .trim_end_matches("kbps")
+        .trim()
+        .parse::<f32>()
+        .ok()?;
+    (numeric > 0.0).then(|| numeric.round() as u32)
+}
+
+fn parse_vkeys_duration(value: &str) -> Option<u32> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if let Ok(seconds) = value.parse::<u32>() {
+        return (seconds > 0).then_some(seconds);
+    }
+    let (minutes, rest) = value.split_once('分')?;
+    let seconds = rest.trim_end_matches('秒');
+    let total = minutes.trim().parse::<u32>().ok()? * 60 + seconds.trim().parse::<u32>().ok()?;
+    (total > 0).then_some(total)
+}
+
+fn vkeys_track_format(url: &str, quality: &str, size: &str) -> Option<String> {
+    let ext = url
+        .split('?')
+        .next()
+        .and_then(|path| path.rsplit('.').next())
+        .map(str::trim)
+        .filter(|ext| ext.len() <= 5 && ext.chars().all(|c| c.is_ascii_alphanumeric()))
+        .map(|ext| ext.to_ascii_lowercase());
+    if ext.is_some() {
+        return ext;
+    }
+    if quality.contains("无损") || size.to_ascii_lowercase().contains("flac") {
+        Some("flac".to_string())
+    } else {
+        Some("mp3".to_string())
+    }
+}
+
 fn parse_qq_track_id(text: &str) -> Option<String> {
     let text = text.trim();
     if text.is_empty() {
@@ -677,8 +1096,14 @@ fn parse_qq_track_id(text: &str) -> Option<String> {
     None
 }
 
-fn fallback_quality_profiles(info: &QQFileInfo) -> Vec<QualityProfile> {
-    [
+fn fallback_quality_profiles(info: &QQFileInfo, quality: &str) -> Vec<QualityProfile> {
+    let start = match quality.trim().to_ascii_lowercase().as_str() {
+        "standard" | "std" | "128" => 3,
+        "high" | "hq" | "320" | "高品质" => 2,
+        "hires" | "hi-res" | "master" => 0,
+        _ => 1,
+    };
+    let profiles = [
         QualityProfile {
             code: "RS01",
             ext: "flac",
@@ -699,10 +1124,12 @@ fn fallback_quality_profiles(info: &QQFileInfo) -> Vec<QualityProfile> {
             ext: "mp3",
             size_key: "size_128mp3",
         },
-    ]
-    .into_iter()
-    .filter(|quality| quality.size(info) > 0)
-    .collect()
+    ];
+    profiles
+        .into_iter()
+        .skip(start)
+        .filter(|quality| quality.size(info) > 0)
+        .collect()
 }
 
 impl QualityProfile {
@@ -746,13 +1173,30 @@ fn resolve_vkey_url(purl: &str, wifi_url: &str, vkey: &str) -> Option<String> {
 
 fn build_stream_url(purl: &str) -> String {
     let purl = purl.trim();
-    if purl.starts_with("http://") || purl.starts_with("https://") {
+    if let Some(path) = purl.strip_prefix("http://ws.stream.qqmusic.qq.com/") {
+        format!("https://ws.stream.qqmusic.qq.com/{path}")
+    } else if purl.starts_with("http://") || purl.starts_with("https://") {
         purl.to_string()
     } else if purl.is_empty() {
         String::new()
     } else {
         format!("https://ws.stream.qqmusic.qq.com/{purl}")
     }
+}
+
+fn is_usable_download_url(url: &str) -> bool {
+    let url = url.trim();
+    if url.is_empty() {
+        return false;
+    }
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    if parsed.host_str() == Some("ws.stream.qqmusic.qq.com") {
+        let path = parsed.path().trim_matches('/');
+        return !path.is_empty();
+    }
+    true
 }
 
 fn build_track_url(track_id: &str) -> String {
@@ -831,6 +1275,10 @@ fn parse_cookie_value(cookie: &str, key: &str) -> String {
 }
 
 fn qq_cookie() -> String {
+    let configured = SETTINGS.music.tencent.cookie.trim();
+    if !configured.is_empty() {
+        return configured.to_string();
+    }
     std::env::var("QQ_MUSIC_COOKIE")
         .ok()
         .map(|cookie| cookie.trim().to_string())
@@ -900,6 +1348,23 @@ mod tests {
     }
 
     #[test]
+    fn upgrades_qq_stream_http_url_to_https() {
+        assert_eq!(
+            build_stream_url("http://ws.stream.qqmusic.qq.com/M500song.mp3?vkey=abc"),
+            "https://ws.stream.qqmusic.qq.com/M500song.mp3?vkey=abc"
+        );
+    }
+
+    #[test]
+    fn rejects_bare_qq_stream_host() {
+        assert!(!is_usable_download_url("http://ws.stream.qqmusic.qq.com/"));
+        assert!(!is_usable_download_url("https://ws.stream.qqmusic.qq.com/"));
+        assert!(is_usable_download_url(
+            "http://ws.stream.qqmusic.qq.com/M500song.mp3?vkey=abc"
+        ));
+    }
+
+    #[test]
     fn native_search_endpoint_does_not_use_legacy_bot_api() {
         let url = Url::parse(MUSICU_ENDPOINT).unwrap();
         assert_eq!(url.host_str(), Some("u.y.qq.com"));
@@ -910,5 +1375,71 @@ mod tests {
         let sign = tencent_sign(r#"{"test":1}"#, true);
         assert!(sign.starts_with("zzc"));
         assert!(sign.len() > 20);
+    }
+
+    #[test]
+    fn selects_vkeys_lossless_before_high() {
+        let detail = VkeysTencentSong {
+            quality_info: vec![
+                VkeysQualityInfo {
+                    quality_type: 8,
+                    size: 10,
+                },
+                VkeysQualityInfo {
+                    quality_type: 10,
+                    size: 20,
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            select_vkeys_quality_candidates(&detail, "lossless"),
+            vec![10, 8]
+        );
+        assert_eq!(
+            select_vkeys_quality_candidates(&detail, "high"),
+            vec![8, 10]
+        );
+    }
+
+    #[test]
+    fn parses_vkeys_media_metadata() {
+        assert_eq!(parse_vkeys_duration("4分10秒"), Some(250));
+        assert_eq!(parse_vkeys_duration("269"), Some(269));
+        assert_eq!(parse_vkeys_kbps("1862kbps"), Some(1862));
+    }
+
+    #[test]
+    fn native_quality_fallback_starts_from_requested_quality() {
+        let info = QQFileInfo {
+            size_128: 1,
+            size_320: 2,
+            size_flac: 3,
+            size_hires: 4,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            fallback_quality_profiles(&info, "standard")
+                .into_iter()
+                .map(|profile| profile.code)
+                .collect::<Vec<_>>(),
+            vec!["M500"]
+        );
+        assert_eq!(
+            fallback_quality_profiles(&info, "high")
+                .into_iter()
+                .map(|profile| profile.code)
+                .collect::<Vec<_>>(),
+            vec!["M800", "M500"]
+        );
+        assert_eq!(
+            fallback_quality_profiles(&info, "lossless")
+                .into_iter()
+                .map(|profile| profile.code)
+                .collect::<Vec<_>>(),
+            vec!["F000", "M800", "M500"]
+        );
     }
 }

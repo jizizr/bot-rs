@@ -3,7 +3,7 @@ use crate::index_builder;
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_PLATFORM: &str = "soda";
-const DEFAULT_QUALITY: &str = "high";
+const DEFAULT_QUALITY: &str = "lossless";
 const DEFAULT_LYRIC_SCRIPT: &str = "simplified";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -124,11 +124,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_use_soda_and_high_quality() {
+    fn defaults_use_soda_and_lossless_quality() {
         let settings = UserMusicSettings::defaults_for(1);
 
         assert_eq!(settings.default_platform, "soda");
-        assert_eq!(settings.quality, "high");
+        assert_eq!(settings.quality, "lossless");
         assert_eq!(settings.lyric_script, "simplified");
     }
 }
