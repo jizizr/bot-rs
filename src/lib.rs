@@ -43,6 +43,9 @@ pub enum BotError {
     ),
     #[error("{}", .0)]
     Custom(String),
+    /// 限流/排队等瞬时拒绝：只弹提示，不应破坏已有消息或菜单
+    #[error("{}", .0)]
+    Busy(String),
     #[error("{}", .0)]
     Send(#[from] teloxide::RequestError),
     #[error("{}", .0)]
@@ -101,6 +104,7 @@ lazy_static! {
             None => bot,
         }
     };
+    pub static ref HTTP_CLIENT: reqwest::Client = reqwest::Client::new();
 }
 
 #[async_trait]
@@ -184,10 +188,8 @@ where
         let mut pool = VecDeque::new();
         let address = addr.clone();
         for _ in 0..num {
-            if let Ok(s) = timeout(Duration::from_secs(3), S::connect(&addr))
-                .await
-                .unwrap()
-            {
+            // 超时视为连接失败，跳过该连接而不是 panic
+            if let Ok(Ok(s)) = timeout(Duration::from_secs(3), S::connect(&addr)).await {
                 pool.push_back(s);
             }
         }
@@ -232,7 +234,7 @@ pub fn load_json<T: DeserializeOwned>(path: &str) -> T {
 }
 
 pub async fn get<T: DeserializeOwned>(url: &str) -> Result<T, reqwest::Error> {
-    let resp = reqwest::get(url).await?;
+    let resp = HTTP_CLIENT.get(url).send().await?;
     let model: T = resp.json().await?;
     Ok(model)
 }
