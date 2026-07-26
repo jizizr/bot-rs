@@ -1,13 +1,14 @@
 use super::*;
 use std::sync::LazyLock;
-use updater_core::{Device, QueryResult, RemoteDevices, RomInfoData, RomQuery, fetch_rom_info};
+use updater_core::{
+    DEVICE_LIST_URL, Device, QueryResult, RemoteDevices, RomInfoData, RomQuery,
+    clean_json_trailing_commas, fetch_rom_info,
+};
 
 mod updater_core;
 mod updater_links;
 
 const TELEGRAM_MESSAGE_LIMIT: usize = 3900;
-const DEVICE_LIST_URL: &str =
-    "https://raw.githubusercontent.com/YuKongA/Updater-KMP/device-list/device.json";
 
 cmd!(
     "/rom",
@@ -94,11 +95,10 @@ fn normalize_system_version(value: &str) -> String {
     } else {
         format!("OS{upper}")
     };
+    static SUFFIX_MATCH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\.[A-Z]\w{6,}$").unwrap());
     if with_prefix.ends_with(".AUTO")
         || with_prefix.ends_with(".DEV")
-        || Regex::new(r"\.[A-Z]\w{6,}$")
-            .unwrap()
-            .is_match(&with_prefix)
+        || SUFFIX_MATCH.is_match(&with_prefix)
     {
         with_prefix
     } else {
@@ -112,27 +112,6 @@ fn normalize_device_text(value: &str) -> String {
         .filter(|ch| ch.is_ascii_alphanumeric())
         .flat_map(char::to_lowercase)
         .collect()
-}
-
-fn clean_json_trailing_commas(raw: &str) -> String {
-    let bytes = raw.as_bytes();
-    let mut out = String::with_capacity(raw.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b',' {
-            let mut lookahead = index + 1;
-            while lookahead < bytes.len() && bytes[lookahead].is_ascii_whitespace() {
-                lookahead += 1;
-            }
-            if lookahead < bytes.len() && (bytes[lookahead] == b'}' || bytes[lookahead] == b']') {
-                index += 1;
-                continue;
-            }
-        }
-        out.push(bytes[index] as char);
-        index += 1;
-    }
-    out
 }
 
 async fn fetch_devices() -> Result<Vec<Device>, BotError> {

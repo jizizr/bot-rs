@@ -34,7 +34,7 @@ const CN_RECOVERY_URL: &str = "https://update.miui.com/updates/miotaV3.php";
 const INTL_RECOVERY_URL: &str = "https://update.intl.miui.com/updates/miotaV3.php";
 const CN_GETXMSVER_URL: &str = "https://update.miui.com/api/v3/xms/getXmsVer";
 const INTL_GETXMSVER_URL: &str = "https://update.intl.miui.com/api/v3/xms/getXmsVer";
-const DEVICE_LIST_URL: &str =
+pub(super) const DEVICE_LIST_URL: &str =
     "https://raw.githubusercontent.com/YuKongA/Updater-KMP/device-list/device.json";
 const ACCOUNT_URL: &str = "https://account.xiaomi.com";
 const USER_AGENT_VALUE: &str =
@@ -1237,7 +1237,13 @@ fn extract_ota_metadata(http: &Client, url: &str) -> Result<Option<OtaMetadataPb
     let end_size = file_length.min(END_BYTES_SIZE) as usize;
     let end_bytes = read_range(http, url, file_length - end_size as i64, end_size)?;
     let cd = locate_central_directory(&end_bytes, file_length);
-    if cd.offset < 0 || cd.size <= 0 || cd.offset + cd.size > file_length {
+    if cd.offset < 0
+        || cd.size <= 0
+        || cd
+            .offset
+            .checked_add(cd.size)
+            .is_none_or(|end| end > file_length)
+    {
         return Ok(None);
     }
 
@@ -1310,7 +1316,12 @@ fn read_entry_bytes(
     }
     let data_offset = header_offset + internal_offset;
     let size = entry.uncompressed_size;
-    if size < 0 || size > i32::MAX as i64 || data_offset + size > file_length {
+    if size < 0
+        || size > i32::MAX as i64
+        || data_offset
+            .checked_add(size)
+            .is_none_or(|end| end > file_length)
+    {
         return Err("Invalid ZIP entry size".to_owned());
     }
     read_range(http, url, data_offset, size as usize)
@@ -1444,7 +1455,12 @@ fn locate_central_directory(bytes: &[u8], file_length: i64) -> FileInfo {
                     && get_u32_le(bytes, pos - ZIP64_LOCHDR) == Some(ZIP64_LOCSIG)
                 {
                     let record_offset = get_i64_le(bytes, pos - ZIP64_LOCHDR + 8).unwrap_or(-1);
-                    let record_pos = bytes.len() as i64 - (file_length - record_offset);
+                    // record_offset comes from remote bytes: checked math keeps a
+                    // hostile value from overflowing (panic in debug builds).
+                    let record_pos = file_length
+                        .checked_sub(record_offset)
+                        .and_then(|distance| (bytes.len() as i64).checked_sub(distance))
+                        .unwrap_or(-1);
                     if record_pos >= 0 {
                         let record_pos = record_pos as usize;
                         if record_pos + 56 <= bytes.len()
@@ -2039,7 +2055,7 @@ pub extern "C" fn updater_refresh_devices() -> *mut c_char {
     c_string_ptr(result.unwrap_or_else(error_json))
 }
 
-fn clean_json_trailing_commas(raw: &str) -> String {
+pub(super) fn clean_json_trailing_commas(raw: &str) -> String {
     let bytes = raw.as_bytes();
     let mut out = String::with_capacity(raw.len());
     let mut index = 0;
