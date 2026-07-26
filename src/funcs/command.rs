@@ -40,6 +40,7 @@ pub mod wcloud;
 pub mod wiki;
 
 pub async fn inline_query_handler(bot: Bot, q: InlineQuery) -> BotResult {
+    // inline 只承载音乐搜索（虚拟货币 inline 查询已按设计移除）
     music::music_inline_query_handler(bot, q).await
 }
 
@@ -221,10 +222,11 @@ pub enum Cmd {
 }
 
 pub async fn command_handler(bot: &Bot, msg: &Message, me: &Me) -> BotResult {
-    // 安全地获取消息文本，如果没有文本则提早返回
+    // 安全地获取消息文本，没有文本则返回 Err，
+    // 让 msg_handler 落入 text_handler（贴纸等非文本消息也需要被处理）
     let text = match getor(msg) {
         Some(text) => text,
-        None => return Ok(()), // 没有文本内容，直接返回
+        None => return Err(BotError::Custom("不是命令：消息没有文本内容".to_string())),
     };
 
     let cmd = BotCommands::parse(text, me.username())?;
@@ -262,7 +264,7 @@ pub async fn command_handler(bot: &Bot, msg: &Message, me: &Me) -> BotResult {
                 .send(),
         );
         match e {
-            BotError::Clap(_, _) => {
+            BotError::Clap(_, _) | BotError::Clap2(_, _) => {
                 log.set_status(MessageStatus::CmdError);
             }
             _ => {
