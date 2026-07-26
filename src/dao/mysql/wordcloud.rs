@@ -33,7 +33,7 @@ pub async fn add_words(group_id: i64, words: Vec<String>) -> BotResult {
 }
 
 pub async fn get_words(group_id: i64) -> Result<Vec<Word>> {
-    Ok(WORD_POOL
+    WORD_POOL
         .get_conn()
         .await?
         .query_map(
@@ -41,7 +41,6 @@ pub async fn get_words(group_id: i64) -> Result<Vec<Word>> {
             |(word, frequency)| Word { word, frequency },
         )
         .await
-        .unwrap_or(vec![]))
 }
 
 pub async fn active_group() -> Result<Vec<i64>> {
@@ -69,7 +68,7 @@ pub async fn add_user(group_id: i64, name: String, user_id: u64) -> BotResult {
 }
 
 pub async fn get_users(group_id: i64) -> Result<Vec<UserFrequency>> {
-    Ok(WORD_POOL
+    WORD_POOL
         .get_conn()
         .await?
         .query_map(
@@ -79,7 +78,6 @@ pub async fn get_users(group_id: i64) -> Result<Vec<UserFrequency>> {
             |(user_id, name, frequency)| UserFrequency { user_id, name, frequency },
         )
         .await
-        .unwrap_or(vec![]))
 }
 
 async fn clear_users() -> BotResult {
