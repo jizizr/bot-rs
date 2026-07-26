@@ -23,10 +23,18 @@ impl GroupFuncSwitch {
     }
 
     pub async fn update_status(&self, group_id: i64, func_name: String, status: bool) {
-        self.map.get(&group_id).unwrap().insert(func_name, status);
-        self.pstorer
-            .insert(group_id, self.map.get(&group_id).unwrap().clone())
-            .await;
+        // 重启后 sled 可能尚未持久化该群组，缺失时按模板补建而不是 panic
+        if !self.map.contains_key(&group_id) {
+            self.init(group_id);
+        }
+        let map = match self.map.get(&group_id) {
+            Some(funcs) => {
+                funcs.insert(func_name, status);
+                funcs.clone()
+            }
+            None => return,
+        };
+        self.pstorer.insert(group_id, map).await;
     }
 
     fn init(&self, group_id: i64) {

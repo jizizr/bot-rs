@@ -49,7 +49,9 @@ async fn get_short(msg: &Message) -> Result<String, BotError> {
         }
         (_, Some(reply), _) => {
             surl = short.url;
-            getor(reply).unwrap().to_string()
+            getor(reply)
+                .ok_or_else(|| BotError::Custom("被回复的消息没有文本".to_string()))?
+                .to_string()
         }
         (_, _, Some(url_value)) => {
             surl = None;

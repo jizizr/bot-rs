@@ -39,15 +39,16 @@ async fn get_wiki(msg: &Message) -> Result<String, BotError> {
     let language_tag = Some("zh-CN");
     let search =
         WikiCmd::parse_i18n_from_bot(getor(msg).unwrap().split_whitespace(), language_tag)?;
+    let keyword = search.search.join(" ");
     let result: SearchResult = get(&format!(
         "https://zh.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit=1&srsearch={}",
-        search.search.join(" ")
+        urlencoding::encode(&keyword)
     ))
     .await?;
     if result.query.searchinfo.totalhits == 0 {
         return Ok(format!(
             "❌未查找到词条 `{}`",
-            markdown::escape_code(&search.search.join(" "))
+            markdown::escape_code(&keyword)
         ));
     }
     let search = &result.query.search[0];

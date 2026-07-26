@@ -72,13 +72,12 @@ pub async fn chat(bot: &Bot, msg: &Message) -> BotResult {
 async fn get_chat(msg: &Message) -> Result<String, BotError> {
     let language_tag = Some("zh-CN");
     let chat = ChatCmd::parse_i18n_from_bot(getor(msg).unwrap().split_whitespace(), language_tag)?;
-    let request_body = format!(
-        r#"{{"contents":[{{"parts":[{{"text":"{}"}}]}}]}}"#,
-        chat.content.join(" ")
-    );
+    let request_body = serde_json::json!({
+        "contents": [{"parts": [{"text": chat.content.join(" ")}]}]
+    });
     let res = CLIENT
         .post(&*API_URL)
-        .body(request_body)
+        .body(request_body.to_string())
         .send()
         .await?
         .json::<Root>()

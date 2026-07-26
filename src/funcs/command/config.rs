@@ -46,12 +46,11 @@ pub async fn config_callback(bot: Bot, q: CallbackQuery) -> BotResult {
         );
         let _guard = lock!((msg.chat.id, msg.id));
         let mut func_cfg = config.splitn(2, ' ');
+        let (Some(func_name), Some(status)) = (func_cfg.next(), func_cfg.next()) else {
+            return Ok(());
+        };
         SWITCH
-            .update_status(
-                msg.chat.id.0,
-                func_cfg.next().unwrap().to_string(),
-                func_cfg.next().unwrap() == "f",
-            )
+            .update_status(msg.chat.id.0, func_name.to_string(), status == "f")
             .await;
         bot.edit_message_reply_markup(msg.chat.id, msg.id)
             .reply_markup(config_menu(msg.chat.id.0))

@@ -55,15 +55,7 @@ async fn translate_req(tl: &str, text: &str, is_compare: bool) -> Result<String,
         urlencoding::encode(text),
     );
     Ok({
-        let data = extract_data(
-            CLIENT
-                .get(url_str)
-                .send()
-                .await?
-                .json::<Value>()
-                .await
-                .unwrap(),
-        )?;
+        let data = extract_data(CLIENT.get(url_str).send().await?.json::<Value>().await?)?;
         let data_iter = data.iter();
         if is_compare {
             data_iter

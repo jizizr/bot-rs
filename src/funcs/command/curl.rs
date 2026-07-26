@@ -159,10 +159,13 @@ async fn get_ssl(url: &str) -> Result<String, BotError> {
         .await?;
 
     // 获取服务器证书
-    let certificate = stream.get_ref().peer_certificate().unwrap();
+    let certificate = stream
+        .get_ref()
+        .peer_certificate()?
+        .ok_or_else(|| BotError::Custom("服务器未提供证书".to_string()))?;
 
     // 输出证书的 DER 编码
-    let buffer = certificate.unwrap().to_der()?.to_vec();
+    let buffer = certificate.to_der()?.to_vec();
     let (_, cert) = parse_x509_certificate(&buffer)?;
 
     // 获取证书信息
@@ -182,14 +185,16 @@ async fn get_ssl(url: &str) -> Result<String, BotError> {
 
 async fn get_resp(url: &str) -> Result<Response, BotError> {
     let resp = CLIENT.get(url).send().await?.error_for_status();
-    // 如果请求失败，尝试使用 http 协议请求
+    // 如果请求失败，尝试使用 http 协议请求（仅当原始 URL 为 https，避免拼出 "httphttp://"）
     let resp = match resp {
         Ok(res) if res.status().is_success() => res,
-        _ => CLIENT
-            .get(format!("http{}", url.trim_start_matches("https")))
+        _ if url.starts_with("https://") => CLIENT
+            .get(url.replacen("https://", "http://", 1))
             .send()
             .await?
             .error_for_status()?,
+        Ok(res) => res,
+        Err(e) => return Err(e.into()),
     };
     Ok(resp)
 }
@@ -205,7 +210,11 @@ async fn get_header(resp: &Response) -> Result<String, BotError> {
         if !hash_set.insert(hn) {
             return;
         }
-        header.push_str(&format!("{}: {}\n", k.as_str(), v.to_str().unwrap()));
+        header.push_str(&format!(
+            "{}: {}\n",
+            k.as_str(),
+            String::from_utf8_lossy(v.as_bytes())
+        ));
     });
     Ok(header)
 }
