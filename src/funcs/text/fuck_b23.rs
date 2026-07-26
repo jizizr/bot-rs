@@ -47,22 +47,31 @@ impl BiliUrl {
 
 pub async fn fuck_b23(bot: &Bot, msg: &Message) -> BotResult {
     let text = getor(msg).unwrap();
+    // 先收集两个正则的所有匹配并按位置升序排序，
+    // 再统一应用替换，避免第二个正则的偏移被第一个正则的替换破坏
+    let mut matches: Vec<(usize, usize, &BiliUrl)> = MATCHS
+        .iter()
+        .flat_map(|ms| {
+            ms.re
+                .find_iter(text)
+                .map(move |m| (m.start(), m.end(), &ms.sign))
+        })
+        .collect();
+    matches.sort_by_key(|(start, _, _)| *start);
     let mut replaced = text.to_string();
     let mut offset: isize = 0;
     let mut flag = false;
-    for ms in MATCHS.iter() {
-        for m in ms.re.find_iter(text) {
-            let url = m.as_str();
-            let u = ms.sign.get_safe_url(url).await?;
-            let new_url = format!("https://{}{}", u.host().unwrap(), u.path());
-            // 去除原有文本中链接跟踪参数
-            replaced.replace_range(
-                ((m.start() as isize + offset) as usize)..((m.end() as isize + offset) as usize),
-                &new_url,
-            );
-            offset += new_url.len() as isize - url.len() as isize;
-            flag = true;
-        }
+    for (start, end, sign) in matches {
+        let url = &text[start..end];
+        let u = sign.get_safe_url(url).await?;
+        let new_url = format!("https://{}{}", u.host().unwrap(), u.path());
+        // 去除原有文本中链接跟踪参数
+        replaced.replace_range(
+            ((start as isize + offset) as usize)..((end as isize + offset) as usize),
+            &new_url,
+        );
+        offset += new_url.len() as isize - url.len() as isize;
+        flag = true;
     }
     if flag {
         bot.send_message(msg.chat.id, replaced).send().await?;
