@@ -1,5 +1,6 @@
 use super::provider::{
-    MusicPlatform, MusicProvider, MusicSearchItem, MusicTrack, get_json, json_id_to_string,
+    MusicPlatform, MusicProvider, MusicSearchItem, MusicTrack, first_non_empty, get_json,
+    json_id_to_string,
 };
 use crate::BotError;
 use async_trait::async_trait;
@@ -95,6 +96,7 @@ impl MusicProvider for KugouProvider {
             link: format!("https://www.kugou.com/song/#hash={hash}"),
             url,
             headers: HashMap::new(),
+            max_chunk_size: None,
             duration: None,
             bitrate: None,
             format: None,
@@ -197,14 +199,6 @@ fn is_kugou_encoded_id(text: &str) -> bool {
 fn is_hash(text: &str) -> bool {
     let text = text.trim();
     text.len() == 32 && text.chars().all(|c| c.is_ascii_hexdigit())
-}
-
-fn first_non_empty<'a>(items: impl IntoIterator<Item = Option<&'a str>>) -> Option<&'a str> {
-    items
-        .into_iter()
-        .flatten()
-        .map(str::trim)
-        .find(|item| !item.is_empty())
 }
 
 fn normalize_kugou_cover(url: &str) -> String {

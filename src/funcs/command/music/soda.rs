@@ -1,15 +1,21 @@
 use super::provider::{
-    DownloadProgress, MusicPlatform, MusicProvider, MusicSearchItem, MusicTrack,
-    get_json_with_headers,
+    CLIENT, DownloadProgress, MusicLyrics, MusicPlatform, MusicProvider, MusicSearchItem,
+    MusicTrack, first_non_empty, get_json_with_headers,
 };
 use crate::BotError;
 use aes::cipher::{KeyIvInit, StreamCipher};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose};
+use lazy_static::lazy_static;
 use regex::Regex;
 use serde::Deserialize;
 use std::collections::HashMap;
 use url::Url;
+
+lazy_static! {
+    static ref SODA_LYRIC_LINE_RE: Regex = Regex::new(r"^\[(\d+),(\d+)\](.*)$").unwrap();
+    static ref SODA_LYRIC_WORD_RE: Regex = Regex::new(r"<[^>]+>").unwrap();
+}
 
 const SODA_AID: &str = "386088";
 const SODA_CHANNEL: &str = "pc_web";
@@ -44,6 +50,21 @@ impl MusicProvider for SodaProvider {
         selected_id: Option<&str>,
     ) -> Result<MusicTrack, BotError> {
         resolve_soda_track(keyword, selected_id, "high").await
+    }
+
+    async fn lyrics(&self, track_id: &str) -> Result<Option<MusicLyrics>, BotError> {
+        let id = parse_soda_track_id(track_id).unwrap_or_else(|| track_id.trim().to_string());
+        if id.is_empty() {
+            return Ok(None);
+        }
+        let plain = parse_soda_lyric(&get_soda_track_details(&id).await?.lyric);
+        if plain.trim().is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(MusicLyrics {
+            plain,
+            translation: String::new(),
+        }))
     }
 }
 
@@ -127,6 +148,7 @@ async fn resolve_soda_track(
         link,
         url: download_url,
         headers: HashMap::new(),
+        max_chunk_size: None,
         duration: track
             .duration
             .filter(|duration| *duration > 0)
@@ -163,11 +185,19 @@ struct SodaTrackResponse {
     track_info: Option<SodaTrack>,
     track: Option<SodaTrack>,
     track_player: Option<SodaTrackPlayer>,
+    #[serde(default)]
+    lyric: Option<SodaLyric>,
 }
 
 #[derive(Deserialize)]
 struct SodaTrackPlayer {
     url_player_info: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct SodaLyric {
+    #[serde(default)]
+    content: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -242,6 +272,7 @@ struct SodaPlayInfo {
 struct SodaTrackDetails {
     track: SodaTrack,
     player_info_url: Option<String>,
+    lyric: String,
 }
 
 async fn get_soda_track_details(id: &str) -> Result<SodaTrackDetails, BotError> {
@@ -257,6 +288,10 @@ async fn get_soda_track_details(id: &str) -> Result<SodaTrackDetails, BotError> 
     Ok(SodaTrackDetails {
         track,
         player_info_url,
+        lyric: response
+            .lyric
+            .and_then(|lyric| lyric.content)
+            .unwrap_or_default(),
     })
 }
 
@@ -480,6 +515,30 @@ fn parse_soda_fragment(fragment: &str) -> Option<String> {
         .filter(|id| is_soda_numeric_id(id))
 }
 
+fn parse_soda_lyric(raw: &str) -> String {
+    raw.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter_map(|line| {
+            let captures = SODA_LYRIC_LINE_RE.captures(line)?;
+            let start_ms = captures.get(1)?.as_str().parse::<u64>().ok()?;
+            let text = captures
+                .get(3)
+                .map(|value| {
+                    SODA_LYRIC_WORD_RE
+                        .replace_all(value.as_str(), "")
+                        .to_string()
+                })
+                .unwrap_or_default();
+            let minutes = start_ms / 60_000;
+            let seconds = (start_ms % 60_000) / 1_000;
+            let centis = (start_ms % 1_000) / 10;
+            Some(format!("[{minutes:02}:{seconds:02}.{centis:02}]{text}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn is_soda_numeric_id(value: &str) -> bool {
     !value.trim().is_empty() && value.len() >= 8 && value.chars().all(|c| c.is_ascii_digit())
 }
@@ -500,14 +559,6 @@ fn soda_headers() -> HashMap<String, String> {
         headers.insert("Cookie".to_string(), cookie.trim().to_string());
     }
     headers
-}
-
-fn first_non_empty<'a>(items: impl IntoIterator<Item = Option<&'a str>>) -> Option<&'a str> {
-    items
-        .into_iter()
-        .flatten()
-        .map(str::trim)
-        .find(|item| !item.is_empty())
 }
 
 pub(super) async fn download_internal_url_with_progress<F>(
@@ -569,7 +620,12 @@ where
     let mut data = if play_auth.trim().is_empty() {
         encrypted
     } else {
-        decrypt_soda_audio(&encrypted, play_auth).unwrap_or(encrypted)
+        // None means the file carries no senc box (never encrypted): deliver it as-is.
+        // A real decryption failure must propagate instead of shipping unplayable bytes.
+        match decrypt_soda_audio(&encrypted, play_auth)? {
+            Some(decrypted) => decrypted,
+            None => encrypted,
+        }
     };
     if matches!(format.trim().to_ascii_lowercase().as_str(), "m4a" | "mp4") {
         rewrite_soda_audio_sample_entries(&mut data)?;
@@ -585,8 +641,7 @@ async fn download_soda_media<F>(url: &str, progress: &mut F) -> Result<Vec<u8>, 
 where
     F: FnMut(DownloadProgress) + Send,
 {
-    let client = reqwest::Client::new();
-    let mut response = client
+    let mut response = CLIENT
         .get(url)
         .header("User-Agent", SODA_USER_AGENT)
         .send()
@@ -612,7 +667,22 @@ where
     Ok(buf)
 }
 
-fn decrypt_soda_audio(file_data: &[u8], play_auth: &str) -> Result<Vec<u8>, BotError> {
+/// Returns `Ok(None)` when the file is not an encrypted MP4 (no moov/audio trak/senc box),
+/// meaning the original bytes are playable as-is; any error after encryption is established
+/// is a real decryption failure and must not be swallowed.
+fn decrypt_soda_audio(file_data: &[u8], play_auth: &str) -> Result<Option<Vec<u8>>, BotError> {
+    let Ok(moov) = find_soda_box(file_data, b"moov", 0, file_data.len()) else {
+        return Ok(None);
+    };
+    let Ok((trak, stbl)) = find_soda_audio_track(file_data, moov) else {
+        return Ok(None);
+    };
+    let Ok(senc) = find_soda_box(file_data, b"senc", trak.payload_start(), trak.end())
+        .or_else(|_| find_soda_box(file_data, b"senc", stbl.payload_start(), stbl.end()))
+        .or_else(|_| find_soda_box(file_data, b"senc", moov.payload_start(), moov.end()))
+    else {
+        return Ok(None);
+    };
     let hex_key = extract_soda_key(play_auth)?;
     let key = hex_decode(&hex_key)?;
     if key.len() != 16 {
@@ -620,26 +690,22 @@ fn decrypt_soda_audio(file_data: &[u8], play_auth: &str) -> Result<Vec<u8>, BotE
             "汽水音乐 PlayAuth key 长度错误".to_string(),
         ));
     }
-    let moov = find_soda_box(file_data, b"moov", 0, file_data.len())?;
-    let (trak, stbl) = find_soda_audio_track(file_data, moov)?;
     let sample_ranges = parse_soda_sample_ranges(file_data, stbl)?;
-    let senc = find_soda_box(file_data, b"senc", trak.payload_start(), trak.end())
-        .or_else(|_| find_soda_box(file_data, b"senc", stbl.payload_start(), stbl.end()))
-        .or_else(|_| find_soda_box(file_data, b"senc", moov.payload_start(), moov.end()))?;
     let samples = parse_soda_senc(&file_data[senc.payload_start()..senc.end()])?;
     let mut decrypted = file_data.to_vec();
     for (index, range) in sample_ranges.iter().enumerate() {
         if index >= samples.len() {
             break;
         }
-        let end = range.offset + range.size;
-        if end > decrypted.len() {
-            return Err(BotError::Custom("汽水音乐 sample 超出文件范围".to_string()));
-        }
+        let end = range
+            .offset
+            .checked_add(range.size)
+            .filter(|end| *end <= decrypted.len())
+            .ok_or_else(|| BotError::Custom("汽水音乐 sample 超出文件范围".to_string()))?;
         decrypt_soda_sample(&mut decrypted[range.offset..end], &key, &samples[index])?;
     }
     rewrite_soda_audio_sample_entries(&mut decrypted)?;
-    Ok(decrypted)
+    Ok(Some(decrypted))
 }
 
 fn extract_soda_key(play_auth: &str) -> Result<String, BotError> {
@@ -792,7 +858,10 @@ fn read_soda_box(data: &[u8], start: usize, end: usize) -> Result<Option<SodaMp4
     } else if size == 0 {
         size = end - start;
     }
-    if size < header_size || start + size > end || start + size > data.len() {
+    // checked_add: size comes from untrusted (possibly 64-bit largesize) bytes and must not
+    // wrap in release builds where overflow-checks are off.
+    let box_end = start.checked_add(size);
+    if size < header_size || box_end.is_none_or(|box_end| box_end > end || box_end > data.len()) {
         return Err(BotError::Custom(format!(
             "汽水音乐 MP4 box {} size invalid",
             String::from_utf8_lossy(&typ)
@@ -928,11 +997,12 @@ fn parse_soda_sample_ranges(
                     break;
                 }
                 let size = sample_sizes[sample_index] as usize;
-                if offset + size > data.len() {
-                    return Err(BotError::Custom("汽水音乐 MP4 sample 越界".to_string()));
-                }
+                let end = offset
+                    .checked_add(size)
+                    .filter(|end| *end <= data.len())
+                    .ok_or_else(|| BotError::Custom("汽水音乐 MP4 sample 越界".to_string()))?;
                 ranges.push(SodaSampleRange { offset, size });
-                offset += size;
+                offset = end;
                 sample_index += 1;
             }
         }
@@ -1241,6 +1311,12 @@ mod tests {
         let selected = select_soda_play_info(&play_infos, "high").unwrap();
         assert_eq!(selected.quality.as_deref(), Some("highest"));
         assert_eq!(normalize_soda_format(selected.format.as_deref()), "m4a");
+    }
+
+    #[test]
+    fn parses_soda_lyric_to_lrc() {
+        let raw = "[1234,1000]<0,500,0>你<500,500,0>好";
+        assert_eq!(parse_soda_lyric(raw), "[00:01.23]你好");
     }
 
     #[tokio::test]

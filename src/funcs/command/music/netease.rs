@@ -1,6 +1,7 @@
 use super::provider::{
     MusicCollection, MusicLyrics, MusicPlatform, MusicProvider, MusicSearchItem, MusicTrack,
-    get_json_with_headers, json_id_to_string,
+    VkeysResponse, append_vkeys_auth, get_json_with_headers, json_id_to_string,
+    parse_vkeys_duration, parse_vkeys_kbps, vkeys_enabled, vkeys_track_format, vkeys_url,
 };
 use crate::{BotError, settings::SETTINGS};
 use async_trait::async_trait;
@@ -16,9 +17,12 @@ impl MusicProvider for NeteaseProvider {
     async fn search(&self, keyword: &str, limit: usize) -> Result<Vec<MusicSearchItem>, BotError> {
         match search_netease_native(keyword, limit).await {
             Ok(songs) if !songs.is_empty() => Ok(songs),
-            _ => search_netease_by_vkeys(keyword, limit)
-                .await
-                .map(|songs| vkeys_netease_to_items(songs, limit)),
+            // Without vkeys, surface the native result (empty list or real error) untouched.
+            native_result if !vkeys_enabled() => native_result,
+            native_result => match search_netease_by_vkeys(keyword, limit).await {
+                Ok(songs) => Ok(vkeys_netease_to_items(songs, limit)),
+                Err(_) => native_result,
+            },
         }
     }
 
@@ -112,6 +116,7 @@ async fn resolve_netease_native(id: &str, quality: &str) -> Result<MusicTrack, B
         link: format!("https://music.163.com/#/song?id={id}"),
         url: download_url,
         headers: HashMap::new(),
+        max_chunk_size: None,
         duration: song
             .duration
             .filter(|duration| *duration > 0)
@@ -162,11 +167,21 @@ struct NeteaseSearchResult {
 
 #[derive(Deserialize)]
 struct NeteaseDetailResponse {
+    #[serde(default)]
+    code: Option<i64>,
+    #[serde(default)]
+    msg: Option<String>,
+    #[serde(default)]
     songs: Vec<NeteaseSong>,
 }
 
 #[derive(Deserialize)]
 struct NeteaseUrlResponse {
+    #[serde(default)]
+    code: Option<i64>,
+    #[serde(default)]
+    msg: Option<String>,
+    #[serde(default)]
     data: Vec<NeteaseUrlData>,
 }
 
@@ -331,8 +346,10 @@ async fn get_vkeys_netease_track(id: &str, quality: &str) -> Result<MusicTrack, 
             .if_empty(|| format!("https://music.163.com/#/song?id={id}")),
         url: download_url.clone(),
         headers: HashMap::new(),
+        max_chunk_size: None,
         duration: parse_vkeys_duration(&track.interval),
-        bitrate: parse_vkeys_kbps(&track.kbps),
+        // MusicTrack.bitrate 按 bps 消费，vkeys 报的是 kbps
+        bitrate: parse_vkeys_kbps(&track.kbps).map(|kbps| kbps.saturating_mul(1000)),
         format: vkeys_track_format(&download_url, &track.quality, &track.size),
     })
 }
@@ -364,6 +381,7 @@ async fn get_netease_song(id: &str) -> Result<NeteaseSong, BotError> {
         urlencoding::encode(id)
     );
     let response: NeteaseDetailResponse = get_netease_json(&url).await?;
+    ensure_netease_ok(response.code, response.msg.as_deref())?;
     response
         .songs
         .into_iter()
@@ -379,12 +397,23 @@ async fn get_netease_download_url(id: &str, quality: &str) -> Result<String, Bot
         netease_native_bitrate(quality)
     );
     let response: NeteaseUrlResponse = get_netease_json(&url).await?;
+    ensure_netease_ok(response.code, response.msg.as_deref())?;
     response
         .data
         .into_iter()
         .find_map(|item| item.url)
         .filter(|url| !url.trim().is_empty())
         .ok_or_else(|| BotError::Custom("没有拿到可下载的音乐链接".to_string()))
+}
+
+fn ensure_netease_ok(code: Option<i64>, msg: Option<&str>) -> Result<(), BotError> {
+    match code {
+        Some(code) if code != 200 => Err(BotError::Custom(format!(
+            "网易云 API 错误 {code}: {}",
+            msg.unwrap_or_default()
+        ))),
+        _ => Ok(()),
+    }
 }
 
 async fn get_netease_collection(
@@ -455,54 +484,23 @@ async fn get_netease_album_collection(id: &str, limit: usize) -> Result<MusicCol
 }
 
 async fn get_netease_lyrics(id: &str) -> Result<NeteaseLyricResponse, BotError> {
-    let url = format!(
-        "https://music.163.com/api/song/lyric?id={}&lv=-1&kv=-1&tv=-1",
-        urlencoding::encode(id)
-    );
+    let url = netease_lyrics_url(id);
     get_netease_json(&url).await
+}
+
+fn netease_lyrics_url(id: &str) -> String {
+    format!(
+        "https://music.163.com/api/song/lyric?id={}&lv=-1&kv=-1&tv=-1&rv=-1&yv=-1",
+        urlencoding::encode(id)
+    )
 }
 
 async fn get_netease_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, BotError> {
     get_json_with_headers(url, &netease_headers()).await
 }
 
-#[derive(Deserialize)]
-struct VkeysResponse<T> {
-    code: i64,
-    #[serde(default)]
-    message: String,
-    data: Option<T>,
-}
-
-impl<T> VkeysResponse<T> {
-    fn ensure_success(&self, context: &str) -> Result<(), BotError> {
-        if self.code == 0 || self.code == 200 {
-            Ok(())
-        } else {
-            Err(BotError::Custom(format!("{context}失败：{}", self.message)))
-        }
-    }
-}
-
 async fn get_vkeys_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, BotError> {
     get_json_with_headers(url, &HashMap::new()).await
-}
-
-fn vkeys_enabled() -> bool {
-    SETTINGS.music.vkeys.enabled && !SETTINGS.music.vkeys.base_url.trim().is_empty()
-}
-
-fn vkeys_url(path: &str) -> Result<url::Url, BotError> {
-    let base = SETTINGS.music.vkeys.base_url.trim().trim_end_matches('/');
-    url::Url::parse(&format!("{base}/{}", path.trim_start_matches('/')))
-        .map_err(|err| BotError::Custom(format!("vkeys API 地址无效：{err}")))
-}
-
-fn append_vkeys_auth(url: &mut url::Url) {
-    let token = SETTINGS.music.vkeys.token.trim();
-    if !token.is_empty() {
-        url.query_pairs_mut().append_pair("token", token);
-    }
 }
 
 fn netease_vkeys_quality(quality: &str) -> i64 {
@@ -527,48 +525,6 @@ fn should_prefer_vkeys_netease_download(quality: &str) -> bool {
         quality.trim().to_ascii_lowercase().as_str(),
         "lossless" | "flac" | "无损" | "hires" | "hi-res" | "master"
     )
-}
-
-fn parse_vkeys_kbps(value: &str) -> Option<u32> {
-    let numeric = value
-        .trim()
-        .trim_end_matches("kbps")
-        .trim()
-        .parse::<f32>()
-        .ok()?;
-    (numeric > 0.0).then(|| numeric.round() as u32)
-}
-
-fn parse_vkeys_duration(value: &str) -> Option<u32> {
-    let value = value.trim();
-    if value.is_empty() {
-        return None;
-    }
-    if let Ok(seconds) = value.parse::<u32>() {
-        return (seconds > 0).then_some(seconds);
-    }
-    let (minutes, rest) = value.split_once('分')?;
-    let seconds = rest.trim_end_matches('秒');
-    let total = minutes.trim().parse::<u32>().ok()? * 60 + seconds.trim().parse::<u32>().ok()?;
-    (total > 0).then_some(total)
-}
-
-fn vkeys_track_format(url: &str, quality: &str, size: &str) -> Option<String> {
-    let ext = url
-        .split('?')
-        .next()
-        .and_then(|path| path.rsplit('.').next())
-        .map(str::trim)
-        .filter(|ext| ext.len() <= 5 && ext.chars().all(|c| c.is_ascii_alphanumeric()))
-        .map(|ext| ext.to_ascii_lowercase());
-    if ext.is_some() {
-        return ext;
-    }
-    if quality.contains("无损") || size.to_ascii_lowercase().contains("flac") {
-        Some("flac".to_string())
-    } else {
-        Some("mp3".to_string())
-    }
 }
 
 trait IfEmpty {
@@ -599,7 +555,7 @@ fn netease_headers() -> HashMap<String, String> {
         ),
     ]);
     if let Some(cookie) = netease_cookie() {
-        headers.insert("Cookie".to_string(), cookie);
+        headers.insert("Cookie".to_string(), netease_cookie_with_device(&cookie));
     }
     headers
 }
@@ -614,6 +570,30 @@ fn netease_cookie() -> Option<String> {
     } else {
         Some(configured_cookie.to_string())
     }
+}
+
+fn netease_cookie_with_device(cookie: &str) -> String {
+    let cookie = cookie.trim();
+    if cookie_has_key(cookie, "NMTID") {
+        return cookie.to_string();
+    }
+
+    let separator = if cookie.ends_with(';') { " " } else { "; " };
+    // 与上游一致：每次请求随机生成，反作弊只校验存在性与格式（见上游 e1bddf6）
+    format!("{cookie}{separator}NMTID={}", random_netease_nmtid())
+}
+
+fn cookie_has_key(cookie: &str, key: &str) -> bool {
+    cookie
+        .split(';')
+        .filter_map(|part| part.trim().split_once('='))
+        .any(|(name, _)| name.trim().eq_ignore_ascii_case(key))
+}
+
+fn random_netease_nmtid() -> String {
+    let mut value = uuid::Uuid::new_v4().simple().to_string();
+    value.truncate(30);
+    format!("00{value}")
 }
 
 fn netease_song_to_item(song: NeteaseSong) -> MusicSearchItem {
@@ -804,6 +784,39 @@ mod tests {
         assert_eq!(parse_vkeys_duration("4分29秒"), Some(269));
         assert_eq!(parse_vkeys_duration("183"), Some(183));
         assert_eq!(parse_vkeys_kbps("3002kbps"), Some(3002));
+    }
+
+    #[test]
+    fn netease_lyrics_url_requests_all_source_tracks() {
+        let url = netease_lyrics_url("449818741");
+        assert!(url.contains("lv=-1"));
+        assert!(url.contains("kv=-1"));
+        assert!(url.contains("tv=-1"));
+        assert!(url.contains("rv=-1"));
+        assert!(url.contains("yv=-1"));
+    }
+
+    #[test]
+    fn injects_random_nmtid_into_netease_cookie() {
+        let cookie = netease_cookie_with_device("MUSIC_U=abc; os=android");
+        assert!(cookie.contains("MUSIC_U=abc"));
+        assert!(cookie.contains("os=android"));
+
+        let nmtid = cookie
+            .split(';')
+            .map(str::trim)
+            .find_map(|part| part.strip_prefix("NMTID="))
+            .expect("NMTID should be injected");
+        assert_eq!(nmtid.len(), 32);
+        assert!(nmtid.starts_with("00"));
+        assert!(nmtid.chars().all(|ch| ch.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn preserves_existing_netease_nmtid_cookie() {
+        let cookie = "MUSIC_U=abc; NMTID=00existingdeviceid";
+        assert_eq!(netease_cookie_with_device(cookie), cookie);
+        assert!(cookie_has_key("music_u=abc; nmtid=value", "NMTID"));
     }
 
     #[test]

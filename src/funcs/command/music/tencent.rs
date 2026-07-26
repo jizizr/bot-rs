@@ -1,4 +1,8 @@
-use super::provider::{MusicPlatform, MusicProvider, MusicSearchItem, MusicTrack};
+use super::provider::{
+    MusicLyrics, MusicPlatform, MusicProvider, MusicSearchItem, MusicTrack, VkeysResponse,
+    append_vkeys_auth, first_non_empty, parse_vkeys_duration, parse_vkeys_kbps, vkeys_enabled,
+    vkeys_track_format, vkeys_url,
+};
 use crate::{BotError, settings::SETTINGS};
 use async_trait::async_trait;
 use base64::Engine;
@@ -8,16 +12,24 @@ use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
 use sha1::{Digest, Sha1};
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 use url::Url;
 
 const MUSICU_ENDPOINT: &str = "https://u.y.qq.com/cgi-bin/musicu.fcg";
 const MUSICS_ENDPOINT: &str = "https://u.y.qq.com/cgi-bin/musics.fcg";
 const SONG_DETAIL_ENDPOINT: &str = "https://c.y.qq.com/v8/fcg-bin/fcg_play_single_song.fcg";
+const LYRIC_ENDPOINT: &str = "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg";
 const SEARCH_ENDPOINT: &str = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp";
 
 lazy_static! {
-    static ref CLIENT: Client = Client::new();
+    static ref CLIENT: Client = Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .read_timeout(Duration::from_secs(30))
+        .build()
+        .expect("qq music http client");
     static ref QQ_SONG_PATH_PATTERNS: Vec<Regex> = vec![
         Regex::new(r"^n/ryqq/songDetail/([^/?#]+)$").unwrap(),
         Regex::new(r"^n/ryqq_v2/songDetail/([^/?#]+)$").unwrap(),
@@ -36,9 +48,12 @@ impl MusicProvider for TencentProvider {
         let limit = limit.max(1);
         match search_by_native(keyword, limit).await {
             Ok(songs) if !songs.is_empty() => Ok(songs),
-            _ => search_by_vkeys(keyword, limit)
-                .await
-                .map(|songs| vkeys_songs_to_items(songs, limit)),
+            // Without vkeys, surface the native result (empty list or real error) untouched.
+            native_result if !vkeys_enabled() => native_result,
+            native_result => match search_by_vkeys(keyword, limit).await {
+                Ok(songs) => Ok(vkeys_songs_to_items(songs, limit)),
+                Err(_) => native_result,
+            },
         }
     }
 
@@ -48,6 +63,24 @@ impl MusicProvider for TencentProvider {
         selected_id: Option<&str>,
     ) -> Result<MusicTrack, BotError> {
         resolve_tencent_track(keyword, selected_id, "lossless").await
+    }
+
+    async fn lyrics(&self, track_id: &str) -> Result<Option<MusicLyrics>, BotError> {
+        let id = parse_qq_track_id(track_id).unwrap_or_else(|| track_id.trim().to_string());
+        if id.is_empty() {
+            return Ok(None);
+        }
+        let detail = get_song_detail(&id).await?;
+        let song_mid = if detail.mid.trim().is_empty() {
+            id
+        } else {
+            detail.mid
+        };
+        let lyrics = get_qq_lyrics(&song_mid).await?;
+        if lyrics.plain.trim().is_empty() && lyrics.translation.trim().is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(lyrics))
     }
 }
 
@@ -156,6 +189,7 @@ async fn resolve_native_with_cookie(
                         link: build_track_url(&song_mid),
                         url,
                         headers: HashMap::new(),
+                        max_chunk_size: None,
                         duration: None,
                         bitrate: None,
                         format: Some(quality.ext.to_string()),
@@ -254,6 +288,18 @@ struct QQFileInfo {
     cover_mid: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct QQLyricsResponse {
+    #[serde(default)]
+    retcode: i64,
+    #[serde(default)]
+    code: i64,
+    #[serde(default)]
+    lyric: String,
+    #[serde(default)]
+    trans: String,
+}
+
 struct QualityProfile {
     code: &'static str,
     ext: &'static str,
@@ -334,24 +380,12 @@ async fn search_by_vkeys(keyword: &str, limit: usize) -> Result<Vec<VkeysTencent
         .append_pair("limit", &limit.clamp(1, 60).to_string());
     let body = get_bytes(url.as_str(), false).await?;
     #[derive(Deserialize)]
-    struct Resp {
-        code: i64,
-        #[serde(default)]
-        message: String,
-        data: Option<Data>,
-    }
-    #[derive(Deserialize)]
     struct Data {
         #[serde(default)]
         list: Vec<VkeysTencentSong>,
     }
-    let resp: Resp = serde_json::from_slice(&body)?;
-    if resp.code != 0 && resp.code != 200 {
-        return Err(BotError::Custom(format!(
-            "vkeys QQ 搜索失败：{}",
-            resp.message
-        )));
-    }
+    let resp: VkeysResponse<Data> = serde_json::from_slice(&body)?;
+    resp.ensure_success("vkeys QQ 搜索")?;
     Ok(resp.data.map(|data| data.list).unwrap_or_default())
 }
 
@@ -392,20 +426,8 @@ async fn get_vkeys_song_info(id: &str) -> Result<VkeysTencentSong, BotError> {
     append_vkeys_auth(&mut url);
     append_vkeys_track_id(&mut url, id);
     let body = get_bytes(url.as_str(), false).await?;
-    #[derive(Deserialize)]
-    struct Resp {
-        code: i64,
-        #[serde(default)]
-        message: String,
-        data: Option<VkeysTencentSong>,
-    }
-    let resp: Resp = serde_json::from_slice(&body)?;
-    if resp.code != 0 && resp.code != 200 {
-        return Err(BotError::Custom(format!(
-            "vkeys QQ 歌曲详情失败：{}",
-            resp.message
-        )));
-    }
+    let resp: VkeysResponse<VkeysTencentSong> = serde_json::from_slice(&body)?;
+    resp.ensure_success("vkeys QQ 歌曲详情")?;
     resp.data
         .ok_or_else(|| BotError::Custom("vkeys QQ 没有返回歌曲详情".to_string()))
 }
@@ -422,20 +444,8 @@ async fn get_vkeys_song_link(
         .append_pair("quality", &quality_type.to_string())
         .append_pair("type", &detail.song_type.to_string());
     let body = get_bytes(url.as_str(), false).await?;
-    #[derive(Deserialize)]
-    struct Resp {
-        code: i64,
-        #[serde(default)]
-        message: String,
-        data: Option<VkeysLinkData>,
-    }
-    let resp: Resp = serde_json::from_slice(&body)?;
-    if resp.code != 0 && resp.code != 200 {
-        return Err(BotError::Custom(format!(
-            "vkeys QQ 获取直链失败：{}",
-            resp.message
-        )));
-    }
+    let resp: VkeysResponse<VkeysLinkData> = serde_json::from_slice(&body)?;
+    resp.ensure_success("vkeys QQ 获取直链")?;
     let link = resp
         .data
         .ok_or_else(|| BotError::Custom("vkeys QQ 没有返回直链数据".to_string()))?;
@@ -471,8 +481,10 @@ async fn get_vkeys_song_link(
             .unwrap_or_else(|| build_track_url(&detail.preferred_id(fallback_id))),
         url: download_url.clone(),
         headers: HashMap::new(),
+        max_chunk_size: None,
         duration: parse_vkeys_duration(&link.interval).or(detail.interval),
-        bitrate: parse_vkeys_kbps(&link.kbps),
+        // MusicTrack.bitrate 按 bps 消费，vkeys 报的是 kbps
+        bitrate: parse_vkeys_kbps(&link.kbps).map(|kbps| kbps.saturating_mul(1000)),
         format: vkeys_track_format(&download_url, &link.quality, &link.size),
     })
 }
@@ -747,6 +759,19 @@ async fn get_song_file_info(song_mid: &str) -> Result<QQFileInfo, BotError> {
     Ok(file)
 }
 
+async fn get_qq_lyrics(song_mid: &str) -> Result<MusicLyrics, BotError> {
+    let url = qq_lyrics_url(song_mid);
+    let body = get_bytes(url.as_str(), false).await?;
+    let response: QQLyricsResponse = serde_json::from_slice(&body)?;
+    if response.retcode != 0 && response.code != 0 {
+        return Err(BotError::Custom("QQ音乐没有返回歌词".to_string()));
+    }
+    Ok(MusicLyrics {
+        plain: decode_base64_text(&response.lyric),
+        translation: decode_base64_text(&response.trans),
+    })
+}
+
 async fn get_vkey(
     song_mid: &str,
     media_mid: &str,
@@ -891,6 +916,18 @@ fn apply_qq_headers(
     request
 }
 
+fn qq_lyrics_url(song_mid: &str) -> String {
+    let mut url = Url::parse(LYRIC_ENDPOINT).unwrap();
+    url.query_pairs_mut()
+        .append_pair("songmid", song_mid)
+        .append_pair("g_tk", "5381")
+        .append_pair("format", "json")
+        .append_pair("inCharset", "utf8")
+        .append_pair("outCharset", "utf-8")
+        .append_pair("platform", "yqq");
+    url.to_string()
+}
+
 fn search_song_to_item(song: QQSearchSong) -> MusicSearchItem {
     MusicSearchItem {
         platform: MusicPlatform::Tencent,
@@ -974,23 +1011,6 @@ fn select_vkeys_quality_candidates(detail: &VkeysTencentSong, quality: &str) -> 
     selected
 }
 
-fn vkeys_enabled() -> bool {
-    SETTINGS.music.vkeys.enabled && !SETTINGS.music.vkeys.base_url.trim().is_empty()
-}
-
-fn vkeys_url(path: &str) -> Result<Url, BotError> {
-    let base = SETTINGS.music.vkeys.base_url.trim().trim_end_matches('/');
-    Url::parse(&format!("{base}/{}", path.trim_start_matches('/')))
-        .map_err(|err| BotError::Custom(format!("vkeys API 地址无效：{err}")))
-}
-
-fn append_vkeys_auth(url: &mut Url) {
-    let token = SETTINGS.music.vkeys.token.trim();
-    if !token.is_empty() {
-        url.query_pairs_mut().append_pair("token", token);
-    }
-}
-
 fn append_vkeys_track_id(url: &mut Url, id: &str) {
     if id.chars().all(|c| c.is_ascii_digit()) {
         url.query_pairs_mut().append_pair("id", id);
@@ -1018,46 +1038,15 @@ fn json_value_to_string(value: &serde_json::Value) -> Option<String> {
     }
 }
 
-fn parse_vkeys_kbps(value: &str) -> Option<u32> {
-    let numeric = value
-        .trim()
-        .trim_end_matches("kbps")
-        .trim()
-        .parse::<f32>()
-        .ok()?;
-    (numeric > 0.0).then(|| numeric.round() as u32)
-}
-
-fn parse_vkeys_duration(value: &str) -> Option<u32> {
+fn decode_base64_text(value: &str) -> String {
     let value = value.trim();
     if value.is_empty() {
-        return None;
+        return String::new();
     }
-    if let Ok(seconds) = value.parse::<u32>() {
-        return (seconds > 0).then_some(seconds);
-    }
-    let (minutes, rest) = value.split_once('分')?;
-    let seconds = rest.trim_end_matches('秒');
-    let total = minutes.trim().parse::<u32>().ok()? * 60 + seconds.trim().parse::<u32>().ok()?;
-    (total > 0).then_some(total)
-}
-
-fn vkeys_track_format(url: &str, quality: &str, size: &str) -> Option<String> {
-    let ext = url
-        .split('?')
-        .next()
-        .and_then(|path| path.rsplit('.').next())
-        .map(str::trim)
-        .filter(|ext| ext.len() <= 5 && ext.chars().all(|c| c.is_ascii_alphanumeric()))
-        .map(|ext| ext.to_ascii_lowercase());
-    if ext.is_some() {
-        return ext;
-    }
-    if quality.contains("无损") || size.to_ascii_lowercase().contains("flac") {
-        Some("flac".to_string())
-    } else {
-        Some("mp3".to_string())
-    }
+    base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_string())
+        .unwrap_or_default()
 }
 
 fn parse_qq_track_id(text: &str) -> Option<String> {
@@ -1225,14 +1214,6 @@ fn singers_to_string(singers: &[QQSinger]) -> String {
     }
 }
 
-fn first_non_empty<'a>(items: impl IntoIterator<Item = Option<&'a str>>) -> Option<&'a str> {
-    items
-        .into_iter()
-        .flatten()
-        .map(str::trim)
-        .find(|item| !item.is_empty())
-}
-
 fn is_tencent_song_mid(text: &str) -> bool {
     let text = text.trim();
     text.len() >= 12
@@ -1362,6 +1343,23 @@ mod tests {
         assert!(is_usable_download_url(
             "http://ws.stream.qqmusic.qq.com/M500song.mp3?vkey=abc"
         ));
+    }
+
+    #[test]
+    fn builds_qq_lyrics_url_like_source_bot() {
+        let url = Url::parse(&qq_lyrics_url("003aAYrm3GE0Ac")).unwrap();
+        assert_eq!(url.host_str(), Some("c.y.qq.com"));
+        assert_eq!(url.path(), "/lyric/fcgi-bin/fcg_query_lyric_new.fcg");
+        let query = url.query().unwrap_or_default();
+        assert!(query.contains("songmid=003aAYrm3GE0Ac"));
+        assert!(query.contains("platform=yqq"));
+        assert!(query.contains("format=json"));
+    }
+
+    #[test]
+    fn decodes_qq_base64_lyrics() {
+        let encoded = base64::engine::general_purpose::STANDARD.encode("[00:01.00]你好");
+        assert_eq!(decode_base64_text(&encoded), "[00:01.00]你好");
     }
 
     #[test]

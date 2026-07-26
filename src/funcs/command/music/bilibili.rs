@@ -1,9 +1,15 @@
 use super::provider::{MusicPlatform, MusicProvider, MusicSearchItem, MusicTrack, get_json};
 use crate::BotError;
 use async_trait::async_trait;
+use lazy_static::lazy_static;
 use regex::Regex;
 use serde::Deserialize;
 use std::collections::HashMap;
+
+lazy_static! {
+    static ref BILIBILI_BV_RE: Regex = Regex::new(r"(?i)(BV[a-zA-Z0-9]{10})").unwrap();
+    static ref BILIBILI_TAG_RE: Regex = Regex::new(r"<[^>]+>").unwrap();
+}
 
 pub static BILIBILI_PROVIDER: BilibiliProvider = BilibiliProvider;
 
@@ -44,7 +50,17 @@ impl MusicProvider for BilibiliProvider {
     ) -> Result<MusicTrack, BotError> {
         let bvid = match selected_id {
             Some(id) => id.to_string(),
-            None => parse_bilibili_id(keyword).unwrap_or_else(|| keyword.to_string()),
+            None => match parse_bilibili_id(keyword) {
+                Some(id) => id,
+                None => {
+                    self.search(keyword, 1)
+                        .await?
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| BotError::Custom("没有找到可下载的音乐".to_string()))?
+                        .id
+                }
+            },
         };
         let view = get_video_view(&bvid).await?;
         let audio = get_video_audio(&view.bvid, view.cid).await?;
@@ -67,6 +83,7 @@ impl MusicProvider for BilibiliProvider {
             link: format!("https://www.bilibili.com/video/{}", view.bvid),
             url: audio,
             headers,
+            max_chunk_size: None,
             duration: view
                 .duration
                 .filter(|duration| *duration > 0)
@@ -195,17 +212,14 @@ fn ensure_bilibili_ok(code: i64, message: &str) -> Result<(), BotError> {
 }
 
 fn parse_bilibili_id(text: &str) -> Option<String> {
-    let text = text.trim();
-    let re = Regex::new(r"(?i)(BV[a-zA-Z0-9]{10})").ok()?;
-    re.captures(text)
+    BILIBILI_BV_RE
+        .captures(text.trim())
         .and_then(|captures| captures.get(1))
         .map(|value| value.as_str().to_string())
 }
 
 fn strip_html_tags(text: &str) -> String {
-    Regex::new(r"<[^>]+>")
-        .map(|re| re.replace_all(text, "").into_owned())
-        .unwrap_or_else(|_| text.to_string())
+    BILIBILI_TAG_RE.replace_all(text, "").into_owned()
 }
 
 fn normalize_bilibili_image(url: &str) -> String {

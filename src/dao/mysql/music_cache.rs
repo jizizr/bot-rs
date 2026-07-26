@@ -169,6 +169,17 @@ pub async fn find_cache(
         .map(Into::into))
 }
 
+// 通过 file_id 反查缓存（走 idx_music_cache_file_id 索引）。
+// 注意：Telegram 只承诺 file_unique_id 稳定，file_id 理论上可能变化；
+// 实践中同一 bot 拿到的 file_id 是稳定的，若出现漏查再考虑补存 file_unique_id
+pub async fn find_cache_by_file_id(file_id: &str) -> Result<Option<MusicCache>, crate::BotError> {
+    Ok(entity::Entity::find()
+        .filter(entity::Column::FileId.eq(file_id))
+        .one(db().await?)
+        .await?
+        .map(Into::into))
+}
+
 pub async fn upsert_cache(cache: &MusicCache) -> BotResult {
     entity::Entity::insert(to_active_model(cache))
         .on_conflict(

@@ -61,7 +61,19 @@ lazy_static! {
             .build()
             .unwrap_or_else(|_| Client::new())
     };
+    // Media transfers can legitimately outlive any whole-request deadline
+    // (lossless tracks are tens of MB), so this client only bounds connect
+    // and per-read stalls instead of the total request time.
+    static ref MEDIA_CLIENT: Client = {
+        let timeout = apple_timeout();
+        Client::builder()
+            .connect_timeout(timeout)
+            .read_timeout(timeout)
+            .build()
+            .unwrap_or_else(|_| Client::new())
+    };
     static ref DEVELOPER_TOKEN: RwLock<Option<String>> = RwLock::new(None);
+    static ref DEVELOPER_TOKEN_FETCH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::new(());
     static ref JS_ASSET_PATTERN: Regex = Regex::new(r#"/assets/index[^"'\s]*\.js"#).unwrap();
     static ref TOKEN_PATTERN: Regex =
         Regex::new(r"eyJ[A-Za-z0-9_-]{40,}\.[A-Za-z0-9_-]{40,}\.[A-Za-z0-9_-]{40,}").unwrap();
@@ -178,7 +190,9 @@ fn parse_wrapper_endpoint(spec: &str) -> Option<AppleWrapperEndpoint> {
 
 fn split_host_port(value: &str) -> Option<(&str, u16)> {
     let (host, port) = value.rsplit_once(':')?;
-    if host.contains(']') || value.matches(':').count() > 1 && !host.ends_with(']') {
+    // A host containing ':' must be a bracketed IPv6 literal ("[::1]:10024");
+    // bare IPv6 ("::1") falls through to the default-port path in the caller.
+    if host.contains(':') && !host.ends_with(']') {
         return None;
     }
     port.parse::<u16>().ok().map(|port| (host, port))
@@ -317,6 +331,7 @@ async fn resolve_apple_track(
             .unwrap_or_else(|| apple_track_url(&id)),
         url: download_url,
         headers: apple_download_headers(),
+        max_chunk_size: None,
         duration: expected_duration,
         bitrate: None,
         format: Some("m4a".to_string()),
@@ -400,11 +415,19 @@ struct AppleMusicAttributes {
     duration_in_millis: Option<u64>,
     artwork: Option<AppleMusicArtwork>,
     url: Option<String>,
+    #[serde(default, rename = "extendedAssetUrls")]
+    extended_asset_urls: Option<AppleMusicExtendedAssetUrls>,
 }
 
 #[derive(Deserialize)]
 struct AppleMusicArtwork {
     url: String,
+}
+
+#[derive(Deserialize)]
+struct AppleMusicExtendedAssetUrls {
+    #[serde(default, rename = "enhancedHls")]
+    enhanced_hls: String,
 }
 
 #[derive(Deserialize)]
@@ -532,6 +555,21 @@ async fn get_apple_download_url_with_quality(
     Ok(apple_widevine_internal_url(id, quality, expected_duration))
 }
 
+async fn get_catalog_enhanced_hls_master_url(track_id: &str) -> Result<String, BotError> {
+    let url = get_apple_song(track_id)
+        .await?
+        .attributes
+        .extended_asset_urls
+        .map(|assets| assets.enhanced_hls)
+        .unwrap_or_default();
+    if url.trim().is_empty() {
+        return Err(BotError::Custom(
+            "Apple Music catalog 没有返回 enhancedHls".to_string(),
+        ));
+    }
+    Ok(url)
+}
+
 async fn get_apple_webplayback_assets(
     id: &str,
     media_user_token: String,
@@ -609,35 +647,14 @@ where
                 "Apple Music Widevine URL 缺少 track id".to_string(),
             ));
         }
-        let quality = query
-            .split('&')
-            .filter_map(|part| part.split_once('='))
-            .find_map(|(key, value)| (key == "quality").then_some(value))
-            .map(quality_from_str)
-            .unwrap_or(AppleMusicQuality::High);
         let expected_duration = internal_query_u32(query, "duration");
-        match download_via_widevine_with_progress(track_id, expected_duration, progress).await {
-            Ok(data) => return Ok((data, None)),
-            Err(err) if quality == AppleMusicQuality::High && !is_apple_preview_error(&err) => {
-                if let Some(host) = apple_wrapper_host_opt() {
-                    return download_via_wrapper_with_progress_stats(
-                        &host,
-                        track_id,
-                        AppleMusicQuality::High,
-                        expected_duration,
-                        progress,
-                    )
-                    .await
-                    .map_err(|wrapper_err| {
-                        BotError::Custom(format!(
-                            "Apple Music Widevine 解密失败：{err}；wrapper fallback 也失败：{wrapper_err}"
-                        ))
-                    });
-                }
-                return Err(err);
-            }
-            Err(err) => return Err(err),
-        }
+        // applemusic-widevine:// URLs are only minted when no wrapper endpoint
+        // is configured (get_apple_download_url_with_quality), and the endpoint
+        // list is immutable for the process lifetime, so there is no wrapper
+        // fallback to attempt here.
+        return download_via_widevine_with_progress(track_id, expected_duration, progress)
+            .await
+            .map(|data| (data, None));
     }
 
     let payload = url
@@ -710,7 +727,11 @@ where
         &media_user_token,
     )
     .await?;
-    decrypt_cenc_fmp4(encrypted, &key)
+    // AES-CTR over the whole buffer plus the remux is CPU-bound; keep it off
+    // the async worker threads.
+    tokio::task::spawn_blocking(move || decrypt_cenc_fmp4(encrypted, &key))
+        .await
+        .map_err(|e| BotError::Custom(format!("Apple Music 解密任务失败：{e}")))?
 }
 
 #[cfg(test)]
@@ -740,6 +761,9 @@ where
 {
     let endpoints = select_wrapper_endpoints(host)?;
     let endpoint_count = endpoints.len();
+    // The catalog enhancedHls URL depends only on the track id, so fetch it at
+    // most once across endpoint attempts (lazily: HiRes may never need it).
+    let mut catalog_master_url: Option<Result<String, String>> = None;
     let mut last_error = None;
     for (index, endpoint) in endpoints.into_iter().enumerate() {
         match download_via_wrapper_endpoint(
@@ -748,6 +772,7 @@ where
             expected_duration,
             progress,
             endpoint,
+            &mut catalog_master_url,
         )
         .await
         {
@@ -766,11 +791,13 @@ async fn download_via_wrapper_endpoint<F>(
     expected_duration: Option<u32>,
     progress: &mut F,
     endpoint: AppleWrapperEndpoint,
+    catalog_master_url: &mut Option<Result<String, String>>,
 ) -> Result<(Vec<u8>, Option<Duration>), BotError>
 where
     F: FnMut(DownloadProgress) + Send,
 {
-    let master_url = wrapper_get_m3u8_url(&endpoint, track_id).await?;
+    let master_url =
+        enhanced_hls_master_url(&endpoint, track_id, quality, catalog_master_url).await?;
     if !master_url.ends_with(".m3u8") {
         return Err(BotError::Custom(format!(
             "Apple Music wrapper 返回了无效 m3u8：{master_url}"
@@ -784,12 +811,17 @@ where
     let media_url = absolute_hls_url(&master_url, &variant.uri);
     let media = parse_enhanced_hls_media(&media_url, &download_text(&media_url).await?)?;
     validate_hls_media_duration(media.duration_seconds, expected_duration)?;
-    let encrypted = download_enhanced_hls_media_direct_or_range(&media, progress).await?;
+    let mut encrypted = download_enhanced_hls_media_direct_or_range(&media, progress).await?;
     let mut last_error = None;
     for attempt in 0..2 {
-        match decrypt_fmp4_with_wrapper(&endpoint, track_id, encrypted.clone(), &media.seg_keys)
-            .await
-        {
+        // Only keep a pristine copy while a retry can still need it; the final
+        // attempt consumes the buffer.
+        let payload = if attempt == 0 {
+            encrypted.clone()
+        } else {
+            std::mem::take(&mut encrypted)
+        };
+        match decrypt_fmp4_with_wrapper(&endpoint, track_id, payload, &media.seg_keys).await {
             Ok(data) => return Ok((data.audio, Some(data.decrypt_elapsed))),
             Err(e) if attempt == 0 && is_retryable_wrapper_error(&e) => {
                 last_error = Some(e);
@@ -798,6 +830,60 @@ where
         }
     }
     Err(last_error.unwrap_or_else(|| BotError::Custom("Apple Music wrapper 解密失败".to_string())))
+}
+
+async fn enhanced_hls_master_url(
+    endpoint: &AppleWrapperEndpoint,
+    track_id: &str,
+    quality: AppleMusicQuality,
+    catalog_master_url: &mut Option<Result<String, String>>,
+) -> Result<String, BotError> {
+    if quality == AppleMusicQuality::HiRes {
+        match wrapper_get_m3u8_url(endpoint, track_id).await {
+            Ok(url) if url.ends_with(".m3u8") => return Ok(url),
+            Ok(url) => {
+                eprintln!(
+                    "Apple Music wrapper device m3u8 invalid for {track_id}: {url}; falling back to catalog enhancedHls"
+                );
+            }
+            Err(err) => {
+                eprintln!(
+                    "Apple Music wrapper device m3u8 unavailable for {track_id}: {err}; falling back to catalog enhancedHls"
+                );
+            }
+        }
+    }
+
+    let catalog_result = match catalog_master_url.as_ref() {
+        Some(result) => result.clone(),
+        None => catalog_master_url
+            .insert(
+                get_catalog_enhanced_hls_master_url(track_id)
+                    .await
+                    .map_err(|err| err.to_string()),
+            )
+            .clone(),
+    };
+    // A catalog URL that is not an .m3u8 is treated like a catalog failure so
+    // the wrapper device m3u8 fallback still runs and the error names the
+    // actual source instead of blaming the wrapper.
+    let catalog_err = match catalog_result {
+        Ok(url) if url.ends_with(".m3u8") => return Ok(url),
+        Ok(url) => format!("Apple Music catalog enhancedHls 无效：{url}"),
+        Err(err) => err,
+    };
+    if quality == AppleMusicQuality::HiRes {
+        return Err(BotError::Custom(catalog_err));
+    }
+    match wrapper_get_m3u8_url(endpoint, track_id).await {
+        Ok(url) if url.ends_with(".m3u8") => Ok(url),
+        Ok(url) => Err(BotError::Custom(format!(
+            "Apple Music catalog enhancedHls 获取失败：{catalog_err}；wrapper device m3u8 无效：{url}"
+        ))),
+        Err(wrapper_err) => Err(BotError::Custom(format!(
+            "Apple Music catalog enhancedHls 获取失败：{catalog_err}；wrapper device m3u8 也失败：{wrapper_err}"
+        ))),
+    }
 }
 
 fn select_widevine_asset(assets: &[WebPlaybackAsset]) -> Option<&WebPlaybackAsset> {
@@ -831,6 +917,7 @@ fn apple_preview_error(expected_duration: u32, actual_duration: u32) -> BotError
     ))
 }
 
+#[cfg(test)]
 fn is_apple_preview_error(err: &BotError) -> bool {
     matches!(err, BotError::Custom(message) if message.contains("只返回试听片段"))
 }
@@ -1054,10 +1141,7 @@ fn decrypt_cenc_fmp4(mut data: Vec<u8>, key: &[u8]) -> Result<Vec<u8>, BotError>
                 let parsed = parse_traf(&data, traf, &tenc)?;
                 let mut next_sample_start = mdat.payload_start();
                 for run in &parsed.runs {
-                    let start = run
-                        .data_offset
-                        .map(|offset| (moof.start as i64 + offset as i64) as usize)
-                        .unwrap_or(next_sample_start);
+                    let start = trun_run_start(moof.start, run.data_offset, next_sample_start)?;
                     next_sample_start = decrypt_cenc_samples(
                         &mut data,
                         start,
@@ -1078,6 +1162,7 @@ fn decrypt_cenc_fmp4(mut data: Vec<u8>, key: &[u8]) -> Result<Vec<u8>, BotError>
     remux_decrypted_fmp4_to_progressive(&data)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn decrypt_cenc_samples(
     data: &mut [u8],
     sample_start: usize,
@@ -1090,10 +1175,7 @@ fn decrypt_cenc_samples(
 ) -> Result<usize, BotError> {
     let mut pos = sample_start;
     for (index, sample) in samples.iter().enumerate() {
-        let end = pos + sample.size as usize;
-        if end > sample_end || end > data.len() {
-            return Err(BotError::Custom("MP4 sample 超出文件范围".to_string()));
-        }
+        let end = checked_sample_end(pos, sample.size, sample_end.min(data.len()))?;
         let senc_sample = senc.and_then(|senc| senc.samples.get(senc_sample_offset + index));
         let iv = cenc_sample_iv(senc_sample, tenc)?;
         let subsamples = senc_sample
@@ -1220,7 +1302,7 @@ async fn download_bytes_with_progress<F>(url: &str, progress: &mut F) -> Result<
 where
     F: FnMut(DownloadProgress) + Send,
 {
-    let response = CLIENT
+    let response = MEDIA_CLIENT
         .get(url)
         .header("User-Agent", APPLE_MUSIC_UA)
         .send()
@@ -1329,7 +1411,9 @@ where
 }
 
 async fn download_enhanced_hls_part(part: &EnhancedHlsPart) -> Result<Vec<u8>, BotError> {
-    let mut request = CLIENT.get(&part.url).header("User-Agent", APPLE_MUSIC_UA);
+    let mut request = MEDIA_CLIENT
+        .get(&part.url)
+        .header("User-Agent", APPLE_MUSIC_UA);
     if let Some(range) = part.range {
         request = request.header(
             reqwest::header::RANGE,
@@ -1419,6 +1503,12 @@ async fn apple_get_json_with_media_user_token<T: serde::de::DeserializeOwned>(
 }
 
 async fn ensure_developer_token() -> Result<String, BotError> {
+    if let Some(token) = DEVELOPER_TOKEN.read().unwrap().clone() {
+        return Ok(token);
+    }
+    // Single-flight the refresh: concurrent cold-cache callers would otherwise
+    // each download music.apple.com's HTML plus the full JS bundle.
+    let _guard = DEVELOPER_TOKEN_FETCH_LOCK.lock().await;
     if let Some(token) = DEVELOPER_TOKEN.read().unwrap().clone() {
         return Ok(token);
     }
@@ -2310,6 +2400,27 @@ fn parse_tfhd_defaults(body: &[u8]) -> Result<FragmentDefaults, BotError> {
     })
 }
 
+// trun data_offset is signed and comes straight from downloaded bytes; a
+// negative sum must bail instead of wrapping to a huge usize (release builds
+// have overflow checks off and panic = "abort").
+fn trun_run_start(
+    moof_start: usize,
+    data_offset: Option<i32>,
+    fallback: usize,
+) -> Result<usize, BotError> {
+    let Some(offset) = data_offset else {
+        return Ok(fallback);
+    };
+    usize::try_from(moof_start as i64 + i64::from(offset))
+        .map_err(|_| BotError::Custom("MP4 trun data_offset 非法".to_string()))
+}
+
+fn checked_sample_end(pos: usize, size: u32, limit: usize) -> Result<usize, BotError> {
+    pos.checked_add(size as usize)
+        .filter(|end| *end <= limit)
+        .ok_or_else(|| BotError::Custom("MP4 sample 超出文件范围".to_string()))
+}
+
 fn parse_trun_samples(
     body: &[u8],
     defaults: FragmentDefaults,
@@ -2447,11 +2558,17 @@ async fn decrypt_fmp4_with_wrapper(
         None
     };
     let started = Instant::now();
-    run_wrapper_decrypt_session(&addr, &commands, &mut data).await?;
+    run_wrapper_decrypt_session(&addr, commands, &mut data).await?;
     let decrypt_elapsed = started.elapsed();
 
+    // The remux (box re-parse + ALAC bit scan) is seconds of CPU work for a
+    // lossless track; keep it off the async worker threads.
+    let audio = tokio::task::spawn_blocking(move || remux_decrypted_fmp4_to_progressive(&data))
+        .await
+        .map_err(|e| BotError::Custom(format!("Apple Music remux 任务失败：{e}")))??;
+
     Ok(AppleWrapperDecryptOutput {
-        audio: remux_decrypted_fmp4_to_progressive(&data)?,
+        audio,
         decrypt_elapsed,
     })
 }
@@ -2508,10 +2625,7 @@ fn collect_wrapper_decrypt_commands(
                 let parsed = parse_traf(data, traf, tenc)?;
                 let mut next_sample_start = mdat.payload_start();
                 for run in &parsed.runs {
-                    let start = run
-                        .data_offset
-                        .map(|offset| (moof.start as i64 + offset as i64) as usize)
-                        .unwrap_or(next_sample_start);
+                    let start = trun_run_start(moof.start, run.data_offset, next_sample_start)?;
                     next_sample_start = collect_wrapper_decrypt_sample_jobs(
                         &mut commands,
                         data,
@@ -2541,7 +2655,7 @@ struct AppleWrapperDecryptFragmentGroup {
 }
 
 fn group_wrapper_commands_by_fragment(
-    commands: &[AppleWrapperDecryptCommand],
+    commands: Vec<AppleWrapperDecryptCommand>,
 ) -> Result<Vec<AppleWrapperDecryptFragmentGroup>, BotError> {
     let mut groups = Vec::new();
     let mut current: Option<AppleWrapperDecryptFragmentGroup> = None;
@@ -2552,8 +2666,8 @@ fn group_wrapper_commands_by_fragment(
                     groups.push(group);
                 }
                 current = Some(AppleWrapperDecryptFragmentGroup {
-                    adam: adam.clone(),
-                    uri: uri.clone(),
+                    adam,
+                    uri,
                     jobs: Vec::new(),
                 });
             }
@@ -2561,7 +2675,7 @@ fn group_wrapper_commands_by_fragment(
                 let group = current.as_mut().ok_or_else(|| {
                     BotError::Custom("Apple Music wrapper fragment 缺少 key".to_string())
                 })?;
-                group.jobs.push(job.clone());
+                group.jobs.push(job);
             }
         }
     }
@@ -2573,7 +2687,7 @@ fn group_wrapper_commands_by_fragment(
 
 async fn run_wrapper_decrypt_session(
     addr: &str,
-    commands: &[AppleWrapperDecryptCommand],
+    commands: Vec<AppleWrapperDecryptCommand>,
     data: &mut [u8],
 ) -> Result<(), BotError> {
     let groups = group_wrapper_commands_by_fragment(commands)?;
@@ -2618,7 +2732,9 @@ async fn run_wrapper_decrypt_session(
 
 #[derive(Clone, Debug)]
 struct ProgressiveSample {
-    data: Vec<u8>,
+    // Range into the source fmp4 buffer; owning the bytes here would allocate
+    // one Vec per sample and hold a second full copy of the track.
+    range: Range<usize>,
     duration: u32,
     size: u32,
 }
@@ -2663,7 +2779,7 @@ fn remux_decrypted_fmp4_to_progressive(data: &[u8]) -> Result<Vec<u8>, BotError>
 
     let mdat_payload_size = samples
         .iter()
-        .map(|sample| sample.data.len())
+        .map(|sample| sample.range.len())
         .sum::<usize>();
     let mut out = Vec::with_capacity(ftyp_bytes.len() + moov_bytes.len() + 8 + mdat_payload_size);
     out.extend_from_slice(&ftyp_bytes);
@@ -2671,8 +2787,8 @@ fn remux_decrypted_fmp4_to_progressive(data: &[u8]) -> Result<Vec<u8>, BotError>
     let mdat_size = 8usize + mdat_payload_size;
     out.extend_from_slice(&(mdat_size as u32).to_be_bytes());
     out.extend_from_slice(b"mdat");
-    for sample in samples {
-        out.extend_from_slice(&sample.data);
+    for sample in &samples {
+        out.extend_from_slice(&data[sample.range.clone()]);
     }
     fix_alac_packets_in_progressive(&mut out)?;
     Ok(out)
@@ -2702,17 +2818,16 @@ fn collect_fragment_samples(
                 let parsed = parse_traf(data, traf, tenc)?;
                 let mut next_sample_start = mdat.payload_start();
                 for run in parsed.runs {
-                    let mut sample_pos = run
-                        .data_offset
-                        .map(|offset| (moof.start as i64 + offset as i64) as usize)
-                        .unwrap_or(next_sample_start);
+                    let mut sample_pos =
+                        trun_run_start(moof.start, run.data_offset, next_sample_start)?;
                     for sample in run.samples {
-                        let end = sample_pos + sample.size as usize;
-                        if end > mdat.end() || end > data.len() {
-                            return Err(BotError::Custom("MP4 sample 超出文件范围".to_string()));
-                        }
+                        let end = checked_sample_end(
+                            sample_pos,
+                            sample.size,
+                            mdat.end().min(data.len()),
+                        )?;
                         samples.push(ProgressiveSample {
-                            data: data[sample_pos..end].to_vec(),
+                            range: sample_pos..end,
                             duration: sample.duration,
                             size: sample.size,
                         });
@@ -3357,6 +3472,7 @@ where
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_wrapper_decrypt_sample_jobs(
     commands: &mut Vec<AppleWrapperDecryptCommand>,
     data: &[u8],
@@ -3369,10 +3485,7 @@ fn collect_wrapper_decrypt_sample_jobs(
 ) -> Result<usize, BotError> {
     let mut pos = sample_start;
     for (index, sample) in samples.iter().enumerate() {
-        let end = pos + sample.size as usize;
-        if end > sample_end || end > data.len() {
-            return Err(BotError::Custom("MP4 sample 超出文件范围".to_string()));
-        }
+        let end = checked_sample_end(pos, sample.size, sample_end.min(data.len()))?;
         let subsamples = senc
             .and_then(|senc| senc.samples.get(senc_sample_offset + index))
             .map(|sample| sample.subsamples.as_slice())
