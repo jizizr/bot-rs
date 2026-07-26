@@ -1,5 +1,5 @@
 use super::*;
-use redis::{AsyncCommands, Client};
+use redis::Client;
 use switch::SwitchType;
 
 mod switch;
