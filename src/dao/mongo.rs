@@ -6,13 +6,28 @@ pub mod music_settings;
 use super::*;
 use bson::doc;
 use mongodb::{Client, Collection, Database};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tokio::sync::OnceCell;
 
-static MONGO_DISABLED: AtomicBool = AtomicBool::new(false);
+/// 失败后的冷却秒数：期间所有 mongo 调用快速降级（避免每次都等驱动超时），
+/// 冷却结束后自动重试，而不是一次失败就永久停用
+const MONGO_RETRY_COOLDOWN_SECS: u64 = 300;
+
+static MONGO_FAILED_AT: AtomicU64 = AtomicU64::new(0);
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
 pub(super) fn is_mongo_disabled() -> bool {
-    if MONGO_DISABLED.load(Ordering::Relaxed) {
+    let failed_at = MONGO_FAILED_AT.load(Ordering::Relaxed);
+    if failed_at != 0 && now_secs().saturating_sub(failed_at) < MONGO_RETRY_COOLDOWN_SECS {
         return true;
     }
     matches!(
@@ -22,7 +37,11 @@ pub(super) fn is_mongo_disabled() -> bool {
 }
 
 pub(super) fn disable_mongo() {
-    MONGO_DISABLED.store(true, Ordering::Relaxed);
+    MONGO_FAILED_AT.store(now_secs(), Ordering::Relaxed);
+}
+
+pub(super) fn mark_mongo_ok() {
+    MONGO_FAILED_AT.store(0, Ordering::Relaxed);
 }
 static DB: OnceCell<Database> = OnceCell::const_new();
 static BOTLOG: OnceCell<Collection<bson::Document>> = OnceCell::const_new();

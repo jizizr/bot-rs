@@ -51,9 +51,18 @@ pub async fn insert_log(log: (&BotLog, &User, &Group)) -> Result<(), mongodb::er
     .await;
 
     match result {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(_)) | Err(_) => {
+        Ok(Ok(())) => {
+            mark_mongo_ok();
+            Ok(())
+        }
+        Ok(Err(e)) => {
             disable_mongo();
+            log::error!("Mongo insert_log failed, pausing mongo access for cooldown: {e}");
+            Ok(())
+        }
+        Err(_) => {
+            disable_mongo();
+            log::error!("Mongo insert_log timed out after 2s, pausing mongo access for cooldown");
             Ok(())
         }
     }
