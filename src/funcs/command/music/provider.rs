@@ -400,6 +400,11 @@ where
         request = request.header(key, value);
     }
     let mut resp = request.send().await?;
+    if resp.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+        return Err(BotError::Custom(format!(
+            "下载失败：未请求分段却收到 206 Partial Content {url}"
+        )));
+    }
     if !resp.status().is_success() {
         return Err(BotError::Custom(format!(
             "下载失败：HTTP {} {}",

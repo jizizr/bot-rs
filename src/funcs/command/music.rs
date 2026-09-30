@@ -1690,15 +1690,16 @@ async fn get_music(
     };
     let (mut progress, progress_task) =
         download_progress_updater(bot.clone(), status_msg, track.song.clone());
-    let media = provider::download_track_media_with_cover_progress(
+    let media_result = provider::download_track_media_with_cover_progress(
         &track,
         settings.send_cover,
         &mut progress,
     )
-    .await?;
+    .await;
     drop(progress);
     progress_task.abort();
     let _ = progress_task.await;
+    let media = media_result?;
     // 下载完成即释放下载槽位，上传阶段不占用并发额度（准入名额继续持有）
     drop(slot);
     let audio_len = media.audio.len() as u64;
@@ -2293,15 +2294,16 @@ async fn run_inline_send_flow_inner(
         inline_message_id.to_string(),
         track.song.clone(),
     );
-    let media = provider::download_track_media_with_cover_progress(
+    let media_result = provider::download_track_media_with_cover_progress(
         &track,
         settings.send_cover,
         &mut progress,
     )
-    .await?;
+    .await;
     drop(progress);
     progress_task.abort();
     let _ = progress_task.await;
+    let media = media_result?;
     // 下载完成即释放下载槽位，上传阶段不占用并发额度（准入名额继续持有）
     drop(slot);
 
@@ -3364,15 +3366,16 @@ async fn get_callback_music(
     };
     let (mut progress, progress_task) =
         download_progress_updater(bot.clone(), &msg, track.song.clone());
-    let media = provider::download_track_media_with_cover_progress(
+    let media_result = provider::download_track_media_with_cover_progress(
         &track,
         settings.send_cover,
         &mut progress,
     )
-    .await?;
+    .await;
     drop(progress);
     progress_task.abort();
     let _ = progress_task.await;
+    let media = media_result?;
     // 下载完成即释放下载槽位，上传阶段不占用并发额度（准入名额继续持有）
     drop(slot);
     let done = format!("已发送：{} - {}", track.song, track.singer);
@@ -5043,6 +5046,29 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(bytes, b"music");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejects_partial_content_without_range_request() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0; 1024];
+            let _ = stream.read(&mut buf).await.unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-4/10\r\nContent-Length: 5\r\nConnection: close\r\n\r\nmusic",
+                )
+                .await
+                .unwrap();
+        });
+
+        let err = provider::download_url(&format!("http://{addr}/track.mp3"))
+            .await
+            .unwrap_err();
+        assert!(format!("{err}").contains("未请求分段却收到 206"));
         server.await.unwrap();
     }
 
