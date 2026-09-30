@@ -188,6 +188,16 @@ struct NeteaseUrlResponse {
 #[derive(Deserialize)]
 struct NeteaseUrlData {
     url: Option<String>,
+    #[serde(default, rename = "freeTrialInfo")]
+    free_trial_info: Option<NeteaseFreeTrialInfo>,
+}
+
+#[derive(Deserialize)]
+struct NeteaseFreeTrialInfo {
+    #[allow(dead_code)]
+    start: Option<i64>,
+    #[allow(dead_code)]
+    end: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -401,9 +411,13 @@ async fn get_netease_download_url(id: &str, quality: &str) -> Result<String, Bot
     response
         .data
         .into_iter()
-        .find_map(|item| item.url)
+        .find_map(netease_full_download_url)
         .filter(|url| !url.trim().is_empty())
-        .ok_or_else(|| BotError::Custom("没有拿到可下载的音乐链接".to_string()))
+        .ok_or_else(|| BotError::Custom("网易云只返回了试听链接或没有可下载链接".to_string()))
+}
+
+fn netease_full_download_url(item: NeteaseUrlData) -> Option<String> {
+    item.free_trial_info.is_none().then_some(item.url).flatten()
 }
 
 fn ensure_netease_ok(code: Option<i64>, msg: Option<&str>) -> Result<(), BotError> {
@@ -825,5 +839,21 @@ mod tests {
         assert!(!should_prefer_vkeys_netease_download("high"));
         assert!(should_prefer_vkeys_netease_download("lossless"));
         assert!(should_prefer_vkeys_netease_download("hires"));
+    }
+
+    #[test]
+    fn rejects_netease_free_trial_url() {
+        let trial: NeteaseUrlData = serde_json::from_str(
+            r#"{"url":"https://example.test/trial.mp3","freeTrialInfo":{"start":0,"end":30000}}"#,
+        )
+        .unwrap();
+        assert_eq!(netease_full_download_url(trial), None);
+
+        let full: NeteaseUrlData =
+            serde_json::from_str(r#"{"url":"https://example.test/full.mp3"}"#).unwrap();
+        assert_eq!(
+            netease_full_download_url(full).as_deref(),
+            Some("https://example.test/full.mp3")
+        );
     }
 }

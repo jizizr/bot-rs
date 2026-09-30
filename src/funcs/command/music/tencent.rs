@@ -763,7 +763,7 @@ async fn get_qq_lyrics(song_mid: &str) -> Result<MusicLyrics, BotError> {
     let url = qq_lyrics_url(song_mid);
     let body = get_bytes(url.as_str(), false).await?;
     let response: QQLyricsResponse = serde_json::from_slice(&body)?;
-    if response.retcode != 0 && response.code != 0 {
+    if response.retcode != 0 || response.code != 0 {
         return Err(BotError::Custom("QQ音乐没有返回歌词".to_string()));
     }
     Ok(MusicLyrics {
@@ -1043,10 +1043,13 @@ fn decode_base64_text(value: &str) -> String {
     if value.is_empty() {
         return String::new();
     }
+    if value.starts_with('[') || value.starts_with('<') {
+        return value.to_string();
+    }
     base64::engine::general_purpose::STANDARD
         .decode(value)
         .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_string())
-        .unwrap_or_default()
+        .unwrap_or_else(|_| value.to_string())
 }
 
 fn parse_qq_track_id(text: &str) -> Option<String> {
@@ -1360,6 +1363,12 @@ mod tests {
     fn decodes_qq_base64_lyrics() {
         let encoded = base64::engine::general_purpose::STANDARD.encode("[00:01.00]你好");
         assert_eq!(decode_base64_text(&encoded), "[00:01.00]你好");
+    }
+
+    #[test]
+    fn preserves_plain_qq_lyrics_payload() {
+        assert_eq!(decode_base64_text("[00:01.00]你好"), "[00:01.00]你好");
+        assert_eq!(decode_base64_text("plain lyric"), "plain lyric");
     }
 
     #[test]
