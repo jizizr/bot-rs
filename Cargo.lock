@@ -557,6 +557,7 @@ dependencies = [
  "reqwest",
  "reqwest-middleware",
  "reqwest-retry",
+ "roxmltree 0.15.1",
  "rsa",
  "scraper",
  "sea-orm",

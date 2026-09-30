@@ -24,6 +24,7 @@ fast_qr = { version = "0.12", features = ["image"] }
 mysql_async = "0.35"
 async-trait = "0.1.8"
 scraper = "0.23"
+roxmltree = "0.15"
 cached = { version = "0.55", features = ["async"] }
 chrono = { version = "0.4" }
 dashmap = "6"

@@ -83,9 +83,6 @@ lazy_static! {
         Regex::new(r"^/[a-z]{2}/album/[^/]+/(\d{6,})$").unwrap();
     static ref APPLE_PLAYLIST_PATH_RE: Regex =
         Regex::new(r"^/[a-z]{2}/playlist/[^/]+/(pl\.[a-zA-Z0-9-]+)$").unwrap();
-    static ref APPLE_TTML_P_RE: Regex = Regex::new(r#"(?s)<p\b([^>]*)>(.*?)</p>"#).unwrap();
-    static ref APPLE_TTML_BEGIN_RE: Regex = Regex::new(r#"\bbegin\s*=\s*"([^"]+)""#).unwrap();
-    static ref APPLE_XML_TAG_RE: Regex = Regex::new(r#"(?s)<[^>]+>"#).unwrap();
     static ref ENHANCED_STREAM_INF_RE: Regex = Regex::new(r#"^#EXT-X-STREAM-INF:(.*)$"#).unwrap();
     static ref ENHANCED_AUDIO_RE: Regex = Regex::new(r#"AUDIO="([^"]*)""#).unwrap();
     static ref ENHANCED_CODEC_RE: Regex = Regex::new(r#"CODECS="([^"]*)""#).unwrap();
@@ -1307,6 +1304,11 @@ where
         .header("User-Agent", APPLE_MUSIC_UA)
         .send()
         .await?;
+    if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+        return Err(BotError::Custom(
+            "Apple Music 下载媒体失败：未请求分段却收到 206 Partial Content".to_string(),
+        ));
+    }
     if !response.status().is_success() {
         return Err(BotError::Custom(format!(
             "Apple Music 下载媒体失败：HTTP {}",
@@ -1425,6 +1427,11 @@ async fn download_enhanced_hls_part(part: &EnhancedHlsPart) -> Result<Vec<u8>, B
         );
     }
     let response = request.send().await?;
+    if part.range.is_none() && response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+        return Err(BotError::Custom(
+            "Apple Music 下载媒体分片失败：未请求分段却收到 206 Partial Content".to_string(),
+        ));
+    }
     if !response.status().is_success() {
         return Err(BotError::Custom(format!(
             "Apple Music 下载媒体分片失败：HTTP {}",
@@ -1731,26 +1738,18 @@ fn is_apple_numeric_id(value: &str) -> bool {
 }
 
 fn parse_ttml_to_lrc(ttml: &str) -> String {
+    let Ok(document) = roxmltree::Document::parse(ttml) else {
+        return ttml.trim().to_string();
+    };
     let mut lines = Vec::new();
-    for captures in APPLE_TTML_P_RE.captures_iter(ttml) {
-        let attrs = captures
-            .get(1)
-            .map(|value| value.as_str())
-            .unwrap_or_default();
-        let body = captures
-            .get(2)
-            .map(|value| value.as_str())
-            .unwrap_or_default();
-        let text = decode_xml_entities(&strip_xml_tags(body));
-        let text = text.trim();
+    for paragraph in document.descendants().filter(|node| node.has_tag_name("p")) {
+        let mut body = String::new();
+        append_ttml_primary_text(paragraph, &mut body);
+        let text = body.split_whitespace().collect::<Vec<_>>().join(" ");
         if text.is_empty() {
             continue;
         }
-        if let Some(begin) = APPLE_TTML_BEGIN_RE
-            .captures(attrs)
-            .and_then(|captures| captures.get(1))
-            .map(|value| value.as_str())
-        {
+        if let Some(begin) = ttml_begin(paragraph) {
             lines.push(format!("[{}]{}", format_lrc_timestamp(begin), text));
         } else {
             lines.push(text.to_string());
@@ -1762,17 +1761,38 @@ fn parse_ttml_to_lrc(ttml: &str) -> String {
     lines.join("\n")
 }
 
-fn strip_xml_tags(value: &str) -> String {
-    APPLE_XML_TAG_RE.replace_all(value, "").to_string()
+fn append_ttml_primary_text(node: roxmltree::Node<'_, '_>, output: &mut String) {
+    if node
+        .attribute("role")
+        .is_some_and(|role| role.split_whitespace().any(is_ttml_secondary_role))
+    {
+        return;
+    }
+    if node.has_tag_name("br") {
+        output.push(' ');
+        return;
+    }
+    for child in node.children() {
+        if child.is_text() {
+            if let Some(text) = child.text() {
+                output.push_str(text);
+            }
+        } else if child.is_element() {
+            append_ttml_primary_text(child, output);
+        }
+    }
 }
 
-fn decode_xml_entities(value: &str) -> String {
-    value
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
+fn is_ttml_secondary_role(role: &str) -> bool {
+    matches!(role, "x-translation" | "x-roman" | "x-bg")
+}
+
+fn ttml_begin<'a>(node: roxmltree::Node<'a, 'a>) -> Option<&'a str> {
+    node.attribute("begin").or_else(|| {
+        node.descendants()
+            .skip(1)
+            .find_map(|child| child.attribute("begin"))
+    })
 }
 
 fn format_lrc_timestamp(value: &str) -> String {
@@ -1788,6 +1808,20 @@ fn parse_ttml_time_to_millis(value: &str) -> u64 {
     if value.is_empty() {
         return 0;
     }
+    for (suffix, multiplier) in [
+        ("ms", 1.0),
+        ("h", 3_600_000.0),
+        ("m", 60_000.0),
+        ("s", 1_000.0),
+    ] {
+        if let Some(number) = value.strip_suffix(suffix)
+            && let Ok(number) = number.trim().parse::<f64>()
+            && number.is_finite()
+            && number >= 0.0
+        {
+            return (number * multiplier).round() as u64;
+        }
+    }
     let parts = value.split(':').collect::<Vec<_>>();
     let (hours, minutes, seconds) = match parts.as_slice() {
         [seconds] => (0, 0, *seconds),
@@ -1799,22 +1833,9 @@ fn parse_ttml_time_to_millis(value: &str) -> u64 {
         ),
         _ => return 0,
     };
-    let (seconds, millis) = seconds.split_once('.').unwrap_or((seconds, "0"));
-    let seconds = parse_u64_or_zero(seconds);
-    let millis = normalize_millis(millis);
-    ((hours * 3600 + minutes * 60 + seconds) * 1000) + millis
-}
-
-fn normalize_millis(value: &str) -> u64 {
-    let mut millis = value
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .take(3)
-        .collect::<String>();
-    while millis.len() < 3 {
-        millis.push('0');
-    }
-    parse_u64_or_zero(&millis)
+    let seconds = seconds.parse::<f64>().unwrap_or(0.0);
+    let total = (hours as f64 * 3600.0 + minutes as f64 * 60.0 + seconds) * 1000.0;
+    total.max(0.0).round() as u64
 }
 
 fn parse_u64_or_zero(value: &str) -> u64 {
@@ -3694,6 +3715,18 @@ mod tests {
         assert_eq!(
             parse_ttml_to_lrc(ttml),
             "[00:27.39]Hello world\n[01:02.34]Rice & Field"
+        );
+    }
+
+    #[test]
+    fn parses_nested_ttml_text_without_secondary_tracks() {
+        let ttml = r#"<tt><body><div>
+<p begin='1.5s'>Hello <span begin='1.5s' end='2s'>world</span><span role='x-translation'>你好</span></p>
+<p begin='00:01:02.340'>Rice &amp; Field</p>
+</div></body></tt>"#;
+        assert_eq!(
+            parse_ttml_to_lrc(ttml),
+            "[00:01.50]Hello world\n[01:02.34]Rice & Field"
         );
     }
 
