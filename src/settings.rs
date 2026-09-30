@@ -47,6 +47,8 @@ pub struct Music {
     #[serde(default)]
     pub netease: NeteaseMusic,
     #[serde(default)]
+    pub soda: SodaMusic,
+    #[serde(default)]
     pub inline_upload_chat_id: i64,
     // Download governor (funcs/command/music/queue.rs): concurrent download
     // slots, bounded waiting queue, and live-work admission caps.
@@ -113,6 +115,7 @@ impl Default for Music {
             vkeys: VkeysMusic::default(),
             tencent: TencentMusic::default(),
             netease: NeteaseMusic::default(),
+            soda: SodaMusic::default(),
             inline_upload_chat_id: 0,
             download_concurrency: default_music_download_concurrency(),
             download_queue_wait_limit: default_music_download_queue_wait_limit(),
@@ -171,6 +174,12 @@ pub struct TencentMusic {
 
 #[derive(Debug, Default, Deserialize)]
 pub struct NeteaseMusic {
+    #[serde(default)]
+    pub cookie: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct SodaMusic {
     #[serde(default)]
     pub cookie: String,
 }

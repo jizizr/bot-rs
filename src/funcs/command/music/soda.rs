@@ -1,15 +1,16 @@
 use super::provider::{
     CLIENT, DownloadProgress, MusicLyrics, MusicPlatform, MusicProvider, MusicSearchItem,
-    MusicTrack, first_non_empty, get_json_with_headers,
+    MusicTrack, first_non_empty,
 };
-use crate::BotError;
+use crate::{BotError, settings::SETTINGS};
 use aes::cipher::{KeyIvInit, StreamCipher};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose};
 use lazy_static::lazy_static;
 use regex::Regex;
-use serde::Deserialize;
-use std::collections::HashMap;
+use serde::{Deserialize, de::DeserializeOwned};
+use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 use url::Url;
 
 lazy_static! {
@@ -18,9 +19,11 @@ lazy_static! {
 }
 
 const SODA_AID: &str = "386088";
-const SODA_CHANNEL: &str = "pc_web";
+const SODA_CHANNEL: &str = "xiaomi_8478_64";
+const SODA_SEARCH_USER_AGENT: &str = "com.luna.music/100198030 (Linux; U; Android 15; zh_CN_#Hans; ABR-AL80; Build/V417IR;tt-ok/3.12.13.19)";
 const SODA_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
 const SODA_DOWNLOAD_SCHEME: &str = "soda-download://";
+const MAX_SODA_AUDIO_DOWNLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 type Aes128Ctr = ctr::Ctr128BE<aes::Aes128>;
 
 pub static SODA_PROVIDER: SodaProvider = SodaProvider;
@@ -31,16 +34,15 @@ pub struct SodaProvider;
 impl MusicProvider for SodaProvider {
     async fn search(&self, keyword: &str, limit: usize) -> Result<Vec<MusicSearchItem>, BotError> {
         let url = soda_search_url(keyword);
-        let response: SodaSearchResponse = get_soda_json(&url).await?;
+        let response: SodaSearchResponse = get_soda_json(&url, soda_search_headers()).await?;
+        let mut seen = HashSet::with_capacity(limit);
         Ok(response
             .result_groups
             .into_iter()
-            .next()
-            .map(|group| group.data)
-            .unwrap_or_default()
-            .into_iter()
-            .take(limit)
+            .flat_map(|group| group.data)
             .filter_map(|item| soda_track_to_item(item.entity.track))
+            .filter(|item| seen.insert(item.id.clone()))
+            .take(limit)
             .collect())
     }
 
@@ -106,12 +108,34 @@ async fn resolve_soda_track(
     };
 
     let details = get_soda_track_details(&id).await?;
+    if details
+        .media_id
+        .as_deref()
+        .zip(details.preview_id.as_deref())
+        .is_some_and(|(media_id, preview_id)| {
+            !media_id.trim().is_empty() && media_id.trim() == preview_id.trim()
+        })
+    {
+        return Err(BotError::Custom("汽水音乐只返回了试听音频".to_string()));
+    }
     let track = details.track;
     let play_info_url = details
         .player_info_url
         .filter(|url| !url.trim().is_empty())
         .ok_or_else(|| BotError::Custom("汽水音乐没有返回播放信息链接".to_string()))?;
-    let play_infos = get_soda_play_infos(&play_info_url).await?;
+    let mut play_infos = get_soda_play_infos(&play_info_url).await?;
+    let mut saw_incomplete_duration = false;
+    play_infos.retain(|item| {
+        if soda_play_info_is_shorter_than_track(track.duration.unwrap_or_default(), item.duration) {
+            saw_incomplete_duration = true;
+            false
+        } else {
+            true
+        }
+    });
+    if play_infos.is_empty() && saw_incomplete_duration {
+        return Err(BotError::Custom("汽水音乐只返回了较短的试听流".to_string()));
+    }
     let play_info = select_soda_play_info(&play_infos, quality)
         .ok_or_else(|| BotError::Custom("汽水音乐没有匹配的音质".to_string()))?;
     let url = first_non_empty([
@@ -126,6 +150,13 @@ async fn resolve_soda_track(
         .map(str::trim)
         .filter(|backup| !backup.is_empty() && *backup != url);
     let format = normalize_soda_format(play_info.format.as_deref());
+    let bitrate_kbps = if play_info.bitrate > 0 {
+        play_info.bitrate
+    } else if play_info.duration > 0.0 && play_info.size > 0 {
+        (play_info.size as f64 * 8.0 / play_info.duration / 1_000.0).round() as i64
+    } else {
+        0
+    };
     let download_url = soda_internal_download_url(
         &url,
         backup_url,
@@ -153,9 +184,23 @@ async fn resolve_soda_track(
             .duration
             .filter(|duration| *duration > 0)
             .map(|duration| ((duration + 500) / 1000) as u32),
-        bitrate: (play_info.bitrate > 0).then_some(play_info.bitrate as u32),
+        bitrate: (bitrate_kbps > 0)
+            .then_some(bitrate_kbps as u32)
+            .map(|value| value.saturating_mul(1_000)),
         format: Some(format),
     })
+}
+
+fn soda_play_info_is_shorter_than_track(
+    track_duration_ms: u64,
+    play_duration_seconds: f64,
+) -> bool {
+    if track_duration_ms == 0 || play_duration_seconds <= 0.0 {
+        return false;
+    }
+    let catalog_seconds = track_duration_ms as f64 / 1_000.0;
+    let tolerance = (catalog_seconds * 0.05).min(3.0);
+    catalog_seconds - play_duration_seconds > tolerance
 }
 
 #[derive(Deserialize)]
@@ -177,6 +222,7 @@ struct SodaSearchEntry {
 
 #[derive(Deserialize)]
 struct SodaSearchEntity {
+    #[serde(default)]
     track: SodaTrack,
 }
 
@@ -187,11 +233,24 @@ struct SodaTrackResponse {
     track_player: Option<SodaTrackPlayer>,
     #[serde(default)]
     lyric: Option<SodaLyric>,
+    #[serde(default)]
+    seo_track: Option<SodaSeoTrack>,
+}
+
+#[derive(Default, Deserialize)]
+struct SodaSeoTrack {
+    #[serde(default)]
+    track: Option<SodaTrack>,
+    #[serde(default)]
+    lyric: Option<SodaLyric>,
 }
 
 #[derive(Deserialize)]
 struct SodaTrackPlayer {
+    #[serde(default)]
     url_player_info: Option<String>,
+    #[serde(default)]
+    media_id: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -218,9 +277,11 @@ struct SodaPlayInfoData {
     play_info_list: Vec<SodaPlayInfo>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 struct SodaTrack {
+    #[serde(default)]
     id: String,
+    #[serde(default)]
     name: String,
     #[serde(default)]
     duration: Option<u64>,
@@ -228,6 +289,14 @@ struct SodaTrack {
     artists: Vec<SodaArtist>,
     #[serde(default)]
     album: SodaAlbum,
+    #[serde(default)]
+    preview: Option<SodaPreview>,
+}
+
+#[derive(Clone, Deserialize)]
+struct SodaPreview {
+    #[serde(default)]
+    vid: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -249,6 +318,8 @@ struct SodaCover {
     urls: Vec<String>,
     #[serde(default)]
     uri: String,
+    #[serde(default)]
+    template_prefix: String,
 }
 
 #[derive(Deserialize)]
@@ -267,69 +338,167 @@ struct SodaPlayInfo {
     size: i64,
     #[serde(default, rename = "Bitrate")]
     bitrate: i64,
+    #[serde(default, rename = "Duration")]
+    duration: f64,
 }
 
 struct SodaTrackDetails {
     track: SodaTrack,
     player_info_url: Option<String>,
+    media_id: Option<String>,
+    preview_id: Option<String>,
     lyric: String,
 }
 
 async fn get_soda_track_details(id: &str) -> Result<SodaTrackDetails, BotError> {
-    let url = soda_track_v2_url(id);
-    let response: SodaTrackResponse = get_soda_json(&url).await?;
+    let url = soda_track_detail_url(id);
+    let response: SodaTrackResponse = get_soda_json(&url, soda_detail_headers()).await?;
+    let seo_track = response.seo_track;
     let track = response
         .track_info
         .or(response.track)
+        .or_else(|| seo_track.as_ref().and_then(|item| item.track.clone()))
         .ok_or_else(|| BotError::Custom("没有找到汽水音乐歌曲详情".to_string()))?;
-    let player_info_url = response
-        .track_player
-        .and_then(|player| player.url_player_info);
+    let player = response.track_player;
+    let player_info_url = player
+        .as_ref()
+        .and_then(|player| player.url_player_info.clone());
+    let preview_id = track
+        .preview
+        .as_ref()
+        .and_then(|preview| preview.vid.clone());
+    let lyric = response
+        .lyric
+        .and_then(|lyric| lyric.content)
+        .filter(|lyric| !lyric.trim().is_empty())
+        .or_else(|| {
+            seo_track
+                .as_ref()
+                .and_then(|item| item.lyric.as_ref())
+                .and_then(|lyric| lyric.content.clone())
+        })
+        .unwrap_or_default();
     Ok(SodaTrackDetails {
         track,
         player_info_url,
-        lyric: response
-            .lyric
-            .and_then(|lyric| lyric.content)
-            .unwrap_or_default(),
+        media_id: player.as_ref().and_then(|player| player.media_id.clone()),
+        preview_id,
+        lyric,
     })
 }
 
 async fn get_soda_play_infos(url: &str) -> Result<Vec<SodaPlayInfo>, BotError> {
-    let response: SodaPlayInfoResponse = get_soda_json(url).await?;
+    let response: SodaPlayInfoResponse = get_soda_json(url, soda_play_info_headers()).await?;
     let mut list = response.result.data.play_info_list;
     if list.is_empty() {
         return Err(BotError::Custom("汽水音乐没有返回播放清单".to_string()));
     }
     list.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| b.bitrate.cmp(&a.bitrate)));
+    for item in &mut list {
+        if item.bitrate > 10_000 {
+            item.bitrate /= 1_000;
+        }
+        item.quality = item
+            .quality
+            .take()
+            .map(|quality| quality.trim().to_ascii_lowercase());
+    }
     Ok(list)
 }
 
-async fn get_soda_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, BotError> {
-    get_json_with_headers(url, &soda_headers()).await
+async fn get_soda_json<T: DeserializeOwned>(
+    url: &str,
+    headers: HashMap<String, String>,
+) -> Result<T, BotError> {
+    let has_cookie = headers.contains_key("Cookie");
+    let mut value = request_soda_json(url, &headers).await?;
+    if has_cookie && soda_status_code(&value) == Some(1_000_006) {
+        let mut anonymous_headers = headers;
+        anonymous_headers.remove("Cookie");
+        value = request_soda_json(url, &anonymous_headers).await?;
+    }
+    ensure_soda_response(&value)?;
+    serde_json::from_value(value)
+        .map_err(|err| BotError::Custom(format!("汽水音乐响应解析失败：{err}")))
 }
 
 fn soda_search_url(keyword: &str) -> String {
-    let mut url = Url::parse("https://api.qishui.com/luna/pc/search/track").unwrap();
-    url.query_pairs_mut()
-        .append_pair("q", keyword)
-        .append_pair("cursor", "0")
-        .append_pair("search_method", "input")
-        .append_pair("aid", SODA_AID)
-        .append_pair("device_platform", "web")
-        .append_pair("channel", SODA_CHANNEL);
+    let mut url = Url::parse("https://api.qishui.com/luna/search/track").unwrap();
+    for (key, value) in soda_search_params(keyword) {
+        url.query_pairs_mut().append_pair(key, &value);
+    }
     url.to_string()
 }
 
-fn soda_track_v2_url(id: &str) -> String {
-    let mut url = Url::parse("https://api.qishui.com/luna/pc/track_v2").unwrap();
+fn soda_track_detail_url(id: &str) -> String {
+    let mut url = Url::parse("https://beta-luna.douyin.com/luna/h5/seo_track").unwrap();
     url.query_pairs_mut()
         .append_pair("track_id", id)
-        .append_pair("media_type", "track")
-        .append_pair("aid", SODA_AID)
-        .append_pair("device_platform", "web")
-        .append_pair("channel", SODA_CHANNEL);
+        .append_pair("device_platform", "web");
     url.to_string()
+}
+
+fn soda_search_params(keyword: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("device_platform", "android".to_string()),
+        ("os", "android".to_string()),
+        ("ssmix", "a".to_string()),
+        ("cdid", "46556f98-1720-4248-83da-62b74b60b46a".to_string()),
+        ("channel", SODA_CHANNEL.to_string()),
+        ("aid", SODA_AID.to_string()),
+        ("app_name", "luna".to_string()),
+        ("version_code", "100198030".to_string()),
+        ("version_name", "19.8.0".to_string()),
+        ("manifest_version_code", "100198030".to_string()),
+        ("update_version_code", "100198030".to_string()),
+        ("resolution", "1080*1920".to_string()),
+        ("dpi", "480".to_string()),
+        ("device_type", "ABR-AL80".to_string()),
+        ("device_brand", "HUAWEI".to_string()),
+        ("language", "zh".to_string()),
+        ("os_api", "35".to_string()),
+        ("os_version", "15".to_string()),
+        ("ac", "wifi".to_string()),
+        ("device_model", "ABR-AL80".to_string()),
+        ("save_power", "0".to_string()),
+        ("font_size", "1.00".to_string()),
+        ("luna_first_launch_apk_type", "normal_apk".to_string()),
+        ("diversion_channel_name", "xiaomi_8478_64".to_string()),
+        ("is_car_play", "0".to_string()),
+        ("battery", "0.99".to_string()),
+        ("network_speed", "10156".to_string()),
+        ("hybrid_version_code", "100198030".to_string()),
+        ("tz_name", "Asia/Shanghai".to_string()),
+        ("tz_offset", "28800".to_string()),
+        ("luna_register_time", "1784311292".to_string()),
+        (
+            "diversion_category_level_two",
+            "Xiaomi%E5%95%86%E5%BA%97-%E8%87%AA%E7%84%B6".to_string(),
+        ),
+        ("package", "com.luna.music".to_string()),
+        ("charge", "0".to_string()),
+        ("luna_apk_type", "normal_apk".to_string()),
+        ("output_device_type", "Phone".to_string()),
+        ("volume", "1.00".to_string()),
+        ("brightness", "0.08".to_string()),
+        ("need_personal_recommend", "1".to_string()),
+        ("is_teen_mode", "0".to_string()),
+        ("sim_region", "cn".to_string()),
+        (
+            "diversion_category_level_one",
+            "%E5%8E%82%E5%95%86%E5%95%86%E5%BA%97-%E8%87%AA%E7%84%B6".to_string(),
+        ),
+        ("android_device_type", "default".to_string()),
+        ("iid", "2204957404569386".to_string()),
+        ("device_id", "2204957404565290".to_string()),
+        ("count", "20".to_string()),
+        ("q", keyword.to_string()),
+        ("cursor", "0".to_string()),
+        (
+            "_rticket",
+            chrono::Utc::now().timestamp_millis().to_string(),
+        ),
+    ]
 }
 
 fn select_soda_play_info<'a>(
@@ -443,6 +612,13 @@ fn soda_cover_url(cover: &SodaCover) -> String {
         .map(|url| url.trim().to_string())
         .unwrap_or_default();
     let uri = cover.uri.trim();
+    if !cover.template_prefix.trim().is_empty() && !cover.uri.trim().is_empty() {
+        return format!(
+            "https://p3-luna.douyinpic.com/img/{}~{}-resize:960:960.png",
+            cover.uri.trim(),
+            cover.template_prefix.trim()
+        );
+    }
     if base.is_empty() {
         return String::new();
     }
@@ -543,9 +719,13 @@ fn is_soda_numeric_id(value: &str) -> bool {
     !value.trim().is_empty() && value.len() >= 8 && value.chars().all(|c| c.is_ascii_digit())
 }
 
-fn soda_headers() -> HashMap<String, String> {
+fn soda_headers(
+    user_agent: &str,
+    content_type: Option<&str>,
+    with_cookie: bool,
+) -> HashMap<String, String> {
     let mut headers: HashMap<String, String> = [
-        ("User-Agent".to_string(), SODA_USER_AGENT.to_string()),
+        ("User-Agent".to_string(), user_agent.to_string()),
         (
             "Accept".to_string(),
             "application/json, text/plain, */*".to_string(),
@@ -553,12 +733,86 @@ fn soda_headers() -> HashMap<String, String> {
     ]
     .into_iter()
     .collect();
-    if let Ok(cookie) = std::env::var("SODA_COOKIE")
-        && !cookie.trim().is_empty()
-    {
+    if let Some(content_type) = content_type {
+        headers.insert("Content-Type".to_string(), content_type.to_string());
+    }
+    let cookie = SETTINGS.music.soda.cookie.trim();
+    let cookie = if cookie.is_empty() {
+        std::env::var("SODA_COOKIE").unwrap_or_default()
+    } else {
+        cookie.to_string()
+    };
+    if with_cookie && !cookie.trim().is_empty() {
         headers.insert("Cookie".to_string(), cookie.trim().to_string());
     }
     headers
+}
+
+fn soda_search_headers() -> HashMap<String, String> {
+    soda_headers(
+        SODA_SEARCH_USER_AGENT,
+        Some("application/json; charset=UTF-8"),
+        true,
+    )
+}
+
+fn soda_detail_headers() -> HashMap<String, String> {
+    soda_headers(SODA_USER_AGENT, None, true)
+}
+
+fn soda_play_info_headers() -> HashMap<String, String> {
+    soda_headers(SODA_USER_AGENT, None, false)
+}
+
+async fn request_soda_json(
+    url: &str,
+    headers: &HashMap<String, String>,
+) -> Result<Value, BotError> {
+    let mut request = CLIENT.get(url);
+    for (key, value) in headers {
+        request = request.header(key, value);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|_| BotError::Custom("汽水音乐接口请求失败".to_string()))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|err| BotError::Request(err.without_url()))?;
+    if !status.is_success() {
+        return Err(BotError::Custom(format!(
+            "汽水音乐接口请求失败：HTTP {status}"
+        )));
+    }
+    serde_json::from_str(&body)
+        .map_err(|err| BotError::Custom(format!("汽水音乐响应解析失败：{err}")))
+}
+
+fn soda_status_code(value: &Value) -> Option<i64> {
+    value.get("status_code").and_then(Value::as_i64)
+}
+
+fn ensure_soda_response(value: &Value) -> Result<(), BotError> {
+    if let Some(code) = soda_status_code(value)
+        && code != 0
+    {
+        return Err(BotError::Custom(format!(
+            "汽水音乐接口错误：status_code={code}"
+        )));
+    }
+    if let Some(code) = value
+        .get("status_info")
+        .and_then(|info| info.get("code"))
+        .and_then(Value::as_i64)
+        && code != 0
+    {
+        return Err(BotError::Custom(format!(
+            "汽水音乐接口错误：status_info.code={code}"
+        )));
+    }
+    Ok(())
 }
 
 pub(super) async fn download_internal_url_with_progress<F>(
@@ -645,7 +899,13 @@ where
         .get(url)
         .header("User-Agent", SODA_USER_AGENT)
         .send()
-        .await?;
+        .await
+        .map_err(|_| BotError::Custom("汽水音乐媒体请求失败".to_string()))?;
+    if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+        return Err(BotError::Custom(
+            "汽水音乐下载失败：未请求分段却收到 206 Partial Content".to_string(),
+        ));
+    }
     if !response.status().is_success() {
         return Err(BotError::Custom(format!(
             "汽水音乐下载失败：HTTP {}",
@@ -653,9 +913,23 @@ where
         )));
     }
     let total = response.content_length();
+    if total.is_some_and(|total| total > MAX_SODA_AUDIO_DOWNLOAD_BYTES) {
+        return Err(BotError::Custom(
+            "汽水音乐下载失败：文件超过 2 GiB 上限".to_string(),
+        ));
+    }
     let mut buf = Vec::new();
-    while let Some(chunk) = response.chunk().await? {
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|err| BotError::Request(err.without_url()))?
+    {
         buf.extend_from_slice(&chunk);
+        if buf.len() as u64 > MAX_SODA_AUDIO_DOWNLOAD_BYTES {
+            return Err(BotError::Custom(
+                "汽水音乐下载失败：文件超过 2 GiB 上限".to_string(),
+            ));
+        }
         progress(DownloadProgress {
             written: buf.len() as u64,
             total,
@@ -1280,9 +1554,10 @@ mod tests {
     #[test]
     fn builds_soda_search_url_like_pc_web_client() {
         let url = soda_search_url("晴天");
-        assert!(url.contains("api.qishui.com/luna/pc/search/track"));
+        assert!(url.contains("api.qishui.com/luna/search/track"));
         assert!(url.contains("aid=386088"));
-        assert!(url.contains("channel=pc_web"));
+        assert!(url.contains("channel=xiaomi_8478_64"));
+        assert!(url.contains("device_platform=android"));
     }
 
     #[test]
@@ -1296,6 +1571,7 @@ mod tests {
                 quality: Some("higher".to_string()),
                 size: 1,
                 bitrate: 128,
+                duration: 0.0,
             },
             SodaPlayInfo {
                 main_play_url: Some("https://example.com/highest.m4a".to_string()),
@@ -1305,6 +1581,7 @@ mod tests {
                 quality: Some("highest".to_string()),
                 size: 2,
                 bitrate: 320,
+                duration: 0.0,
             },
         ];
 
@@ -1317,6 +1594,25 @@ mod tests {
     fn parses_soda_lyric_to_lrc() {
         let raw = "[1234,1000]<0,500,0>你<500,500,0>好";
         assert_eq!(parse_soda_lyric(raw), "[00:01.23]你好");
+    }
+
+    #[test]
+    fn uses_soda_cover_template_from_h5_metadata() {
+        let cover: SodaCover = serde_json::from_str(
+            r#"{"urls":["https://p3-luna.douyinpic.com/img/"],"uri":"tos-cn/cover","template_prefix":"tplv-example"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            soda_cover_url(&cover),
+            "https://p3-luna.douyinpic.com/img/tos-cn/cover~tplv-example-resize:960:960.png"
+        );
+    }
+
+    #[test]
+    fn filters_only_materially_short_soda_streams() {
+        assert!(soda_play_info_is_shorter_than_track(180_000, 30.0));
+        assert!(!soda_play_info_is_shorter_than_track(2_000, 1.91));
+        assert!(!soda_play_info_is_shorter_than_track(180_000, 0.0));
     }
 
     #[tokio::test]
