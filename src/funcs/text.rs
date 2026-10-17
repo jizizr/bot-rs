@@ -85,6 +85,8 @@ macro_rules! add_template {
 }
 
 pub fn init() -> Option<()> {
+    SWITCH.update_template(pkg::wcloud::cron::WORDCLOUD_SWITCH, "定时词云");
+    SWITCH.update_template(pkg::wcloud::cron::USER_FREQ_SWITCH, "定时发言统计");
     add_template!(
         fix::fix => "补括号",
         six::six => "6",
