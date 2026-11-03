@@ -26,11 +26,9 @@ pub mod settings;
 pub type BotResult = Result<(), BotError>;
 #[derive(Debug, thiserror::Error)]
 pub enum BotError {
-    #[error("Apple Music API 请求失败：HTTP {status}（{path}）")]
-    AppleMusicApi {
-        status: reqwest::StatusCode,
-        path: String,
-    },
+    /// MHub's music gateway; the text is already written for users.
+    #[error("{0}")]
+    MusicGateway(#[from] music_gateway::GatewayError),
     #[error("API请求失败: {0}")]
     Request(#[from] reqwest::Error),
     #[error("API请求失败: {0}")]
@@ -65,8 +63,6 @@ pub enum BotError {
     UrlParseError(#[from] url::ParseError),
     #[error("{}", .0)]
     MySQLError(#[from] mysql_async::Error),
-    #[error("{}", .0)]
-    SeaOrmError(#[from] sea_orm::DbErr),
     #[error("{}", .0)]
     JoinError(#[from] tokio::task::JoinError),
     #[error("{}", .0)]

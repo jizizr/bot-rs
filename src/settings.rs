@@ -38,20 +38,10 @@ pub struct Api {
 
 #[derive(Debug, Deserialize)]
 pub struct Music {
+    /// MHub's music gateway, which owns every platform account, download and
+    /// the shared Telegram cache. The bot keeps no music credentials.
     #[serde(default)]
-    pub telegram_audio: TelegramAudio,
-    #[serde(default)]
-    pub applemusic: AppleMusic,
-    #[serde(default)]
-    pub vkeys: VkeysMusic,
-    #[serde(default)]
-    pub tencent: TencentMusic,
-    #[serde(default)]
-    pub netease: NeteaseMusic,
-    #[serde(default)]
-    pub soda: SodaMusic,
-    #[serde(default)]
-    pub inline_upload_chat_id: i64,
+    pub gateway: MusicGateway,
     // Download governor (funcs/command/music/queue.rs): concurrent download
     // slots, bounded waiting queue, and live-work admission caps.
     #[serde(default = "default_music_download_concurrency")]
@@ -113,13 +103,7 @@ pub struct Music {
 impl Default for Music {
     fn default() -> Self {
         Self {
-            telegram_audio: TelegramAudio::default(),
-            applemusic: AppleMusic::default(),
-            vkeys: VkeysMusic::default(),
-            tencent: TencentMusic::default(),
-            netease: NeteaseMusic::default(),
-            soda: SodaMusic::default(),
-            inline_upload_chat_id: 0,
+            gateway: MusicGateway::default(),
             download_concurrency: default_music_download_concurrency(),
             download_queue_wait_limit: default_music_download_queue_wait_limit(),
             download_queue_global_limit: default_music_download_queue_global_limit(),
@@ -150,123 +134,36 @@ impl Default for Music {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct VkeysMusic {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default = "default_vkeys_base_url")]
-    pub base_url: String,
-    #[serde(default)]
-    pub token: String,
-}
-
-impl Default for VkeysMusic {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            base_url: default_vkeys_base_url(),
-            token: String::new(),
-        }
-    }
-}
-
-#[derive(Debug, Default, Deserialize)]
-pub struct TencentMusic {
-    #[serde(default)]
-    pub cookie: String,
-}
-
-#[derive(Debug, Default, Deserialize)]
-pub struct NeteaseMusic {
-    #[serde(default)]
-    pub cookie: String,
-}
-
-#[derive(Debug, Default, Deserialize)]
-pub struct SodaMusic {
-    #[serde(default)]
-    pub cookie: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AppleMusic {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default)]
-    pub media_user_token: String,
-    #[serde(default = "default_apple_storefront")]
-    pub storefront: String,
-    #[serde(default = "default_apple_language")]
-    pub language: String,
-    #[serde(default = "default_apple_timeout")]
-    pub timeout: u64,
-    #[serde(default)]
-    pub wrapper_host: String,
-    #[serde(default)]
-    pub wrapper_hosts: Vec<String>,
-    #[serde(default)]
-    pub wrapper_lite_enabled: bool,
-    #[serde(default)]
-    pub wrapper_lite_url: String,
-    #[serde(default)]
-    pub wrapper_lite_urls: Vec<String>,
-    #[serde(default = "default_wrapper_lite_batch_size")]
-    pub wrapper_lite_batch_size: usize,
-    #[serde(default = "default_apple_wrapper_track_concurrency")]
-    pub wrapper_track_concurrency: usize,
-    #[serde(default = "default_apple_wrapper_fragment_concurrency")]
-    pub wrapper_fragment_concurrency: usize,
-    #[serde(default = "default_apple_wrapper_connection_concurrency")]
-    pub wrapper_connection_concurrency: usize,
-    #[serde(default)]
-    pub wv_client_id: String,
-    #[serde(default)]
-    pub wv_private_key: String,
-}
-
-impl Default for AppleMusic {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            media_user_token: String::new(),
-            storefront: default_apple_storefront(),
-            language: default_apple_language(),
-            timeout: default_apple_timeout(),
-            wrapper_host: String::new(),
-            wrapper_hosts: Vec::new(),
-            wrapper_lite_enabled: false,
-            wrapper_lite_url: String::new(),
-            wrapper_lite_urls: Vec::new(),
-            wrapper_lite_batch_size: default_wrapper_lite_batch_size(),
-            wrapper_track_concurrency: default_apple_wrapper_track_concurrency(),
-            wrapper_fragment_concurrency: default_apple_wrapper_fragment_concurrency(),
-            wrapper_connection_concurrency: default_apple_wrapper_connection_concurrency(),
-            wv_client_id: String::new(),
-            wv_private_key: String::new(),
-        }
-    }
-}
-
-fn default_wrapper_lite_batch_size() -> usize {
-    256
-}
-
-#[derive(Debug, Deserialize)]
 #[serde(default)]
-pub struct TelegramAudio {
-    pub ffmpeg: String,
-    pub ffprobe: String,
-    pub timeout_seconds: u64,
-    pub concurrency: usize,
+pub struct MusicGateway {
+    /// Origin of MHub's `[gateway] listen`, e.g. `http://127.0.0.1:8091`.
+    pub url: String,
+    /// The same secret as MHub's gateway; `token_file` takes precedence.
+    pub token: String,
+    pub token_file: String,
+    /// Upper bound for one song, download and Telegram upload included.
+    pub media_timeout_seconds: u64,
 }
 
-impl Default for TelegramAudio {
+impl Default for MusicGateway {
     fn default() -> Self {
         Self {
-            ffmpeg: "ffmpeg".into(),
-            ffprobe: "ffprobe".into(),
-            timeout_seconds: 180,
-            concurrency: 2,
+            url: "http://127.0.0.1:8091".into(),
+            token: String::new(),
+            token_file: String::new(),
+            media_timeout_seconds: 15 * 60,
         }
+    }
+}
+
+impl MusicGateway {
+    pub fn resolve_token(&self) -> Result<String, String> {
+        if self.token_file.trim().is_empty() {
+            return Ok(self.token.trim().to_string());
+        }
+        std::fs::read_to_string(self.token_file.trim())
+            .map(|token| token.trim().to_string())
+            .map_err(|err| format!("无法读取 music.gateway.token_file：{err}"))
     }
 }
 
@@ -301,38 +198,6 @@ pub struct Gemini {
 pub struct Vv {
     pub api_url: String,
     pub pic_url: String,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-fn default_vkeys_base_url() -> String {
-    "https://api.vkeys.cn".to_string()
-}
-
-fn default_apple_storefront() -> String {
-    "us".to_string()
-}
-
-fn default_apple_language() -> String {
-    "en-US".to_string()
-}
-
-fn default_apple_timeout() -> u64 {
-    30
-}
-
-fn default_apple_wrapper_track_concurrency() -> usize {
-    1
-}
-
-fn default_apple_wrapper_fragment_concurrency() -> usize {
-    2
-}
-
-fn default_apple_wrapper_connection_concurrency() -> usize {
-    2
 }
 
 fn default_music_download_concurrency() -> usize {
@@ -490,19 +355,40 @@ mod tests {
         )
         .unwrap();
 
-        assert!(settings.music.applemusic.enabled);
-        assert_eq!(settings.music.applemusic.storefront, "us");
-        assert_eq!(settings.music.applemusic.language, "en-US");
-        assert_eq!(settings.music.applemusic.timeout, 30);
-        assert_eq!(settings.music.applemusic.wrapper_track_concurrency, 1);
-        assert!(settings.music.applemusic.wrapper_hosts.is_empty());
-        assert_eq!(settings.music.applemusic.wrapper_fragment_concurrency, 2);
-        assert_eq!(settings.music.applemusic.wrapper_connection_concurrency, 2);
-        assert!(settings.music.vkeys.enabled);
-        assert_eq!(settings.music.vkeys.base_url, "https://api.vkeys.cn");
-        assert!(settings.music.tencent.cookie.is_empty());
-        assert!(settings.music.netease.cookie.is_empty());
+        assert_eq!(settings.music.gateway.url, "http://127.0.0.1:8091");
+        assert!(settings.music.gateway.token.is_empty());
+        assert_eq!(settings.music.gateway.media_timeout_seconds, 900);
         assert!(settings.bot.api_url.is_none());
+    }
+
+    #[test]
+    fn legacy_music_credentials_are_ignored_and_token_file_wins() {
+        // Configs written before the gateway still parse; their platform
+        // credentials now live only in MHub.
+        let music: Music = toml::from_str(
+            r#"
+            inline_upload_chat_id = 1
+            [netease]
+            cookie = "old"
+            [applemusic]
+            wrapper_host = "127.0.0.1:10020"
+            [gateway]
+            url = "http://127.0.0.1:9000"
+            token = "inline"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(music.gateway.url, "http://127.0.0.1:9000");
+        assert_eq!(music.gateway.resolve_token().unwrap(), "inline");
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("gateway.token");
+        std::fs::write(&path, "from-file\n").unwrap();
+        let gateway = MusicGateway {
+            token_file: path.display().to_string(),
+            ..music.gateway
+        };
+        assert_eq!(gateway.resolve_token().unwrap(), "from-file");
     }
 
     #[test]

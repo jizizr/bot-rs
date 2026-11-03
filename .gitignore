@@ -10,3 +10,6 @@ URL
 src/funcs/command/test.rs
 docker-compose.applemusic.yml
 docker-compose.db.yml
+
+# Local path override for the MHub gateway crate (machine-specific)
+/.cargo/config.toml

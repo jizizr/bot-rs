@@ -1,36 +1,22 @@
 use super::*;
-use crate::{
-    dao::{
-        mongo::{
-            music_favorites::{
-                FAVORITE_SCOPE_GROUP, FAVORITE_SCOPE_USER, MusicFavorite, is_favorited,
-                list_favorites, remove_favorite, upsert_favorite,
-            },
-            music_settings::{
-                UserMusicSettings, get_user_settings, get_user_settings_or_default,
-                save_user_settings,
-            },
-        },
-        mysql::music_cache::{
-            MusicCache, delete_cache as delete_music_cache, find_cache as find_stored_music_cache,
-            find_cache_by_file_id, upsert_cache as upsert_music_cache,
-        },
+use crate::dao::mongo::{
+    music_favorites::{
+        FAVORITE_SCOPE_GROUP, FAVORITE_SCOPE_USER, MusicFavorite, is_favorited, list_favorites,
+        remove_favorite, upsert_favorite,
     },
-    settings::SETTINGS,
+    music_settings::{
+        UserMusicSettings, get_user_settings, get_user_settings_or_default, save_user_settings,
+    },
 };
 use ferrous_opencc::{OpenCC, config::BuiltinConfig};
 use futures::future::join_all;
-use image::{DynamicImage, ImageFormat, imageops::FilterType};
 use lazy_static::lazy_static;
 use provider::{
-    DownloadProgress, MusicCollection, MusicMedia, MusicPlatform, MusicProvider, MusicQuery,
-    MusicSearchItem, MusicTrack,
+    DownloadProgress, JobState, MediaRequest, MusicCollection, MusicMedia, MusicPlatform,
+    MusicQuery, MusicSearchItem, MusicTrack,
 };
 use ratelimit::ResourceAction;
-use std::{
-    io::Cursor,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 use teloxide::types::{
     ChatId, ChosenInlineResult, InlineKeyboardButtonKind, InlineQuery, InputMedia, InputMediaAudio,
     InputMediaDocument, MaybeInaccessibleMessage,
@@ -38,17 +24,9 @@ use teloxide::types::{
 use tokio::{sync::mpsc, task::JoinHandle};
 use url::Url;
 
-mod applemusic;
-mod bilibili;
-mod kugou;
-mod netease;
 mod provider;
 mod queue;
 mod ratelimit;
-mod soda;
-mod telegram_audio;
-mod tencent;
-mod youtubemusic;
 
 const CALLBACK_PREFIX: &str = "music";
 const CALLBACK_LIMIT: usize = 64;
@@ -724,31 +702,15 @@ fn is_callback_token(value: &str) -> bool {
     !value.trim().is_empty() && value.bytes().all(|byte| !byte.is_ascii_whitespace())
 }
 
-fn provider_for(platform: MusicPlatform) -> &'static dyn MusicProvider {
-    match platform {
-        MusicPlatform::AppleMusic => &applemusic::APPLE_MUSIC_PROVIDER,
-        MusicPlatform::Bilibili => &bilibili::BILIBILI_PROVIDER,
-        MusicPlatform::Kugou => &kugou::KUGOU_PROVIDER,
-        MusicPlatform::Netease => &netease::NETEASE_PROVIDER,
-        MusicPlatform::Soda => &soda::SODA_PROVIDER,
-        MusicPlatform::Tencent => &tencent::TENCENT_PROVIDER,
-        MusicPlatform::YouTubeMusic => &youtubemusic::YOUTUBE_MUSIC_PROVIDER,
-    }
-}
-
 async fn search_tracks(query: &MusicQuery, limit: usize) -> Result<Vec<MusicSearchItem>, BotError> {
-    provider_for(query.platform)
-        .search(&query.keyword, limit)
-        .await
+    provider::search(query, limit).await
 }
 
 async fn search_collection(
     query: &MusicQuery,
     limit: usize,
 ) -> Result<Option<MusicCollection>, BotError> {
-    provider_for(query.platform)
-        .collection(&query.keyword, limit)
-        .await
+    provider::collection(query, limit).await
 }
 
 async fn resolve_track(
@@ -756,22 +718,27 @@ async fn resolve_track(
     selected_id: Option<&str>,
     settings: &UserMusicSettings,
 ) -> Result<MusicTrack, BotError> {
-    if query.platform == MusicPlatform::AppleMusic {
-        return applemusic::resolve_with_quality(&query.keyword, selected_id, &settings.quality)
-            .await;
+    provider::resolve(
+        query,
+        selected_id,
+        provider::parse_quality(&settings.quality),
+    )
+    .await
+}
+
+fn media_request(
+    query: &MusicQuery,
+    selected_id: Option<&str>,
+    quality: &str,
+    settings: &UserMusicSettings,
+) -> MediaRequest {
+    MediaRequest {
+        platform: query.platform,
+        keyword: query.keyword.clone(),
+        selected_id: selected_id.map(str::to_string),
+        quality: provider::parse_quality(quality),
+        include_cover: settings.send_cover,
     }
-    if query.platform == MusicPlatform::Soda {
-        return soda::resolve_with_quality(&query.keyword, selected_id, &settings.quality).await;
-    }
-    if query.platform == MusicPlatform::Tencent {
-        return tencent::resolve_with_quality(&query.keyword, selected_id, &settings.quality).await;
-    }
-    if query.platform == MusicPlatform::Netease {
-        return netease::resolve_with_quality(&query.keyword, selected_id, &settings.quality).await;
-    }
-    provider_for(query.platform)
-        .resolve(&query.keyword, selected_id)
-        .await
 }
 
 fn settings_platform(settings: &UserMusicSettings) -> MusicPlatform {
@@ -1403,57 +1370,30 @@ fn apply_music_setting(
     Ok((changed, response_text))
 }
 
-async fn send_track(
+/// Sends a song MHub has in the shared Telegram cache, by `file_id`.
+async fn send_media(
     bot: &Bot,
     msg: &Message,
     status_msg: Option<&Message>,
     reply_to: Option<MessageId>,
     query: &MusicQuery,
-    track: MusicTrack,
-    media: MusicMedia,
+    media: &MusicMedia,
 ) -> Result<Message, BotError> {
-    let caption = build_music_caption(&track, &media);
-    let MusicMedia {
-        audio,
-        cover,
-        decrypt_elapsed: _,
-    } = media;
-    let audio_file = InputFile::memory(audio).file_name(track.file_name());
-    send_track_input(
-        bot, msg, status_msg, reply_to, query, &track, caption, audio_file, cover, None,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn send_track_input(
-    bot: &Bot,
-    msg: &Message,
-    status_msg: Option<&Message>,
-    reply_to: Option<MessageId>,
-    query: &MusicQuery,
-    track: &MusicTrack,
-    caption: String,
-    audio_file: InputFile,
-    cover: Vec<u8>,
-    thumb_file_id: Option<&str>,
-) -> Result<Message, BotError> {
-    let thumbnail_task = if cover.is_empty() {
-        None
-    } else {
-        Some(tokio::task::spawn_blocking(move || {
-            prepare_audio_thumbnail(&cover)
-        }))
-    };
-
+    let track = &media.track;
     if let Some(status_msg) = status_msg {
-        bot.edit_message_text(status_msg.chat.id, status_msg.id, "获取成功，正在上传...")
-            .await?;
+        let text = if media.cached {
+            "命中缓存，正在发送..."
+        } else {
+            "获取成功，正在发送..."
+        };
+        let _ = bot
+            .edit_message_text(status_msg.chat.id, status_msg.id, text)
+            .await;
     }
 
     let mut request = bot
-        .send_audio(msg.chat.id, audio_file)
-        .caption(caption)
+        .send_audio(msg.chat.id, InputFile::file_id(media.file_id.clone()))
+        .caption(build_music_caption(media))
         .parse_mode(ParseMode::Html)
         .title(track.song.clone())
         .performer(track.singer.clone());
@@ -1466,24 +1406,23 @@ async fn send_track_input(
     if let Some(markup) = track_menu(track, Some(query), msg) {
         request = request.reply_markup(markup);
     }
-    if let Some(file_id) = thumb_file_id
+    if let Some(file_id) = media
+        .thumb_file_id
+        .as_deref()
         .map(str::trim)
         .filter(|file_id| !file_id.is_empty())
     {
         request = request.thumbnail(InputFile::file_id(file_id.to_string()));
-    } else if let Some(cover) = match thumbnail_task {
-        Some(task) => task.await?,
-        None => None,
-    } {
-        request = request.thumbnail(InputFile::memory(cover));
     }
-    let sent = request.send().await?;
-
-    Ok(sent)
+    Ok(request.send().await?)
 }
 
-fn build_music_caption(track: &MusicTrack, media: &MusicMedia) -> String {
-    build_music_caption_with_size(track, media.audio.len() as u64, media.decrypt_elapsed)
+fn build_music_caption(media: &MusicMedia) -> String {
+    build_music_caption_with_size(
+        &media.track,
+        media.byte_size,
+        media.decrypt_elapsed_ms.map(Duration::from_millis),
+    )
 }
 
 fn build_music_caption_with_size(
@@ -1613,215 +1552,199 @@ fn html_escape(text: &str) -> String {
         .replace('"', "&quot;")
 }
 
-async fn try_send_cached_track(
-    bot: &Bot,
-    msg: &Message,
-    status_msg: Option<&Message>,
-    reply_to: Option<MessageId>,
-    query: &MusicQuery,
-    track: &MusicTrack,
-    settings: &UserMusicSettings,
-) -> Result<bool, BotError> {
-    let quality = music_cache_quality(settings);
-    Ok(try_send_cached_track_by_id(
-        bot,
-        msg,
-        status_msg,
-        reply_to,
-        query,
-        track.platform,
-        &track.id,
-        Some(track),
-        &quality,
-    )
-    .await?
-    .is_some())
+/// Where a delivery reports its progress.
+#[derive(Clone)]
+enum StatusTarget {
+    /// A status message (text or a caption) in the requesting chat.
+    Message(Box<Message>),
+    Inline(String),
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn try_send_cached_track_by_id(
-    bot: &Bot,
-    msg: &Message,
-    status_msg: Option<&Message>,
-    reply_to: Option<MessageId>,
-    query: &MusicQuery,
-    platform: MusicPlatform,
-    id: &str,
-    fallback_track: Option<&MusicTrack>,
-    quality: &str,
-) -> Result<Option<MusicTrack>, BotError> {
-    // 缓存只是优化，缓存层故障时按未命中处理，走正常下载
-    let cache = match find_music_cache(platform.id(), id, quality).await {
-        Ok(cache) => cache,
-        Err(err) => {
-            log::warn!("music cache lookup failed: {err}");
-            return Ok(None);
+impl StatusTarget {
+    async fn show(&self, bot: &Bot, text: String, markup: Option<InlineKeyboardMarkup>) -> bool {
+        match self {
+            StatusTarget::Message(msg) => edit_callback_status_with_markup(bot, msg, text, markup)
+                .await
+                .is_ok(),
+            StatusTarget::Inline(id) => {
+                let mut request = bot.edit_message_text_inline(id, text);
+                if let Some(markup) = markup {
+                    request = request.reply_markup(markup);
+                }
+                request.await.is_ok()
+            }
         }
-    };
-    let Some(cache) = cache else {
-        return Ok(None);
-    };
-    if cache.file_id.trim().is_empty() || is_suspicious_music_cache(&cache) {
-        delete_music_cache_best_effort(platform.id(), id, quality).await;
-        return Ok(None);
     }
-    let Some(track) = cache_to_track(&cache).or_else(|| fallback_track.cloned()) else {
-        return Ok(None);
-    };
+}
 
-    if let Some(status_msg) = status_msg {
-        let _ = bot
-            .edit_message_text(status_msg.chat.id, status_msg.id, "命中缓存，正在发送...")
+/// Edits the status in order, skipping repeats; finishes once every sender
+/// is dropped.
+fn status_reporter(
+    bot: Bot,
+    target: StatusTarget,
+) -> (mpsc::UnboundedSender<String>, JoinHandle<()>) {
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let task = tokio::spawn(async move {
+        let mut last_edited = String::new();
+        while let Some(text) = rx.recv().await {
+            if text != last_edited && target.show(&bot, text.clone(), None).await {
+                last_edited = text;
+            }
+        }
+    });
+    (tx, task)
+}
+
+/// Where a delivered song goes.
+enum Destination<'a> {
+    Chat {
+        msg: &'a Message,
+        status_msg: Option<&'a Message>,
+        reply_to: Option<MessageId>,
+        query: &'a MusicQuery,
+    },
+    Inline(&'a str),
+}
+
+impl Destination<'_> {
+    async fn send(&self, bot: &Bot, media: &MusicMedia) -> BotResult {
+        match self {
+            Destination::Chat {
+                msg,
+                status_msg,
+                reply_to,
+                query,
+            } => send_media(bot, msg, *status_msg, *reply_to, query, media)
+                .await
+                .map(|_| ()),
+            Destination::Inline(id) => edit_inline_audio(bot, id, media).await,
+        }
+    }
+}
+
+/// Sends a song from the shared Telegram cache, asking MHub once for a fresh
+/// file when Telegram rejects the cached one or it looks truncated.
+async fn deliver(
+    bot: &Bot,
+    request: MediaRequest,
+    user_id: i64,
+    chat_id: Option<i64>,
+    status: &StatusTarget,
+    destination: Destination<'_>,
+) -> Result<MusicMedia, BotError> {
+    let mut retried = false;
+    loop {
+        let media = obtain_media(bot, request.clone(), user_id, chat_id, status).await?;
+        if !retried && is_suspicious_media(&media.track, media.byte_size) {
+            provider::invalidate(&media).await;
+            retried = true;
+            continue;
+        }
+        match destination.send(bot, &media).await {
+            Ok(()) => return Ok(media),
+            Err(err) if !retried && is_invalid_cached_file_error(&err) => {
+                provider::invalidate(&media).await;
+                retried = true;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+/// Gets the song into the shared Telegram cache through MHub. Cache hits stay
+/// free; a miss takes a fair-admission place, is metered against the download
+/// quota and holds a download slot until MHub has the audio (its upload to
+/// Telegram no longer counts against concurrency).
+async fn obtain_media(
+    bot: &Bot,
+    request: MediaRequest,
+    user_id: i64,
+    chat_id: Option<i64>,
+    status: &StatusTarget,
+) -> Result<MusicMedia, BotError> {
+    let gateway = provider::gateway()?;
+    let lookup = gateway.lookup_media(&request).await?;
+    if let Some(media) = lookup.media {
+        return Ok(media);
+    }
+    let _admission = queue::GOVERNOR.admit(user_id, chat_id)?;
+    let download_token =
+        ratelimit::ensure_admitted(ResourceAction::Download, user_id, chat_id, request.platform)?;
+    let slot = {
+        let queued_bot = bot.clone();
+        let queued_status = status.clone();
+        // 排队通知在 acquire_slot 内先 await 完成，不与后续编辑竞态
+        let acquired = queue::GOVERNOR
+            .acquire_slot(move || async move {
+                queued_status
+                    .show(
+                        &queued_bot,
+                        "当前下载繁忙，已加入队列，请稍候...".to_string(),
+                        Some(queue_status_menu()),
+                    )
+                    .await;
+            })
             .await;
-    }
-
-    match send_cached_track(bot, msg, status_msg, reply_to, query, &track, &cache).await {
-        Ok(_) => Ok(Some(track)),
-        Err(err) if is_invalid_cached_file_error(&err) => {
-            delete_music_cache_best_effort(platform.id(), id, quality).await;
-            Ok(None)
+        match acquired {
+            Ok(slot) => slot,
+            Err(e) => {
+                // 未实际下载，按凭证精确退还刚记录的下载额度
+                ratelimit::LIMITER.refund(download_token);
+                return Err(e);
+            }
         }
-        Err(err) => Err(err),
-    }
-}
-
-async fn send_cached_track(
-    bot: &Bot,
-    msg: &Message,
-    status_msg: Option<&Message>,
-    reply_to: Option<MessageId>,
-    query: &MusicQuery,
-    track: &MusicTrack,
-    cache: &MusicCache,
-) -> Result<Message, BotError> {
-    let caption = build_music_caption_with_size(track, cache.music_size, None);
-    send_track_input(
-        bot,
-        msg,
-        status_msg,
-        reply_to,
-        query,
-        track,
-        caption,
-        InputFile::file_id(cache.file_id.clone()),
-        Vec::new(),
-        Some(&cache.thumb_file_id),
-    )
-    .await
-}
-
-async fn find_music_cache(
-    platform: &str,
-    track_id: &str,
-    quality: &str,
-) -> Result<Option<MusicCache>, BotError> {
-    let quality = MusicPlatform::from_alias(platform)
-        .map(|platform| telegram_audio::cache_quality(platform, quality))
-        .unwrap_or_else(|| quality.to_string());
-    find_stored_music_cache(platform, track_id, &quality).await
-}
-
-async fn delete_music_cache_best_effort(platform: &str, track_id: &str, quality: &str) {
-    let quality = MusicPlatform::from_alias(platform)
-        .map(|platform| telegram_audio::cache_quality(platform, quality))
-        .unwrap_or_else(|| quality.to_string());
-    if let Err(err) = delete_music_cache(platform, track_id, &quality).await {
-        log::warn!("failed to delete music cache: {err}");
-    }
-}
-
-async fn save_track_cache(
-    track: &MusicTrack,
-    audio_len: u64,
-    sent: &Message,
-    msg: &Message,
-    settings: &UserMusicSettings,
-) -> BotResult {
-    save_track_cache_for_context(
-        track,
-        audio_len,
-        sent,
-        user_id_from_message(msg),
-        msg.chat.id.0,
-        &music_cache_quality(settings),
-    )
-    .await
-}
-
-async fn save_track_cache_for_context(
-    track: &MusicTrack,
-    audio_len: u64,
-    sent: &Message,
-    from_user_id: i64,
-    from_chat_id: i64,
-    quality: &str,
-) -> BotResult {
-    let Some((file_id, thumb_file_id)) = sent_audio_file_ids(sent) else {
-        return Ok(());
     };
-    if file_id.trim().is_empty() {
-        return Ok(());
-    }
-    let cache = MusicCache {
-        platform: track.platform.id().to_string(),
-        track_id: track.id.clone(),
-        quality: telegram_audio::cache_quality(track.platform, quality),
-        song: track.song.clone(),
-        singer: track.singer.clone(),
-        album: track.album.clone(),
-        link: track.link.clone(),
-        file_ext: track.file_extension(),
-        music_size: audio_len,
-        bitrate: track
-            .bitrate
-            .or_else(|| estimate_bitrate(audio_len, track.duration))
-            .unwrap_or_default(),
-        duration: track.duration,
-        file_id,
-        thumb_file_id: thumb_file_id.unwrap_or_default(),
-        from_user_id,
-        from_chat_id,
+
+    let known_title = lookup.track.as_ref().map(|track| track.song.clone());
+    let request = MediaRequest {
+        selected_id: lookup.track.map(|track| track.id).or(request.selected_id),
+        ..request
     };
-    if is_suspicious_music_cache(&cache) {
-        return Ok(());
-    }
-    upsert_music_cache(&cache).await
+    let (tx, reporter) = status_reporter(bot.clone(), status.clone());
+    let mut progress = None;
+    let mut slot = Some(slot);
+    let result = gateway
+        .media(&request, |job| match &job.state {
+            JobState::Downloading { written, total } => {
+                let title = job
+                    .track
+                    .as_ref()
+                    .map(|track| track.song.clone())
+                    .or_else(|| known_title.clone());
+                if let Some(title) = title {
+                    let report =
+                        progress.get_or_insert_with(|| make_progress_throttle(title, tx.clone()));
+                    report(DownloadProgress {
+                        written: written.unwrap_or_default(),
+                        total: *total,
+                    });
+                }
+            }
+            JobState::Uploading => {
+                slot.take();
+                let _ = tx.send("获取成功，正在上传...".to_string());
+            }
+            _ => {}
+        })
+        .await;
+    drop(progress);
+    drop(tx);
+    reporter.abort();
+    let _ = reporter.await;
+    Ok(result?)
 }
 
-fn sent_audio_file_ids(msg: &Message) -> Option<(String, Option<String>)> {
-    let audio = match &msg.kind {
-        MessageKind::Common(common) => match &common.media_kind {
-            MediaKind::Audio(audio) => &audio.audio,
-            _ => return None,
-        },
-        _ => return None,
+/// Old Apple Music entries sometimes hold a preview with the full song's
+/// duration; such a file is far below any real bitrate.
+fn is_suspicious_media(track: &MusicTrack, byte_size: u64) -> bool {
+    if track.platform != MusicPlatform::AppleMusic {
+        return false;
+    }
+    let Some(duration) = track.duration.filter(|duration| *duration > 60) else {
+        return false;
     };
-    Some((
-        audio.file.id.clone(),
-        audio
-            .thumbnail
-            .as_ref()
-            .map(|thumbnail| thumbnail.file.id.clone()),
-    ))
-}
-
-fn cache_to_track(cache: &MusicCache) -> Option<MusicTrack> {
-    let platform = MusicPlatform::from_alias(&cache.platform)?;
-    Some(MusicTrack {
-        id: cache.track_id.clone(),
-        platform,
-        song: cache.song.clone(),
-        singer: cache.singer.clone(),
-        album: cache.album.clone(),
-        cover: String::new(),
-        link: cache.link.clone(),
-        url: String::new(),
-        headers: Default::default(),
-        max_chunk_size: None,
-        duration: cache.duration,
-        bitrate: (cache.bitrate > 0).then_some(cache.bitrate),
-        format: (!cache.file_ext.trim().is_empty()).then(|| cache.file_ext.clone()),
-    })
+    let estimated_bitrate = estimate_bitrate(byte_size, Some(duration)).unwrap_or_default();
+    estimated_bitrate > 0 && estimated_bitrate < 64_000
 }
 
 fn music_cache_quality(settings: &UserMusicSettings) -> String {
@@ -1831,17 +1754,6 @@ fn music_cache_quality(settings: &UserMusicSettings) -> String {
     } else {
         quality.to_ascii_lowercase()
     }
-}
-
-fn is_suspicious_music_cache(cache: &MusicCache) -> bool {
-    if cache.platform != MusicPlatform::AppleMusic.id() {
-        return false;
-    }
-    let Some(duration) = cache.duration.filter(|duration| *duration > 60) else {
-        return false;
-    };
-    let estimated_bitrate = estimate_bitrate(cache.music_size, Some(duration)).unwrap_or_default();
-    estimated_bitrate > 0 && estimated_bitrate < 64_000
 }
 
 fn is_invalid_cached_file_error(err: &BotError) -> bool {
@@ -1859,81 +1771,21 @@ async fn get_music(
     status_msg: &Message,
     settings: &UserMusicSettings,
 ) -> Result<(), BotError> {
-    let user_id = user_id_from_message(msg);
-    let mut track = resolve_track(&query, None, settings).await?;
-    if try_send_cached_track(
+    let request = media_request(&query, None, &settings.quality, settings);
+    deliver(
         bot,
-        msg,
-        Some(status_msg),
-        Some(msg.id),
-        &query,
-        &track,
-        settings,
-    )
-    .await?
-    {
-        return Ok(());
-    }
-    // 公平准入放在解析与缓存尝试之后：纯缓存流量不应占用下载名额，
-    // resolve_track 的网络耗时也不应计入进行中的下载任务
-    let _admission = queue::GOVERNOR.admit(user_id, Some(msg.chat.id.0))?;
-    // 缓存未命中才消耗下载频次额度（缓存命中保持免费）
-    let download_token = ratelimit::ensure_admitted(
-        ResourceAction::Download,
-        user_id,
+        request,
+        user_id_from_message(msg),
         Some(msg.chat.id.0),
-        track.platform,
-    )?;
-    let slot = {
-        let queued_bot = bot.clone();
-        let status_chat_id = status_msg.chat.id;
-        let status_msg_id = status_msg.id;
-        // 排队通知在 acquire_slot 内先 await 完成，不与后续编辑竞态
-        let acquired = queue::GOVERNOR
-            .acquire_slot(move || async move {
-                let _ = queued_bot
-                    .edit_message_text(
-                        status_chat_id,
-                        status_msg_id,
-                        "当前下载繁忙，已加入队列，请稍候...",
-                    )
-                    .reply_markup(queue_status_menu())
-                    .await;
-            })
-            .await;
-        match acquired {
-            Ok(slot) => slot,
-            Err(e) => {
-                // 未实际下载，按凭证精确退还刚记录的下载额度
-                ratelimit::LIMITER.refund(download_token);
-                return Err(e);
-            }
-        }
-    };
-    let (mut progress, progress_task) =
-        download_progress_updater(bot.clone(), status_msg, track.song.clone());
-    let media_result =
-        download_telegram_media_with_progress(&mut track, settings.send_cover, &mut progress).await;
-    drop(progress);
-    progress_task.abort();
-    let _ = progress_task.await;
-    let media = media_result?;
-    // 下载完成即释放下载槽位，上传阶段不占用并发额度（准入名额继续持有）
-    drop(slot);
-    let audio_len = media.audio.len() as u64;
-    let sent = send_track(
-        bot,
-        msg,
-        Some(status_msg),
-        Some(msg.id),
-        &query,
-        track.clone(),
-        media,
+        &StatusTarget::Message(Box::new(status_msg.clone())),
+        Destination::Chat {
+            msg,
+            status_msg: Some(status_msg),
+            reply_to: Some(msg.id),
+            query: &query,
+        },
     )
     .await?;
-    if let Err(err) = save_track_cache(&track, audio_len, &sent, msg, settings).await {
-        eprintln!("Failed to save music cache: {err}");
-    }
     Ok(())
 }
 
@@ -2456,238 +2308,41 @@ async fn run_inline_send_flow_inner(
     id: &str,
     quality: &str,
 ) -> BotResult {
-    // 公平准入：inline 消息没有会话 chat，只按用户与全局维度限制
-    let _admission = queue::GOVERNOR.admit(from.id.0 as i64, None)?;
-    let mut settings = get_user_settings_or_default(from.id.0 as i64).await;
-    settings.quality = quality.to_string();
+    let settings = get_user_settings_or_default(from.id.0 as i64).await;
     let query = MusicQuery {
         platform,
         keyword: id.to_string(),
     };
-
     edit_inline_status(
         bot,
         inline_message_id,
         format!("正在从{}获取音乐...", platform.label()),
     )
     .await;
-    if try_edit_inline_cached_track_by_id(bot, inline_message_id, platform, id, quality).await? {
-        return Ok(());
-    }
-    let mut track = resolve_track(&query, Some(id), &settings).await?;
-    // tencent 可能把数字 id 规范化成 mid，缓存行可能以规范化后的 id 存储，因此解析后再查一次
-    if try_edit_inline_cached_track(bot, inline_message_id, &track, quality).await? {
-        return Ok(());
-    }
-    // 两次缓存尝试都未命中才消耗下载频次额度（缓存命中保持免费）
-    let download_token =
-        ratelimit::ensure_admitted(ResourceAction::Download, from.id.0 as i64, None, platform)?;
-    let slot = {
-        let queued_bot = bot.clone();
-        let queued_inline_id = inline_message_id.to_string();
-        // 排队通知在 acquire_slot 内先 await 完成，不与后续编辑竞态
-        let acquired = queue::GOVERNOR
-            .acquire_slot(move || async move {
-                let _ = queued_bot
-                    .edit_message_text_inline(
-                        queued_inline_id,
-                        "当前下载繁忙，已加入队列，请稍候...",
-                    )
-                    .reply_markup(queue_status_menu())
-                    .await;
-            })
-            .await;
-        match acquired {
-            Ok(slot) => slot,
-            Err(e) => {
-                // 未实际下载，按凭证精确退还刚记录的下载额度
-                ratelimit::LIMITER.refund(download_token);
-                return Err(e);
-            }
-        }
-    };
-
-    let (mut progress, progress_task) = inline_download_progress_updater(
-        bot.clone(),
-        inline_message_id.to_string(),
-        track.song.clone(),
-    );
-    let media_result =
-        download_telegram_media_with_progress(&mut track, settings.send_cover, &mut progress).await;
-    drop(progress);
-    progress_task.abort();
-    let _ = progress_task.await;
-    let media = media_result?;
-    // 下载完成即释放下载槽位，上传阶段不占用并发额度（准入名额继续持有）
-    drop(slot);
-
-    edit_inline_status(bot, inline_message_id, "获取成功，正在上传...").await;
-    let upload_chat_id = inline_upload_chat_id();
-    let audio_len = media.audio.len() as u64;
-    let decrypt_elapsed = media.decrypt_elapsed;
-    let sent = send_inline_upload_audio(bot, upload_chat_id, &track, media).await?;
-    let Some((file_id, _)) = sent_audio_file_ids(&sent) else {
-        return Err(BotError::Custom(
-            "上传成功但没有拿到 Telegram file_id".to_string(),
-        ));
-    };
-    let _ = bot.delete_message(sent.chat.id, sent.id).await;
-
-    edit_inline_audio(
+    // inline 消息没有会话 chat，只按用户与全局维度限制
+    deliver(
         bot,
-        inline_message_id,
-        &track,
-        &file_id,
-        audio_len,
-        decrypt_elapsed,
+        media_request(&query, Some(id), quality, &settings),
+        from.id.0 as i64,
+        None,
+        &StatusTarget::Inline(inline_message_id.to_string()),
+        Destination::Inline(inline_message_id),
     )
     .await?;
-    if let Err(err) = save_track_cache_for_context(
-        &track,
-        audio_len,
-        &sent,
-        from.id.0 as i64,
-        upload_chat_id.0,
-        quality,
-    )
-    .await
-    {
-        eprintln!("Failed to save inline music cache: {err}");
-    }
     Ok(())
 }
 
-async fn try_edit_inline_cached_track(
-    bot: &Bot,
-    inline_message_id: &str,
-    track: &MusicTrack,
-    quality: &str,
-) -> Result<bool, BotError> {
-    edit_inline_cached_track(
-        bot,
-        inline_message_id,
-        track.platform,
-        &track.id,
-        Some(track),
-        quality,
-    )
-    .await
-}
-
-async fn try_edit_inline_cached_track_by_id(
-    bot: &Bot,
-    inline_message_id: &str,
-    platform: MusicPlatform,
-    id: &str,
-    quality: &str,
-) -> Result<bool, BotError> {
-    edit_inline_cached_track(bot, inline_message_id, platform, id, None, quality).await
-}
-
-async fn edit_inline_cached_track(
-    bot: &Bot,
-    inline_message_id: &str,
-    platform: MusicPlatform,
-    id: &str,
-    fallback_track: Option<&MusicTrack>,
-    quality: &str,
-) -> Result<bool, BotError> {
-    // 缓存只是优化，缓存层故障时按未命中处理，走正常下载
-    let cache = match find_music_cache(platform.id(), id, quality).await {
-        Ok(cache) => cache,
-        Err(err) => {
-            log::warn!("music cache lookup failed: {err}");
-            return Ok(false);
-        }
-    };
-    let Some(cache) = cache else {
-        return Ok(false);
-    };
-    if cache.file_id.trim().is_empty() || is_suspicious_music_cache(&cache) {
-        delete_music_cache_best_effort(platform.id(), id, quality).await;
-        return Ok(false);
-    }
-    let Some(track) = cache_to_track(&cache).or_else(|| fallback_track.cloned()) else {
-        return Ok(false);
-    };
-    match edit_inline_audio(
-        bot,
-        inline_message_id,
-        &track,
-        &cache.file_id,
-        cache.music_size,
-        None,
-    )
-    .await
-    {
-        Ok(()) => Ok(true),
-        Err(err) if is_invalid_cached_file_error(&err) => {
-            delete_music_cache_best_effort(platform.id(), id, quality).await;
-            Ok(false)
-        }
-        Err(err) => Err(err),
-    }
-}
-
-async fn send_inline_upload_audio(
-    bot: &Bot,
-    chat_id: ChatId,
-    track: &MusicTrack,
-    media: MusicMedia,
-) -> Result<Message, BotError> {
-    let caption = build_music_caption(track, &media);
-    let MusicMedia {
-        audio,
-        cover,
-        decrypt_elapsed: _,
-    } = media;
-    let thumbnail_task = if cover.is_empty() {
-        None
-    } else {
-        Some(tokio::task::spawn_blocking(move || {
-            prepare_audio_thumbnail(&cover)
-        }))
-    };
-    let audio_file = InputFile::memory(audio).file_name(track.file_name());
-    let mut request = bot
-        .send_audio(chat_id, audio_file)
-        .caption(caption)
+async fn edit_inline_audio(bot: &Bot, inline_message_id: &str, media: &MusicMedia) -> BotResult {
+    let track = &media.track;
+    let mut audio = InputMediaAudio::new(InputFile::file_id(media.file_id.clone()))
+        .caption(build_music_caption(media))
         .parse_mode(ParseMode::Html)
         .title(track.song.clone())
         .performer(track.singer.clone());
     if let Some(duration) = track.duration.filter(|duration| *duration > 0) {
-        request = request.duration(duration);
+        audio = audio.duration(duration.min(u16::MAX as u32) as u16);
     }
-    if let Some(cover) = match thumbnail_task {
-        Some(task) => task.await?,
-        None => None,
-    } {
-        request = request.thumbnail(InputFile::memory(cover));
-    }
-    Ok(request.send().await?)
-}
-
-async fn edit_inline_audio(
-    bot: &Bot,
-    inline_message_id: &str,
-    track: &MusicTrack,
-    file_id: &str,
-    music_size: u64,
-    decrypt_elapsed: Option<Duration>,
-) -> BotResult {
-    let mut media = InputMediaAudio::new(InputFile::file_id(file_id.to_string()))
-        .caption(build_music_caption_with_size(
-            track,
-            music_size,
-            decrypt_elapsed,
-        ))
-        .parse_mode(ParseMode::Html)
-        .title(track.song.clone())
-        .performer(track.singer.clone());
-    if let Some(duration) = track.duration.filter(|duration| *duration > 0) {
-        media = media.duration(duration.min(u16::MAX as u32) as u16);
-    }
-    let mut request = bot.edit_message_media_inline(inline_message_id, InputMedia::Audio(media));
+    let mut request = bot.edit_message_media_inline(inline_message_id, InputMedia::Audio(audio));
     if let Some(markup) = inline_track_menu(track) {
         request = request.reply_markup(markup);
     }
@@ -2695,47 +2350,10 @@ async fn edit_inline_audio(
     Ok(())
 }
 
-fn inline_upload_chat_id() -> ChatId {
-    let configured = SETTINGS.music.inline_upload_chat_id;
-    if configured != 0 {
-        ChatId(configured)
-    } else {
-        ChatId(SETTINGS.bot.owner)
-    }
-}
-
 async fn edit_inline_status(bot: &Bot, inline_message_id: &str, text: impl Into<String>) {
     let _ = bot
         .edit_message_text_inline(inline_message_id, text.into())
         .await;
-}
-
-fn inline_download_progress_updater(
-    bot: Bot,
-    inline_message_id: String,
-    title: String,
-) -> (
-    impl FnMut(DownloadProgress) + Send + 'static,
-    JoinHandle<()>,
-) {
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    let task = tokio::spawn(async move {
-        let mut last_edited = String::new();
-        while let Some(text) = rx.recv().await {
-            if text == last_edited {
-                continue;
-            }
-            if bot
-                .edit_message_text_inline(&inline_message_id, text.clone())
-                .await
-                .is_ok()
-            {
-                last_edited = text;
-            }
-        }
-    });
-
-    (make_progress_throttle(title, tx), task)
 }
 
 fn inline_result_id(prefix: &str, platform: MusicPlatform, id: &str, quality: &str) -> String {
@@ -2918,7 +2536,7 @@ async fn fetch_and_cache_lyrics(
     platform: MusicPlatform,
     id: &str,
 ) -> Result<Option<provider::MusicLyrics>, BotError> {
-    let lyrics = provider_for(platform).lyrics(id).await?;
+    let lyrics = provider::lyrics(platform, id).await?;
     ratelimit::store_lyrics(platform, id, lyrics.clone());
     Ok(lyrics)
 }
@@ -3056,21 +2674,22 @@ async fn handle_inline_lyrics_callback(
             .await?;
         return Ok(());
     };
-    let cached = find_music_cache(platform.id(), id, &music_cache_quality(settings))
-        .await
-        .ok()
-        .flatten();
-    let track = cached.as_ref().and_then(cache_to_track);
-    let caption = if let Some(track) = track.as_ref() {
-        build_inline_track_caption_with_lyrics(
-            track,
-            cached
-                .as_ref()
-                .map(|cache| cache.music_size)
-                .unwrap_or_default(),
-            &lyrics,
-            script,
-        )
+    let query = MusicQuery {
+        platform,
+        keyword: id.to_string(),
+    };
+    let request = media_request(&query, Some(id), &settings.quality, settings);
+    let cached = match provider::gateway() {
+        Ok(gateway) => gateway
+            .lookup_media(&request)
+            .await
+            .ok()
+            .and_then(|lookup| lookup.media),
+        Err(_) => None,
+    };
+    let track = cached.as_ref().map(|media| media.track.clone());
+    let caption = if let Some(media) = cached.as_ref() {
+        build_inline_track_caption_with_lyrics(&media.track, media.byte_size, &lyrics, script)
     } else {
         inline_lyric_text("歌词", platform.label(), &lyrics, script)
     };
@@ -3485,8 +3104,6 @@ async fn get_callback_music(
     search_keyword: Option<&str>,
     settings: &UserMusicSettings,
 ) -> Result<(), BotError> {
-    // 公平准入：先占名额再走流程；缓存命中会在毫秒内释放
-    let _admission = queue::GOVERNOR.admit(user_id, Some(msg.chat.id.0))?;
     edit_callback_status(&bot, &msg, format!("正在从{}获取音乐...", platform.label())).await?;
     let query = MusicQuery {
         platform,
@@ -3501,161 +3118,32 @@ async fn get_callback_music(
         });
     let query_for_menu = search_query.as_ref().unwrap_or(&query);
     let status_msg = message_has_text(&msg).then_some(&msg);
-    // 平台和曲目 id 已知时先查缓存，命中就不必再走一遍 provider 解析
-    if let Some(cached_track) = try_send_cached_track_by_id(
+    let media = deliver(
         &bot,
-        &msg,
-        status_msg,
-        callback_reply_target(&msg),
-        query_for_menu,
-        platform,
-        id,
-        None,
-        &music_cache_quality(settings),
-    )
-    .await?
-    {
-        delete_callback_status(
-            &bot,
-            &msg,
-            format!(
-                "已从缓存发送：{} - {}",
-                cached_track.song, cached_track.singer
-            ),
-        )
-        .await?;
-        return Ok(());
-    }
-    let mut track = resolve_track(&query, Some(id), settings).await?;
-    // tencent 可能把数字 id 规范化成 mid，缓存行可能以规范化后的 id 存储，因此解析后再查一次
-    if try_send_cached_track(
-        &bot,
-        &msg,
-        status_msg,
-        callback_reply_target(&msg),
-        query_for_menu,
-        &track,
-        settings,
-    )
-    .await?
-    {
-        delete_callback_status(
-            &bot,
-            &msg,
-            format!("已从缓存发送：{} - {}", track.song, track.singer),
-        )
-        .await?;
-        return Ok(());
-    }
-    // 两次缓存尝试都未命中才消耗下载频次额度（缓存命中保持免费）
-    let download_token = ratelimit::ensure_admitted(
-        ResourceAction::Download,
+        media_request(&query, Some(id), &settings.quality, settings),
         user_id,
         Some(msg.chat.id.0),
-        platform,
-    )?;
-    let slot = {
-        let queued_bot = bot.clone();
-        let queued_msg = msg.clone();
-        // 排队通知在 acquire_slot 内先 await 完成，不与后续编辑竞态
-        let acquired = queue::GOVERNOR
-            .acquire_slot(move || async move {
-                let _ = edit_callback_status_with_markup(
-                    &queued_bot,
-                    &queued_msg,
-                    "当前下载繁忙，已加入队列，请稍候...",
-                    Some(queue_status_menu()),
-                )
-                .await;
-            })
-            .await;
-        match acquired {
-            Ok(slot) => slot,
-            Err(e) => {
-                // 未实际下载，按凭证精确退还刚记录的下载额度
-                ratelimit::LIMITER.refund(download_token);
-                return Err(e);
-            }
-        }
-    };
-    let (mut progress, progress_task) =
-        download_progress_updater(bot.clone(), &msg, track.song.clone());
-    let media_result =
-        download_telegram_media_with_progress(&mut track, settings.send_cover, &mut progress).await;
-    drop(progress);
-    progress_task.abort();
-    let _ = progress_task.await;
-    let media = media_result?;
-    // 下载完成即释放下载槽位，上传阶段不占用并发额度（准入名额继续持有）
-    drop(slot);
-    let done = format!("已发送：{} - {}", track.song, track.singer);
-    let audio_len = media.audio.len() as u64;
-    let sent = send_track(
-        &bot,
-        &msg,
-        status_msg,
-        callback_reply_target(&msg),
-        query_for_menu,
-        track.clone(),
-        media,
+        &StatusTarget::Message(Box::new(msg.clone())),
+        Destination::Chat {
+            msg: &msg,
+            status_msg,
+            reply_to: callback_reply_target(&msg),
+            query: query_for_menu,
+        },
     )
     .await?;
-    if let Err(err) = save_track_cache(&track, audio_len, &sent, &msg, settings).await {
-        eprintln!("Failed to save music cache: {err}");
-    }
-    delete_callback_status(&bot, &msg, done).await?;
+    let verb = if media.cached {
+        "已从缓存发送"
+    } else {
+        "已发送"
+    };
+    delete_callback_status(
+        &bot,
+        &msg,
+        format!("{verb}：{} - {}", media.track.song, media.track.singer),
+    )
+    .await?;
     Ok(())
-}
-
-async fn download_telegram_media_with_progress<F>(
-    track: &mut MusicTrack,
-    include_cover: bool,
-    progress: &mut F,
-) -> Result<MusicMedia, BotError>
-where
-    F: FnMut(DownloadProgress) + Send,
-{
-    let mut media =
-        provider::download_track_media_with_cover_progress(track, include_cover, progress).await?;
-    telegram_audio::prepare(track, &mut media).await?;
-    Ok(media)
-}
-
-fn download_progress_updater(
-    bot: Bot,
-    msg: &Message,
-    title: String,
-) -> (
-    impl FnMut(DownloadProgress) + Send + 'static,
-    JoinHandle<()>,
-) {
-    let chat_id = msg.chat.id;
-    let message_id = msg.id;
-    let edit_text = message_has_text(msg);
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    let task = tokio::spawn(async move {
-        let mut last_edited = String::new();
-        while let Some(text) = rx.recv().await {
-            if text == last_edited {
-                continue;
-            }
-            let result = if edit_text {
-                bot.edit_message_text(chat_id, message_id, text.clone())
-                    .await
-                    .map(|_| ())
-            } else {
-                bot.edit_message_caption(chat_id, message_id)
-                    .caption(text.clone())
-                    .await
-                    .map(|_| ())
-            };
-            if result.is_ok() {
-                last_edited = text;
-            }
-        }
-    });
-
-    (make_progress_throttle(title, tx), task)
 }
 
 fn make_progress_throttle(
@@ -3714,26 +3202,6 @@ fn format_download_progress(title: &str, progress: DownloadProgress) -> String {
 
 fn bytes_to_mb(bytes: u64) -> f64 {
     bytes as f64 / 1024.0 / 1024.0
-}
-
-fn prepare_audio_thumbnail(bytes: &[u8]) -> Option<Vec<u8>> {
-    if bytes.is_empty() {
-        return None;
-    }
-    let image = image::load_from_memory(bytes).ok()?;
-    let image = DynamicImage::ImageRgb8(image.resize(320, 320, FilterType::Lanczos3).to_rgb8());
-    for quality in [85, 75, 65, 55, 45, 35] {
-        let mut out = Vec::new();
-        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality);
-        if encoder.encode_image(&image).is_ok() && out.len() <= 200 * 1024 {
-            return Some(out);
-        }
-    }
-    let mut out = Vec::new();
-    image
-        .write_to(&mut Cursor::new(&mut out), ImageFormat::Jpeg)
-        .ok()?;
-    (out.len() <= 200 * 1024).then_some(out)
 }
 
 fn message_has_text(msg: &Message) -> bool {
@@ -4348,21 +3816,26 @@ pub async fn comment_buttons(bot: &Bot, msg: &Message) -> BotResult {
     let Some(audio) = msg.audio() else {
         return Ok(());
     };
-    let cache = match find_cache_by_file_id(&audio.file.id).await {
-        Ok(Some(cache)) => cache,
+    let lookup = match provider::gateway() {
+        Ok(gateway) => gateway
+            .lookup_cache(&audio.file.id)
+            .await
+            .map_err(BotError::from),
+        Err(err) => Err(err),
+    };
+    let cached = match lookup {
+        Ok(Some(cached)) => cached,
         Ok(None) => return Ok(()),
         Err(err) => {
             log::warn!("music cache lookup by file_id failed: {err}");
             return Ok(());
         }
     };
-    if is_suspicious_music_cache(&cache) {
+    if is_suspicious_media(&cached.track, cached.byte_size) {
         return Ok(());
     }
-    let Some(track) = cache_to_track(&cache) else {
-        return Ok(());
-    };
-    // cache_to_track 不带封面，获取封面按钮会被 track_menu_for_context 自然省略
+    let track = cached.track;
+    // 缓存行不带封面，获取封面按钮会被 track_menu_for_context 自然省略
     let Some(keyboard) = track_menu_for_context(&track, None, true, msg.chat.id.0) else {
         return Ok(());
     };
@@ -4416,7 +3889,6 @@ impl MusicAction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{ImageBuffer, ImageFormat, Rgb};
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
     fn test_settings(default_platform: &str) -> UserMusicSettings {
@@ -4905,7 +4377,7 @@ mod tests {
         };
         let lyrics = provider::MusicLyrics {
             plain: "开放中文转换".to_string(),
-            translation: String::new(),
+            ..Default::default()
         };
         let result =
             inline_lyric_result(&item, &lyrics, MusicLyricScript::Simplified, None).unwrap();
@@ -4929,7 +4401,7 @@ mod tests {
     fn inline_lyric_text_converts_script() {
         let lyrics = provider::MusicLyrics {
             plain: "开放中文转换".to_string(),
-            translation: String::new(),
+            ..Default::default()
         };
         assert_eq!(
             inline_lyric_text("歌", "人", &lyrics, MusicLyricScript::Traditional),
@@ -4938,49 +4410,37 @@ mod tests {
     }
 
     #[test]
-    fn apple_wrapper_track_uses_m4a_file_name() {
-        let track = MusicTrack {
-            id: "1624001324".to_string(),
-            platform: MusicPlatform::AppleMusic,
-            song: "稻香".to_string(),
-            singer: "周杰伦".to_string(),
-            album: "魔杰座".to_string(),
-            cover: String::new(),
-            link: "https://music.apple.com/song/1624001324".to_string(),
-            url: "applemusic-wrapper://127.0.0.1/1624001324".to_string(),
-            headers: Default::default(),
-            max_chunk_size: None,
-            duration: Some(223),
-            bitrate: None,
-            format: Some("m4a".to_string()),
-        };
-        assert_eq!(track.file_name(), "稻香 - 周杰伦.m4a");
-    }
-
-    #[test]
     fn apple_music_preview_sized_cache_is_rejected() {
-        let mut cache = MusicCache {
-            platform: MusicPlatform::AppleMusic.id().to_string(),
-            track_id: "966805806".to_string(),
-            quality: "lossless".to_string(),
+        let track = MusicTrack {
+            platform: MusicPlatform::AppleMusic,
+            id: "966805806".to_string(),
             song: "匆匆那年".to_string(),
             singer: "王菲".to_string(),
             album: "匆匆那年 - Single".to_string(),
+            cover: String::new(),
             link: "https://music.apple.com/cn/album/966805714?i=966805806".to_string(),
-            file_ext: "m4a".to_string(),
-            music_size: 780 * 1024,
-            bitrate: 27_290,
             duration: Some(241),
-            file_id: "file-id".to_string(),
-            thumb_file_id: String::new(),
-            from_user_id: 1,
-            from_chat_id: 1,
+            bitrate: None,
+            format: Some("m4a".to_string()),
         };
-        assert!(is_suspicious_music_cache(&cache));
-
-        cache.music_size = 7_861_599;
-        cache.bitrate = 260_000;
-        assert!(!is_suspicious_music_cache(&cache));
+        assert!(is_suspicious_media(&track, 780 * 1024));
+        assert!(!is_suspicious_media(&track, 7_861_599));
+        let other = MusicTrack {
+            platform: MusicPlatform::Netease,
+            ..track
+        };
+        assert!(!is_suspicious_media(&other, 780 * 1024));
+    }
+    fn test_media(track: MusicTrack, decrypt_elapsed_ms: Option<u64>) -> MusicMedia {
+        MusicMedia {
+            track,
+            quality: provider::Quality::Lossless,
+            file_id: "file-id".to_string(),
+            thumb_file_id: None,
+            byte_size: 1024 * 1024,
+            decrypt_elapsed_ms,
+            cached: false,
+        }
     }
 
     #[test]
@@ -4993,20 +4453,13 @@ mod tests {
             album: "魔杰座".to_string(),
             cover: String::new(),
             link: "https://music.apple.com/song/1624001324".to_string(),
-            url: "applemusic-wrapper://127.0.0.1/1624001324".to_string(),
-            headers: Default::default(),
-            max_chunk_size: None,
             duration: Some(2),
             bitrate: None,
             format: Some("m4a".to_string()),
         };
-        let media = MusicMedia {
-            audio: vec![0; 1024 * 1024],
-            cover: Vec::new(),
-            decrypt_elapsed: None,
-        };
+        let media = test_media(track, None);
         assert_eq!(
-            build_music_caption(&track, &media),
+            build_music_caption(&media),
             "<b>「<a href=\"https://music.apple.com/song/1624001324\">稻香</a>」- 周杰伦</b>\n专辑: 魔杰座\n<blockquote>1.00MB 4194.30kbps\n#AppleMusic #m4a\n</blockquote>"
         );
     }
@@ -5021,20 +4474,13 @@ mod tests {
             album: "魔杰座".to_string(),
             cover: String::new(),
             link: "https://music.apple.com/song/1624001324".to_string(),
-            url: "applemusic-wrapper://127.0.0.1/1624001324".to_string(),
-            headers: Default::default(),
-            max_chunk_size: None,
             duration: Some(2),
             bitrate: None,
             format: Some("m4a".to_string()),
         };
-        let media = MusicMedia {
-            audio: vec![0; 1024 * 1024],
-            cover: Vec::new(),
-            decrypt_elapsed: Some(Duration::from_millis(7850)),
-        };
+        let media = test_media(track, Some(7850));
         assert_eq!(
-            build_music_caption(&track, &media),
+            build_music_caption(&media),
             "<b>「<a href=\"https://music.apple.com/song/1624001324\">稻香</a>」- 周杰伦</b>\n专辑: 魔杰座\n<blockquote>1.00MB 4194.30kbps\n解密: 7.85s\n#AppleMusic #m4a\n</blockquote>"
         );
     }
@@ -5049,9 +4495,6 @@ mod tests {
             album: "魔杰座".to_string(),
             cover: String::new(),
             link: "https://music.apple.com/song/1624001324".to_string(),
-            url: "applemusic-wrapper://127.0.0.1/1624001324".to_string(),
-            headers: Default::default(),
-            max_chunk_size: None,
             duration: Some(223),
             bitrate: None,
             format: Some("m4a".to_string()),
@@ -5089,9 +4532,6 @@ mod tests {
             album: "魔杰座".to_string(),
             cover: "https://example.com/cover.jpg".to_string(),
             link: "https://music.apple.com/song/1624001324".to_string(),
-            url: "applemusic-wrapper://127.0.0.1/1624001324".to_string(),
-            headers: Default::default(),
-            max_chunk_size: None,
             duration: Some(223),
             bitrate: None,
             format: Some("m4a".to_string()),
@@ -5126,9 +4566,6 @@ mod tests {
             album: String::new(),
             cover: "https://example.com/cover.jpg".to_string(),
             link: "https://www.bilibili.com/video/BV1BZbSzZEGT".to_string(),
-            url: String::new(),
-            headers: Default::default(),
-            max_chunk_size: None,
             duration: Some(223),
             bitrate: None,
             format: Some("m4a".to_string()),
@@ -5380,9 +4817,6 @@ mod tests {
             album: "魔杰座".to_string(),
             cover: "https://example.com/cover.jpg".to_string(),
             link: "https://music.apple.com/song/1624001324".to_string(),
-            url: "applemusic-wrapper://127.0.0.1/1624001324".to_string(),
-            headers: Default::default(),
-            max_chunk_size: None,
             duration: Some(223),
             bitrate: None,
             format: Some("m4a".to_string()),
@@ -5397,21 +4831,6 @@ mod tests {
         };
         assert_eq!(callback, "music lyric a 1624001324");
         assert_eq!(markup.inline_keyboard[1][1].text, "收藏");
-    }
-
-    #[test]
-    fn cover_is_resized_to_telegram_thumbnail() {
-        let image = ImageBuffer::from_fn(1200, 1200, |x, y| {
-            Rgb([(x % 255) as u8, (y % 255) as u8, ((x + y) % 255) as u8])
-        });
-        let mut bytes = Vec::new();
-        image
-            .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
-            .unwrap();
-        let thumb = prepare_audio_thumbnail(&bytes).unwrap();
-        assert!(thumb.len() <= 200 * 1024);
-        assert_eq!(&thumb[..3], &[0xff, 0xd8, 0xff]);
-        assert!(prepare_audio_thumbnail(&[]).is_none());
     }
 
     #[test]
@@ -5436,448 +4855,5 @@ mod tests {
             ),
             "正在下载：晴天\n进度：25.00% (1.00 MB / 4.00 MB)"
         );
-    }
-
-    #[tokio::test]
-    async fn downloads_audio_bytes_without_telegram() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut buf = [0; 1024];
-            let _ = stream.read(&mut buf).await.unwrap();
-            stream
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nmusic",
-                )
-                .await
-                .unwrap();
-        });
-
-        let bytes = provider::download_url(&format!("http://{addr}/track.mp3"))
-            .await
-            .unwrap();
-        assert_eq!(bytes, b"music");
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn rejects_partial_content_without_range_request() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut buf = [0; 1024];
-            let _ = stream.read(&mut buf).await.unwrap();
-            stream
-                .write_all(
-                    b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-4/10\r\nContent-Length: 5\r\nConnection: close\r\n\r\nmusic",
-                )
-                .await
-                .unwrap();
-        });
-
-        let err = provider::download_url(&format!("http://{addr}/track.mp3"))
-            .await
-            .unwrap_err();
-        assert!(format!("{err}").contains("未请求分段却收到 206"));
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn downloads_audio_reports_progress_without_telegram() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut buf = [0; 1024];
-            let _ = stream.read(&mut buf).await.unwrap();
-            stream
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nmusic",
-                )
-                .await
-                .unwrap();
-            stream.write_all(b"bytes").await.unwrap();
-        });
-
-        let mut reports = Vec::new();
-        let bytes = provider::download_url_with_headers_progress(
-            &format!("http://{addr}/track.mp3"),
-            &Default::default(),
-            &mut |progress| reports.push(progress),
-        )
-        .await
-        .unwrap();
-        assert_eq!(bytes, b"musicbytes");
-        assert_eq!(
-            reports.last(),
-            Some(&DownloadProgress {
-                written: 10,
-                total: Some(10),
-            })
-        );
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn downloads_track_media_with_provider_headers_without_telegram() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut buf = [0; 2048];
-            let size = stream.read(&mut buf).await.unwrap();
-            let request = String::from_utf8_lossy(&buf[..size]);
-            assert!(
-                request
-                    .to_ascii_lowercase()
-                    .contains("x-music-token: test-token")
-            );
-            stream
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nmusic",
-                )
-                .await
-                .unwrap();
-        });
-
-        let track = MusicTrack {
-            id: "1".to_string(),
-            platform: MusicPlatform::Bilibili,
-            song: "song".to_string(),
-            singer: "singer".to_string(),
-            album: String::new(),
-            cover: String::new(),
-            link: "https://example.com".to_string(),
-            url: format!("http://{addr}/track.m4a"),
-            headers: [("x-music-token".to_string(), "test-token".to_string())]
-                .into_iter()
-                .collect(),
-            max_chunk_size: None,
-            duration: None,
-            bitrate: None,
-            format: Some("m4a".to_string()),
-        };
-        let media = provider::download_track_media(&track).await.unwrap();
-        assert_eq!(media.audio, b"music");
-        assert!(media.cover.is_empty());
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn downloads_track_media_with_bounded_range_chunks_without_telegram() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            for (expected_range, content_range, body) in [
-                ("bytes=0-4", "bytes 0-4/10", "music"),
-                ("bytes=5-9", "bytes 5-9/10", "bytes"),
-            ] {
-                let (mut stream, _) = listener.accept().await.unwrap();
-                let mut buf = [0; 2048];
-                let size = stream.read(&mut buf).await.unwrap();
-                let request = String::from_utf8_lossy(&buf[..size]);
-                assert!(
-                    request
-                        .to_ascii_lowercase()
-                        .contains(&format!("range: {expected_range}"))
-                );
-                let response = format!(
-                    "HTTP/1.1 206 Partial Content\r\nContent-Range: {content_range}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                stream.write_all(response.as_bytes()).await.unwrap();
-            }
-        });
-
-        let track = MusicTrack {
-            id: "dQw4w9WgXcQ".to_string(),
-            platform: MusicPlatform::YouTubeMusic,
-            song: "song".to_string(),
-            singer: "singer".to_string(),
-            album: String::new(),
-            cover: String::new(),
-            link: "https://music.youtube.com/watch?v=dQw4w9WgXcQ".to_string(),
-            url: format!("http://{addr}/track.m4a"),
-            headers: Default::default(),
-            max_chunk_size: Some(5),
-            duration: None,
-            bitrate: None,
-            format: Some("m4a".to_string()),
-        };
-        let media = provider::download_track_media(&track).await.unwrap();
-        assert_eq!(media.audio, b"musicbytes");
-        server.await.unwrap();
-    }
-
-    fn bounded_range_test_track(addr: std::net::SocketAddr) -> MusicTrack {
-        MusicTrack {
-            id: "dQw4w9WgXcQ".to_string(),
-            platform: MusicPlatform::YouTubeMusic,
-            song: "song".to_string(),
-            singer: "singer".to_string(),
-            album: String::new(),
-            cover: String::new(),
-            link: "https://music.youtube.com/watch?v=dQw4w9WgXcQ".to_string(),
-            url: format!("http://{addr}/track.m4a"),
-            headers: Default::default(),
-            max_chunk_size: Some(5),
-            duration: None,
-            bitrate: None,
-            format: Some("m4a".to_string()),
-        }
-    }
-
-    /// 按脚本逐个应答请求；`None` 的 Content-Range 表示不发送该头。
-    fn spawn_scripted_range_server(
-        listener: tokio::net::TcpListener,
-        script: Vec<(&'static str, Option<&'static str>, &'static str)>,
-    ) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(async move {
-            for (status_line, content_range, body) in script {
-                let (mut stream, _) = listener.accept().await.unwrap();
-                let mut buf = [0; 2048];
-                let _ = stream.read(&mut buf).await.unwrap();
-                let range_header = content_range
-                    .map(|value| format!("Content-Range: {value}\r\n"))
-                    .unwrap_or_default();
-                let response = format!(
-                    "HTTP/1.1 {status_line}\r\n{range_header}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                stream.write_all(response.as_bytes()).await.unwrap();
-            }
-        })
-    }
-
-    #[tokio::test]
-    async fn bounded_range_download_replaces_buffer_on_midstream_200() {
-        // 首段 206 后服务端忽略 Range 改回 200：正文是完整对象，必须整体替换而非拼接
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = spawn_scripted_range_server(
-            listener,
-            vec![
-                ("206 Partial Content", Some("bytes 0-4/*"), "music"),
-                ("200 OK", None, "musicbytes"),
-            ],
-        );
-        let media = provider::download_track_media(&bounded_range_test_track(addr))
-            .await
-            .unwrap();
-        assert_eq!(media.audio, b"musicbytes");
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn bounded_range_download_accepts_verified_416_completion() {
-        // total 为 * 时由 416 的 bytes */total 判定结束：长度一致才算下载完整
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = spawn_scripted_range_server(
-            listener,
-            vec![
-                ("206 Partial Content", Some("bytes 0-4/*"), "music"),
-                ("206 Partial Content", Some("bytes 5-9/*"), "bytes"),
-                ("416 Range Not Satisfiable", Some("bytes */10"), ""),
-            ],
-        );
-        let media = provider::download_track_media(&bounded_range_test_track(addr))
-            .await
-            .unwrap();
-        assert_eq!(media.audio, b"musicbytes");
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn bounded_range_download_rejects_early_416_with_length_mismatch() {
-        // 服务端提前 416 且完整长度对不上：必须报错而不是静默产出截断文件
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = spawn_scripted_range_server(
-            listener,
-            vec![
-                ("206 Partial Content", Some("bytes 0-4/*"), "music"),
-                ("416 Range Not Satisfiable", Some("bytes */12"), ""),
-            ],
-        );
-        let err = provider::download_track_media(&bounded_range_test_track(addr))
-            .await
-            .unwrap_err();
-        assert!(
-            format!("{err}").contains("文件不完整"),
-            "unexpected error: {err}"
-        );
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn bounded_range_download_rejects_overflowing_range_end() {
-        // range_end 为 u64::MAX 时区间长度/下一起点都会溢出：
-        // 必须直接拒绝，而不是 debug panic / release 下 offset 饱和死循环
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = spawn_scripted_range_server(
-            listener,
-            vec![(
-                "206 Partial Content",
-                Some("bytes 0-18446744073709551615/*"),
-                "",
-            )],
-        );
-        let err = provider::download_track_media(&bounded_range_test_track(addr))
-            .await
-            .unwrap_err();
-        assert!(
-            format!("{err}").contains("异常区间"),
-            "unexpected error: {err}"
-        );
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn bounded_range_download_remembers_total_across_star_responses() {
-        // 首段报过具体 total 后，后续响应降级为 * 不应丢失已知完整长度：
-        // 收满 10 字节即结束，不发起第三次请求（服务端只应答两次）
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = spawn_scripted_range_server(
-            listener,
-            vec![
-                ("206 Partial Content", Some("bytes 0-4/10"), "music"),
-                ("206 Partial Content", Some("bytes 5-9/*"), "bytes"),
-            ],
-        );
-        let media = provider::download_track_media(&bounded_range_test_track(addr))
-            .await
-            .unwrap();
-        assert_eq!(media.audio, b"musicbytes");
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn bounded_range_download_rejects_range_beyond_declared_total() {
-        // bytes 0-4/3 自相矛盾：区间超出自己声明的完整长度，
-        // 放行会因 buf.len() >= total 被误判为下载成功
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = spawn_scripted_range_server(
-            listener,
-            vec![("206 Partial Content", Some("bytes 0-4/3"), "music")],
-        );
-        let err = provider::download_track_media(&bounded_range_test_track(addr))
-            .await
-            .unwrap_err();
-        assert!(
-            format!("{err}").contains("超出声明的完整长度"),
-            "unexpected error: {err}"
-        );
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn bounded_range_download_rejects_star_segment_beyond_known_total() {
-        // 已知完整长度 10 后，自报 * 的分段也不得越过边界：
-        // 0-4/10 + 5-14/* 若放行，15 字节会因 buf.len() >= 10 被误判成功
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = spawn_scripted_range_server(
-            listener,
-            vec![
-                ("206 Partial Content", Some("bytes 0-4/10"), "music"),
-                ("206 Partial Content", Some("bytes 5-14/*"), "0123456789"),
-            ],
-        );
-        let err = provider::download_track_media(&bounded_range_test_track(addr))
-            .await
-            .unwrap_err();
-        assert!(
-            format!("{err}").contains("超出声明的完整长度"),
-            "unexpected error: {err}"
-        );
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn bounded_range_download_rejects_total_beyond_size_cap() {
-        // 首段就声明完整长度 3 GB（超过 2 GiB 上限）：不可能上传，
-        // 应立即拒绝而不是继续下载直到撞上本地缓冲上限
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = spawn_scripted_range_server(
-            listener,
-            vec![("206 Partial Content", Some("bytes 0-4/3000000000"), "music")],
-        );
-        let err = provider::download_track_media(&bounded_range_test_track(addr))
-            .await
-            .unwrap_err();
-        assert!(
-            format!("{err}").contains("超过大小上限"),
-            "unexpected error: {err}"
-        );
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn bounded_range_download_rejects_416_shrinking_known_total() {
-        // 已由 206 校验过完整长度为 10，416 却自报 5：
-        // 若信任 416 就会把 5 字节的截断文件当成完整文件
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = spawn_scripted_range_server(
-            listener,
-            vec![
-                ("206 Partial Content", Some("bytes 0-4/10"), "music"),
-                ("416 Range Not Satisfiable", Some("bytes */5"), ""),
-            ],
-        );
-        let err = provider::download_track_media(&bounded_range_test_track(addr))
-            .await
-            .unwrap_err();
-        assert!(
-            format!("{err}").contains("不一致"),
-            "unexpected error: {err}"
-        );
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn bounded_range_download_rejects_total_changing_across_responses() {
-        // 两段声明的完整长度不同，说明资源中途变了，拼出来的文件来自两个版本
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = spawn_scripted_range_server(
-            listener,
-            vec![
-                ("206 Partial Content", Some("bytes 0-4/20"), "music"),
-                ("206 Partial Content", Some("bytes 5-9/40"), "bytes"),
-            ],
-        );
-        let err = provider::download_track_media(&bounded_range_test_track(addr))
-            .await
-            .unwrap_err();
-        assert!(
-            format!("{err}").contains("完整长度前后不一致"),
-            "unexpected error: {err}"
-        );
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn bounded_range_download_rejects_206_without_content_range() {
-        // 206 缺少合法 Content-Range 时无法验证推进与完整性，必须拒绝
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server =
-            spawn_scripted_range_server(listener, vec![("206 Partial Content", None, "music")]);
-        let err = provider::download_track_media(&bounded_range_test_track(addr))
-            .await
-            .unwrap_err();
-        assert!(
-            format!("{err}").contains("缺少合法 Content-Range"),
-            "unexpected error: {err}"
-        );
-        server.await.unwrap();
     }
 }

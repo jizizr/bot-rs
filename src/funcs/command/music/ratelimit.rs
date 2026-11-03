@@ -568,7 +568,7 @@ mod tests {
             "ratelimit-test-hit",
             Some(MusicLyrics {
                 plain: "歌词".to_string(),
-                translation: String::new(),
+                ..Default::default()
             }),
         );
         let hit = cached_lyrics(MusicPlatform::Tencent, "ratelimit-test-hit");
