@@ -3150,6 +3150,7 @@ dependencies = [
 [[package]]
 name = "music-gateway"
 version = "0.1.0"
+source = "git+https://github.com/jizizr/mhub?rev=1bc02fb0be99723de4394300334989c7c4d1083e#1bc02fb0be99723de4394300334989c7c4d1083e"
 dependencies = [
  "reqwest",
  "serde",
