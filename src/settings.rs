@@ -39,6 +39,8 @@ pub struct Api {
 #[derive(Debug, Deserialize)]
 pub struct Music {
     #[serde(default)]
+    pub telegram_audio: TelegramAudio,
+    #[serde(default)]
     pub applemusic: AppleMusic,
     #[serde(default)]
     pub vkeys: VkeysMusic,
@@ -111,6 +113,7 @@ pub struct Music {
 impl Default for Music {
     fn default() -> Self {
         Self {
+            telegram_audio: TelegramAudio::default(),
             applemusic: AppleMusic::default(),
             vkeys: VkeysMusic::default(),
             tencent: TencentMusic::default(),
@@ -200,6 +203,14 @@ pub struct AppleMusic {
     pub wrapper_host: String,
     #[serde(default)]
     pub wrapper_hosts: Vec<String>,
+    #[serde(default)]
+    pub wrapper_lite_enabled: bool,
+    #[serde(default)]
+    pub wrapper_lite_url: String,
+    #[serde(default)]
+    pub wrapper_lite_urls: Vec<String>,
+    #[serde(default = "default_wrapper_lite_batch_size")]
+    pub wrapper_lite_batch_size: usize,
     #[serde(default = "default_apple_wrapper_track_concurrency")]
     pub wrapper_track_concurrency: usize,
     #[serde(default = "default_apple_wrapper_fragment_concurrency")]
@@ -222,11 +233,39 @@ impl Default for AppleMusic {
             timeout: default_apple_timeout(),
             wrapper_host: String::new(),
             wrapper_hosts: Vec::new(),
+            wrapper_lite_enabled: false,
+            wrapper_lite_url: String::new(),
+            wrapper_lite_urls: Vec::new(),
+            wrapper_lite_batch_size: default_wrapper_lite_batch_size(),
             wrapper_track_concurrency: default_apple_wrapper_track_concurrency(),
             wrapper_fragment_concurrency: default_apple_wrapper_fragment_concurrency(),
             wrapper_connection_concurrency: default_apple_wrapper_connection_concurrency(),
             wv_client_id: String::new(),
             wv_private_key: String::new(),
+        }
+    }
+}
+
+fn default_wrapper_lite_batch_size() -> usize {
+    256
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+pub struct TelegramAudio {
+    pub ffmpeg: String,
+    pub ffprobe: String,
+    pub timeout_seconds: u64,
+    pub concurrency: usize,
+}
+
+impl Default for TelegramAudio {
+    fn default() -> Self {
+        Self {
+            ffmpeg: "ffmpeg".into(),
+            ffprobe: "ffprobe".into(),
+            timeout_seconds: 180,
+            concurrency: 2,
         }
     }
 }

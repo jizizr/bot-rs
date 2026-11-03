@@ -246,13 +246,6 @@ pub struct DownloadProgress {
     pub total: Option<u64>,
 }
 
-#[cfg(test)]
-pub fn build_query(platform_alias: &str, keyword_parts: &[String]) -> Result<MusicQuery, BotError> {
-    let platform = MusicPlatform::from_alias(platform_alias)
-        .ok_or_else(|| BotError::Custom(format!("暂不支持音乐平台：{platform_alias}")))?;
-    build_query_with_platform(platform, keyword_parts)
-}
-
 pub fn build_query_with_platform(
     platform: MusicPlatform,
     keyword_parts: &[String],
@@ -260,28 +253,11 @@ pub fn build_query_with_platform(
     let keyword = keyword_parts.join(" ").trim().to_string();
     if keyword.is_empty() {
         return Err(BotError::Custom(
-            "请输入歌曲名、链接或 ID，例如：/music qq 晴天".to_string(),
+            "请输入歌曲名、链接或 ID，例如：/music 晴天".to_string(),
         ));
     }
 
     Ok(MusicQuery { platform, keyword })
-}
-
-#[cfg(test)]
-pub fn build_legacy_query(args: &[String]) -> Result<MusicQuery, BotError> {
-    build_legacy_query_with_default(MusicPlatform::default(), args)
-}
-
-pub fn build_legacy_query_with_default(
-    default_platform: MusicPlatform,
-    args: &[String],
-) -> Result<MusicQuery, BotError> {
-    if let Some((first, rest)) = args.split_first()
-        && let Some(platform) = MusicPlatform::from_alias(first.trim_start_matches('#'))
-    {
-        return build_query_with_platform(platform, rest);
-    }
-    build_query_with_platform(default_platform, args)
 }
 
 #[cfg(test)]
@@ -368,7 +344,10 @@ async fn download_audio_with_headers_progress<F>(
 where
     F: FnMut(DownloadProgress) + Send,
 {
-    if url.starts_with("applemusic-wrapper://") || url.starts_with("applemusic-widevine://") {
+    if url.starts_with("applemusic-wrapper://")
+        || url.starts_with("applemusic-widevine://")
+        || url.starts_with("applemusic-wrapper-lite://")
+    {
         let (bytes, decrypt_elapsed) =
             super::applemusic::download_internal_url_with_progress_stats(url, progress).await?;
         return Ok(MusicAudio {

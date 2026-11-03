@@ -567,6 +567,8 @@ dependencies = [
  "sha1",
  "sled",
  "teloxide",
+ "temari",
+ "tempfile",
  "thiserror 2.0.12",
  "tokio",
  "tokio-native-tls",
@@ -6108,6 +6110,12 @@ dependencies = [
  "quote",
  "syn 2.0.100",
 ]
+
+[[package]]
+name = "temari"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f1e1225ca0cd2fcbb270df7a65431c944f066e5c24200303d6a00f23532ac4f"
 
 [[package]]
 name = "tempfile"

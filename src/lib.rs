@@ -26,6 +26,11 @@ pub mod settings;
 pub type BotResult = Result<(), BotError>;
 #[derive(Debug, thiserror::Error)]
 pub enum BotError {
+    #[error("Apple Music API 请求失败：HTTP {status}（{path}）")]
+    AppleMusicApi {
+        status: reqwest::StatusCode,
+        path: String,
+    },
     #[error("API请求失败: {0}")]
     Request(#[from] reqwest::Error),
     #[error("API请求失败: {0}")]

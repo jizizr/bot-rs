@@ -12,6 +12,7 @@ use protobuf::Message;
 use regex::Regex;
 use reqwest::Client;
 use rsa::{RsaPrivateKey, pkcs1::DecodeRsaPrivateKey};
+use scraper::{Html, Selector};
 use serde::Deserialize;
 use std::{
     collections::HashMap,
@@ -40,6 +41,7 @@ const WEB_PLAYBACK_URL: &str = "https://play.itunes.apple.com/WebObjects/MZPlay.
 const WEB_PLAYBACK_LICENSE_URL: &str =
     "https://play.itunes.apple.com/WebObjects/MZPlay.woa/wa/acquireWebPlaybackLicense";
 const APPLE_WRAPPER_SCHEME: &str = "applemusic-wrapper://";
+const APPLE_WRAPPER_LITE_SCHEME: &str = "applemusic-wrapper-lite://";
 const APPLE_WIDEVINE_SCHEME: &str = "applemusic-widevine://";
 const APPLE_WRAPPER_M3U8_PORT: u16 = 20020;
 const APPLE_WRAPPER_DECRYPT_PORT: u16 = 10020;
@@ -49,9 +51,11 @@ const APPLE_WRAPPER_IO_TIMEOUT: Duration = Duration::from_secs(15);
 type Aes128Ctr = ctr::Ctr128BE<aes::Aes128>;
 
 // Public Widevine L3 test device from the source MusicBot-Go Apple Music provider.
+// Repacked as WVD v2 from plugins/applemusic/wv_device.go at commit
+// 0d4fe5d4e00e2709ab6fc692a1f09621f8e4b5af; validated by an offline challenge test.
 // This is not Apple account data; users can override it with wv_client_id /
 // wv_private_key file paths in settings.
-const DEFAULT_WV_DEVICE_WVD_BASE64: &str = "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nm+ku3P/ASTk/EgYono5aMTLgPkdkbSnYxjKEzzh9SHdM5+57ErVx5as58/EJvFI9GL3DQERoOaLG38riYhqVQVMEmxbG0TrDDfxSYUuS1agwzz5AueHF7qOa5Wm5yF0u2cw+eQCzpeMatAUKrgIIARIQaePomLssP7ijsygdhPiMFBiO1b6RBSKOAjCCAQoCggEBANj26bWJ8FEg6aQ+0NlOof4JlQFtvR4rQKfc0cV/wwVQPM8TP56Yr85O5v+E3EIkJqj/+k/kvy1E1Q8UOuu8IEyjtGf6JRv6YD/bJeInqK+pw30K72Lmo5TXKCif1JZlGy6MUUHyfFWt5jkvN6rTbzfOfUKDWy1xfi04dPu60/MUb9F4MVC3Q78YuXNXAHR3WyfdIow7hcuOFl2dyu0X2OWOmDvGMwiWdYlSrEOjtNCRPK0mZSXSRwztud0Et6sB0kUZpdzqhJjh43L8gYOW4sJBHcpkRCzL+Yt5XWCBDjgwWvtc4z6t37j/fXir915BuMeqNYW5WvyIhopur5HrdKECAwEAASjwIhKAAyKLYzDrP5CzVu+/EZK2J722lyCg7a4C3lm+/QINe+sWXCdJuj6pHvVG7YiVlZVJs3ldhIgPBzAHMeNjys2vd+Cxe1Im3Ljbl2M1C0Xn4naOsCF/dDabsQjlqiFkakPYTRyv51WP2jzHS4lHY1ZHwVWhVBJdmlp3cz/hDMEs22j+3P5QrJnBrtJz95NBzb5lwNLdkQ7eUZGwfzrgp/9wQa8lEEGpyklcp8b4i2oRbUAA+m2O6CDOZkTNGrnFMZ/qiv5tesqMKkFL0bVI7K8I0XWTnPqUbwqxeGBDEvoAMcyi6XG9QiKHI9jkymKZ1d9R0RDkcDYSo2I1U0g7io/TTuNbnXIB5OE6vLgnbbGzxF2QgKU4YBq4siXSUsDh+UzNb5V9CXnFjE/QTm26GfSH7zjgOyVTxkXtTV1TZCmsgCl99cP3CAAAKTbpGCDLx73rPyLzr/5hjJlCRz2Eh0IARGuARgIRsHLM42t1EOzUytL9yHWahXmkm/rcEgq9Aca8uRoWCgxjb21wYW55X25hbWUSBkdvb2dsZRohCgptb2RlbF9uYW1lEhNBT1NQIG9uIElBIEVtdWxhdG9yGhgKEWFyY2hpdGVjdHVyZV9uYW1lEgN4ODYaHgoLZGV2aWNlX25hbWUSD2dlbmVyaWNfeDg2X2FybRoiCgxwcm9kdWN0X25hbWUSEnNka19ncGhvbmVfeDg2X2FybRpkCgpidWlsZF9pbmZvElZnb29nbGUvc2RrX2dwaG9uZV94ODZfYXJtL2dlbmVyaWNfeDg2X2FybTo5L1BTUjEuMTgwNzIwLjEyMi82NzM2NzQyOnVzZXJkZWJ1Zy9kZXYta2V5cxoeChR3aWRldmluZV9jZG1fdmVyc2lvbhIGMTQuMC4wGiQKH29lbV9jcnlwdG9fc2VjdXJpdHlfcGF0Y2hfbGV2ZWwSATAyDhABIAAoDTAAQABIAFAA";
+const DEFAULT_WV_DEVICE_WVD_BASE64: &str = "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MeTrzvCLo7tc3USbaImlIWAX92saZojzJ3n9gc+cjBKGqz2AgcsFCigSZ5vpLtz/wEk5PxIGKJ6OWjEy4D5HZG0p2MYyhM84fUh3TOfuexK1ceWrOfPxCbxSPRi9w0BEaDmixt/K4mIalUFTBJsWxtE6ww38UmFLktWoMM8+QLnhxe6jmuVpuchdLtnMPnkAs6XjGrQFCq4CCAESEGnj6Ji7LD+4o7MoHYT4jBQYjtW+kQUijgIwggEKAoIBAQDY9um1ifBRIOmkPtDZTqH+CZUBbb0eK0Cn3NHFf8MFUDzPEz+emK/OTub/hNxCJCao//pP5L8tRNUPFDrrvCBMo7Rn+iUb+mA/2yXiJ6ivqcN9Cu9i5qOU1ygon9SWZRsujFFB8nxVreY5Lzeq0283zn1Cg1stcX4tOHT7utPzFG/ReDFQt0O/GLlzVwB0d1sn3SKMO4XLjhZdncrtF9jljpg7xjMIlnWJUqxDo7TQkTytJmUl0kcM7bndBLerAdJFGaXc6oSY4eNy/IGDluLCQR3KZEQsy/mLeV1ggQ44MFr7XOM+rd+4/314q/deQbjHqjWFuVr8iIaKbq+R63ShAgMBAAEo8CISgAMii2Mw6z+Qs1bvvxGStie9tpcgoO2uAt5Zvv0CDXvrFlwnSbo+qR71Ru2IlZWVSbN5XYSIDwcwBzHjY8rNr3fgsXtSJty425djNQtF5+J2jrAhf3Q2m7EI5aohZGpD2E0cr+dVj9o8x0uJR2NWR8FVoVQSXZpad3M/4QzBLNto/tz+UKyZwa7Sc/eTQc2+ZcDS3ZEO3lGRsH864Kf/cEGvJRBBqcpJXKfG+ItqEW1AAPptjuggzmZEzRq5xTGf6or+bXrKjCpBS9G1SOyvCNF1k5z6lG8KsXhgQxL6ADHMoulxvUIihyPY5MpimdXfUdEQ5HA2EqNiNVNIO4qP007jW51yAeThOry4J22xs8RdkIClOGAauLIl0lLA4flMzW+VfQl5xYxP0E5tuhn0h+844DslU8ZF7U1dU2QprIApffXD9wgAACk26Rggy8e96z8i86/+YYyZQkc9hIdCAERrgEYCEbByzONrdRDs1MrS/ch1moV5pJv63BIKvQHGvLkaFgoMY29tcGFueV9uYW1lEgZHb29nbGUaIQoKbW9kZWxfbmFtZRITQU9TUCBvbiBJQSBFbXVsYXRvchoYChFhcmNoaXRlY3R1cmVfbmFtZRIDeDg2Gh4KC2RldmljZV9uYW1lEg9nZW5lcmljX3g4Nl9hcm0aIgoMcHJvZHVjdF9uYW1lEhJzZGtfZ3Bob25lX3g4Nl9hcm0aZAoKYnVpbGRfaW5mbxJWZ29vZ2xlL3Nka19ncGhvbmVfeDg2X2FybS9nZW5lcmljX3g4Nl9hcm06OS9QU1IxLjE4MDcyMC4xMjIvNjczNjc0Mjp1c2VyZGVidWcvZGV2LWtleXMaHgoUd2lkZXZpbmVfY2RtX3ZlcnNpb24SBjE0LjAuMBokCh9vZW1fY3J5cHRvX3NlY3VyaXR5X3BhdGNoX2xldmVsEgEwMg4QASAAKA0wAEAASABQAA==";
 
 lazy_static! {
     static ref CLIENT: Client = {
@@ -78,11 +82,11 @@ lazy_static! {
     static ref TOKEN_PATTERN: Regex =
         Regex::new(r"eyJ[A-Za-z0-9_-]{40,}\.[A-Za-z0-9_-]{40,}\.[A-Za-z0-9_-]{40,}").unwrap();
     static ref APPLE_URL_PATTERN: Regex = Regex::new(r"https?://[^\s]+").unwrap();
-    static ref APPLE_SONG_PATH_RE: Regex = Regex::new(r"^/[a-z]{2}/song/[^/]+/(\d{6,})$").unwrap();
+    static ref APPLE_SONG_PATH_RE: Regex = Regex::new(r"^/[a-z]{2}/song/(?:[^/]+/)?(\d{6,})/?$").unwrap();
     static ref APPLE_ALBUM_PATH_RE: Regex =
-        Regex::new(r"^/[a-z]{2}/album/[^/]+/(\d{6,})$").unwrap();
+        Regex::new(r"^/[a-z]{2}/album/(?:[^/]+/)?(\d{6,})/?$").unwrap();
     static ref APPLE_PLAYLIST_PATH_RE: Regex =
-        Regex::new(r"^/[a-z]{2}/playlist/[^/]+/(pl\.[a-zA-Z0-9-]+)$").unwrap();
+        Regex::new(r"^/[a-z]{2}/playlist/(?:[^/]+/)?(pl\.[a-zA-Z0-9-]+)/?$").unwrap();
     static ref ENHANCED_STREAM_INF_RE: Regex = Regex::new(r#"^#EXT-X-STREAM-INF:(.*)$"#).unwrap();
     static ref ENHANCED_AUDIO_RE: Regex = Regex::new(r#"AUDIO="([^"]*)""#).unwrap();
     static ref ENHANCED_CODEC_RE: Regex = Regex::new(r#"CODECS="([^"]*)""#).unwrap();
@@ -122,6 +126,8 @@ lazy_static! {
 pub static APPLE_MUSIC_PROVIDER: AppleMusicProvider = AppleMusicProvider;
 
 pub struct AppleMusicProvider;
+
+mod wrapper_lite;
 
 #[derive(Clone, Debug)]
 struct AppleWrapperEndpoint {
@@ -225,16 +231,22 @@ impl MusicProvider for AppleMusicProvider {
         ensure_apple_enabled()?;
         let limit = limit.clamp(1, 25);
         let url = apple_search_url(keyword, limit);
-        let response: AppleMusicResponse = apple_get_json(&url, true).await?;
-        Ok(response
-            .results
-            .and_then(|results| results.songs)
-            .map(|songs| songs.data)
-            .unwrap_or_default()
-            .into_iter()
-            .map(song_to_item)
-            .filter(|item| !item.id.is_empty())
-            .collect())
+        // Apple may rate-limit the API search route for a server IP while the
+        // official web search page remains available.
+        match apple_get_json::<AppleMusicResponse>(&url, true).await {
+            Ok(response) => Ok(response
+                .results
+                .and_then(|results| results.songs)
+                .map(|songs| songs.data)
+                .unwrap_or_default()
+                .into_iter()
+                .take(limit)
+                .map(song_to_item)
+                .filter(|item| !item.id.is_empty())
+                .collect()),
+            Err(error) if is_apple_rate_limited(&error) => search_apple_web(keyword, limit).await,
+            Err(error) => Err(error),
+        }
     }
 
     async fn collection(
@@ -308,7 +320,19 @@ async fn resolve_apple_track(
         id
     };
 
-    let song = get_apple_song(&id).await?;
+    let song = match get_apple_song(&id).await {
+        Err(error) if should_search_numeric_title(keyword, selected_id, &error) => {
+            let found = APPLE_MUSIC_PROVIDER
+                .search(keyword, 1)
+                .await?
+                .into_iter()
+                .next()
+                .ok_or_else(|| BotError::Custom("没有找到可下载的音乐".into()))?;
+            get_apple_song(&found.id).await?
+        }
+        result => result?,
+    };
+    let id = song.id.clone();
     let attrs = song.attributes;
     let expected_duration = attrs
         .duration_in_millis
@@ -450,8 +474,6 @@ struct WebPlaybackAsset {
 
 #[derive(Clone, Default, Deserialize)]
 struct WebPlaybackMetadata {
-    #[serde(default, rename = "bitRate")]
-    bit_rate: i64,
     #[serde(default)]
     duration: i64,
 }
@@ -532,6 +554,15 @@ async fn get_apple_download_url_with_quality(
     expected_duration: Option<u32>,
 ) -> Result<String, BotError> {
     validate_apple_download_environment()?;
+    if wrapper_lite::enabled() {
+        return Ok(append_internal_duration_query(
+            format!(
+                "{APPLE_WRAPPER_LITE_SCHEME}{id}?quality={}",
+                quality.as_str()
+            ),
+            expected_duration,
+        ));
+    }
     let wrapper_host = apple_wrapper_host_opt();
     if let Some(wrapper_host) = wrapper_host {
         return Ok(apple_wrapper_internal_url(
@@ -559,12 +590,7 @@ async fn get_catalog_enhanced_hls_master_url(track_id: &str) -> Result<String, B
         .extended_asset_urls
         .map(|assets| assets.enhanced_hls)
         .unwrap_or_default();
-    if url.trim().is_empty() {
-        return Err(BotError::Custom(
-            "Apple Music catalog 没有返回 enhancedHls".to_string(),
-        ));
-    }
-    Ok(url)
+    validate_hls_master_url(&url, "catalog enhancedHls")
 }
 
 async fn get_apple_webplayback_assets(
@@ -637,6 +663,42 @@ pub(super) async fn download_internal_url_with_progress_stats<F>(
 where
     F: FnMut(DownloadProgress) + Send,
 {
+    if let Some(payload) = url.strip_prefix(APPLE_WRAPPER_LITE_SCHEME) {
+        let (id, query) = payload.split_once('?').unwrap_or((payload, ""));
+        if !is_apple_numeric_id(id) {
+            return Err(BotError::Custom(
+                "Apple Music wrapper-lite track id 无效".into(),
+            ));
+        }
+        let quality = url::form_urlencoded::parse(query.as_bytes())
+            .find(|(key, _)| key == "quality")
+            .map(|(_, value)| quality_from_str(&value))
+            .unwrap_or(AppleMusicQuality::High);
+        let duration = internal_query_u32(query, "duration");
+        let lite_error = match wrapper_lite::download_via_wrapper_lite_with_progress_stats(
+            id, quality, duration, progress,
+        )
+        .await
+        {
+            Ok(result) => return Ok(result),
+            Err(error) => apple_error_summary(&error),
+        };
+        let mut failures = vec![format!("wrapper-lite：{lite_error}")];
+        if let Some(host) = apple_wrapper_host_opt() {
+            log::warn!(
+                "Apple Music wrapper-lite failed for {id}; trying TCP wrapper: {lite_error}"
+            );
+            match download_via_wrapper_with_progress_stats(&host, id, quality, duration, progress)
+                .await
+            {
+                Ok(result) => return Ok(result),
+                Err(error) => {
+                    failures.push(format!("TCP wrapper：{}", apple_error_summary(&error)))
+                }
+            }
+        }
+        return download_aac_fallback(id, quality, duration, progress, failures).await;
+    }
     if let Some(payload) = url.strip_prefix(APPLE_WIDEVINE_SCHEME) {
         let (track_id, query) = payload.split_once('?').unwrap_or((payload, ""));
         if track_id.trim().is_empty() {
@@ -645,13 +707,15 @@ where
             ));
         }
         let expected_duration = internal_query_u32(query, "duration");
+        let quality = internal_query_quality(query);
         // applemusic-widevine:// URLs are only minted when no wrapper endpoint
         // is configured (get_apple_download_url_with_quality), and the endpoint
         // list is immutable for the process lifetime, so there is no wrapper
         // fallback to attempt here.
-        return download_via_widevine_with_progress(track_id, expected_duration, progress)
+        return download_via_widevine_with_progress(track_id, quality, expected_duration, progress)
             .await
-            .map(|data| (data, None));
+            .map(|data| (data, None))
+            .map_err(|error| BotError::Custom(apple_error_summary(&error)));
     }
 
     let payload = url
@@ -664,15 +728,101 @@ where
     if host.trim().is_empty() || track_id.trim().is_empty() {
         return Err(BotError::Custom("Apple Music wrapper URL 无效".to_string()));
     }
-    let quality = query
-        .split('&')
-        .filter_map(|part| part.split_once('='))
-        .find_map(|(key, value)| (key == "quality").then_some(value))
-        .map(quality_from_str)
-        .unwrap_or(AppleMusicQuality::High);
+    let quality = internal_query_quality(query);
     let expected_duration = internal_query_u32(query, "duration");
-    download_via_wrapper_with_progress_stats(host, track_id, quality, expected_duration, progress)
-        .await
+    match download_via_wrapper_with_progress_stats(
+        host,
+        track_id,
+        quality,
+        expected_duration,
+        progress,
+    )
+    .await
+    {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            download_aac_fallback(
+                track_id,
+                quality,
+                expected_duration,
+                progress,
+                vec![format!("TCP wrapper：{}", apple_error_summary(&error))],
+            )
+            .await
+        }
+    }
+}
+
+fn internal_query_quality(query: &str) -> AppleMusicQuality {
+    url::form_urlencoded::parse(query.as_bytes())
+        .find(|(key, _)| key == "quality")
+        .map(|(_, value)| quality_from_str(&value))
+        .unwrap_or(AppleMusicQuality::High)
+}
+
+fn widevine_target_kbps(quality: AppleMusicQuality) -> Option<i64> {
+    match quality {
+        AppleMusicQuality::Standard => Some(128),
+        AppleMusicQuality::High => Some(256),
+        AppleMusicQuality::Lossless | AppleMusicQuality::HiRes => None,
+    }
+}
+
+fn apple_error_summary(error: &BotError) -> String {
+    // Provider errors can contain signed media URLs. Neither bot replies nor
+    // fallback logs should expose the authorization query to another user.
+    let urls = Regex::new(r#"(?i)(?:https?|skd)://[^\s\"'<>]+"#).unwrap();
+    urls.replace_all(&error.to_string(), "[已隐藏资源地址]")
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(800)
+        .collect()
+}
+
+fn apple_download_failure(quality: AppleMusicQuality, failures: &[String]) -> BotError {
+    let reason = if widevine_target_kbps(quality).is_some() {
+        "Apple Music 音频获取失败"
+    } else {
+        "Apple Music 未取得所请求的无损音频流，不会自动改为有损 AAC；可选择 High 或 Standard 重试"
+    };
+    BotError::Custom(format!("{reason}；{}", failures.join("；")))
+}
+
+async fn download_aac_fallback<F>(
+    track_id: &str,
+    quality: AppleMusicQuality,
+    expected_duration: Option<u32>,
+    progress: &mut F,
+    mut failures: Vec<String>,
+) -> Result<(Vec<u8>, Option<Duration>), BotError>
+where
+    F: FnMut(DownloadProgress) + Send,
+{
+    if widevine_target_kbps(quality).is_none() {
+        return Err(apple_download_failure(quality, &failures));
+    }
+    if normalize_media_user_token(SETTINGS.music.applemusic.media_user_token.trim()).is_empty() {
+        failures.push("Widevine AAC：未配置 media-user-token，无法尝试备用音源".into());
+        return Err(apple_download_failure(quality, &failures));
+    }
+    log::warn!(
+        "Apple Music wrappers failed for {track_id}; trying Widevine AAC: {}",
+        failures.join("；")
+    );
+    // Complete-download callbacks contain only counters, never audio bytes.
+    // The failed source's buffered bytes are dropped before switching source.
+    progress(DownloadProgress {
+        written: 0,
+        total: None,
+    });
+    match download_via_widevine_with_progress(track_id, quality, expected_duration, progress).await
+    {
+        Ok(data) => Ok((data, None)),
+        Err(error) => {
+            failures.push(format!("Widevine AAC：{}", apple_error_summary(&error)));
+            Err(apple_download_failure(quality, &failures))
+        }
+    }
 }
 
 fn internal_query_u32(query: &str, key: &str) -> Option<u32> {
@@ -696,12 +846,19 @@ async fn download_via_wrapper(
 
 async fn download_via_widevine_with_progress<F>(
     track_id: &str,
+    quality: AppleMusicQuality,
     expected_duration: Option<u32>,
     progress: &mut F,
 ) -> Result<Vec<u8>, BotError>
 where
     F: FnMut(DownloadProgress) + Send,
 {
+    if widevine_target_kbps(quality).is_none() {
+        return Err(apple_download_failure(
+            quality,
+            &["Widevine 仅支持 AAC 音源".into()],
+        ));
+    }
     let media_user_token =
         normalize_media_user_token(SETTINGS.music.applemusic.media_user_token.trim());
     if media_user_token.is_empty() {
@@ -710,10 +867,10 @@ where
         ));
     }
     let assets = get_apple_webplayback_assets(track_id, media_user_token.clone()).await?;
-    let asset = select_widevine_asset(&assets)
-        .ok_or_else(|| BotError::Custom("Apple Music 没有返回 Widevine AAC 资源".to_string()))?;
+    let asset = select_widevine_asset(&assets, quality, expected_duration)?;
     validate_webplayback_asset_duration(asset, expected_duration)?;
     let hls = download_text(&asset.url).await?;
+    validate_widevine_hls_duration(&hls, expected_duration)?;
     let widevine_media = parse_widevine_hls(&asset.url, &hls)?;
     let encrypted = download_bytes_with_progress(&widevine_media.mp4_url, progress).await?;
     let key = acquire_widevine_content_key(
@@ -795,11 +952,6 @@ where
 {
     let master_url =
         enhanced_hls_master_url(&endpoint, track_id, quality, catalog_master_url).await?;
-    if !master_url.ends_with(".m3u8") {
-        return Err(BotError::Custom(format!(
-            "Apple Music wrapper 返回了无效 m3u8：{master_url}"
-        )));
-    }
 
     let master = download_text(&master_url).await?;
     let variants = parse_enhanced_hls_master(&master)?;
@@ -835,21 +987,14 @@ async fn enhanced_hls_master_url(
     quality: AppleMusicQuality,
     catalog_master_url: &mut Option<Result<String, String>>,
 ) -> Result<String, BotError> {
-    if quality == AppleMusicQuality::HiRes {
+    let device_error = if quality == AppleMusicQuality::HiRes {
         match wrapper_get_m3u8_url(endpoint, track_id).await {
-            Ok(url) if url.ends_with(".m3u8") => return Ok(url),
-            Ok(url) => {
-                eprintln!(
-                    "Apple Music wrapper device m3u8 invalid for {track_id}: {url}; falling back to catalog enhancedHls"
-                );
-            }
-            Err(err) => {
-                eprintln!(
-                    "Apple Music wrapper device m3u8 unavailable for {track_id}: {err}; falling back to catalog enhancedHls"
-                );
-            }
+            Ok(url) => return Ok(url),
+            Err(error) => Some(apple_error_summary(&error)),
         }
-    }
+    } else {
+        None
+    };
 
     let catalog_result = match catalog_master_url.as_ref() {
         Some(result) => result.clone(),
@@ -857,37 +1002,100 @@ async fn enhanced_hls_master_url(
             .insert(
                 get_catalog_enhanced_hls_master_url(track_id)
                     .await
-                    .map_err(|err| err.to_string()),
+                    .map_err(|err| apple_error_summary(&err)),
             )
             .clone(),
     };
-    // A catalog URL that is not an .m3u8 is treated like a catalog failure so
-    // the wrapper device m3u8 fallback still runs and the error names the
-    // actual source instead of blaming the wrapper.
     let catalog_err = match catalog_result {
-        Ok(url) if url.ends_with(".m3u8") => return Ok(url),
-        Ok(url) => format!("Apple Music catalog enhancedHls 无效：{url}"),
+        Ok(url) => match validate_hls_master_url(&url, "catalog enhancedHls") {
+            Ok(url) => return Ok(url),
+            Err(error) => apple_error_summary(&error),
+        },
         Err(err) => err,
     };
-    if quality == AppleMusicQuality::HiRes {
-        return Err(BotError::Custom(catalog_err));
-    }
-    match wrapper_get_m3u8_url(endpoint, track_id).await {
-        Ok(url) if url.ends_with(".m3u8") => Ok(url),
-        Ok(url) => Err(BotError::Custom(format!(
-            "Apple Music catalog enhancedHls 获取失败：{catalog_err}；wrapper device m3u8 无效：{url}"
-        ))),
-        Err(wrapper_err) => Err(BotError::Custom(format!(
-            "Apple Music catalog enhancedHls 获取失败：{catalog_err}；wrapper device m3u8 也失败：{wrapper_err}"
-        ))),
-    }
+    let device_error = match device_error {
+        Some(error) => error,
+        None => match wrapper_get_m3u8_url(endpoint, track_id).await {
+            Ok(url) => return Ok(url),
+            Err(error) => apple_error_summary(&error),
+        },
+    };
+    Err(BotError::Custom(format!(
+        "catalog enhancedHls：{catalog_err}；wrapper device：{device_error}"
+    )))
 }
 
-fn select_widevine_asset(assets: &[WebPlaybackAsset]) -> Option<&WebPlaybackAsset> {
-    assets
-        .iter()
-        .find(|asset| asset.flavor.as_deref() == Some("28:ctrp256"))
-        .or_else(|| assets.iter().max_by_key(|asset| asset.metadata.bit_rate))
+fn widevine_asset_kbps(asset: &WebPlaybackAsset) -> Option<i64> {
+    if !is_m3u8_url(&asset.url) {
+        return None;
+    }
+    let (asset_type, flavor) = asset.flavor.as_deref()?.split_once(':')?;
+    if asset_type.is_empty() || !asset_type.bytes().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let rate = flavor.strip_prefix("ctrp")?;
+    if rate.is_empty() || !rate.bytes().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let rate = rate.parse::<i64>().ok()?;
+    // Only the AAC CTR family is implemented by the local Widevine path.
+    // WebPlayback's bitRate field is kbps, not bits/sec. Use the flavor's
+    // nominal rate so misleading metadata cannot promote a low-rate asset.
+    matches!(rate, 64 | 128 | 256).then_some(rate)
+}
+
+fn select_widevine_asset(
+    assets: &[WebPlaybackAsset],
+    quality: AppleMusicQuality,
+    expected_duration: Option<u32>,
+) -> Result<&WebPlaybackAsset, BotError> {
+    let target = widevine_target_kbps(quality)
+        .ok_or_else(|| apple_download_failure(quality, &["Widevine 仅支持 AAC 音源".into()]))?;
+    let mut selected: Option<(&WebPlaybackAsset, i64)> = None;
+    let mut preview_error = None;
+    for asset in assets {
+        let Some(rate) = widevine_asset_kbps(asset) else {
+            continue;
+        };
+        if let Err(error) = validate_webplayback_asset_duration(asset, expected_duration) {
+            preview_error = Some(error);
+            continue;
+        }
+        if selected.is_none_or(|(_, current)| (rate - target).abs() < (current - target).abs()) {
+            selected = Some((asset, rate));
+        }
+    }
+    selected.map(|(asset, _)| asset).ok_or_else(|| {
+        preview_error.unwrap_or_else(|| {
+            BotError::Custom("Apple Music 没有返回可用的 Widevine AAC CTR 完整资源".into())
+        })
+    })
+}
+
+fn validate_widevine_hls_duration(
+    content: &str,
+    expected_duration: Option<u32>,
+) -> Result<(), BotError> {
+    let mut duration = 0.0;
+    let mut has_duration = false;
+    for line in content.lines().map(str::trim) {
+        if let Some(value) = line.strip_prefix("#EXTINF:") {
+            let seconds = value
+                .split(',')
+                .next()
+                .unwrap_or_default()
+                .parse::<f64>()
+                .ok()
+                .filter(|value| value.is_finite() && *value >= 0.0)
+                .ok_or_else(|| BotError::Custom("Apple Music Widevine playlist 时长无效".into()))?;
+            duration += seconds;
+            has_duration = true;
+        }
+    }
+    if has_duration {
+        validate_hls_media_duration(duration, expected_duration)?;
+    }
+    Ok(())
 }
 
 fn validate_webplayback_asset_duration(
@@ -1271,13 +1479,7 @@ async fn wrapper_get_m3u8_url(
     tokio::time::timeout(APPLE_WRAPPER_M3U8_TIMEOUT, reader.read_line(&mut url))
         .await
         .map_err(|_| BotError::Custom("Apple Music wrapper m3u8 读取超时".to_string()))??;
-    let url = url.trim().to_string();
-    if url.is_empty() || url == "\0" {
-        return Err(BotError::Custom(
-            "Apple Music wrapper 没有返回 m3u8".to_string(),
-        ));
-    }
-    Ok(url)
+    validate_hls_master_url(&url, "wrapper device")
 }
 
 async fn download_text(url: &str) -> Result<String, BotError> {
@@ -1468,10 +1670,7 @@ async fn apple_get_json<T: serde::de::DeserializeOwned>(
         return Box::pin(apple_get_json(url, false)).await;
     }
     if !response.status().is_success() {
-        return Err(BotError::Custom(format!(
-            "Apple Music API 请求失败：HTTP {}",
-            response.status()
-        )));
+        return Err(apple_api_error(url, response.status()));
     }
     Ok(response.json().await?)
 }
@@ -1501,10 +1700,7 @@ async fn apple_get_json_with_media_user_token<T: serde::de::DeserializeOwned>(
         .await;
     }
     if !response.status().is_success() {
-        return Err(BotError::Custom(format!(
-            "Apple Music API 请求失败：HTTP {}",
-            response.status()
-        )));
+        return Err(apple_api_error(url, response.status()));
     }
     Ok(response.json().await?)
 }
@@ -1622,6 +1818,152 @@ fn song_to_item(song: AppleMusicResource) -> MusicSearchItem {
         },
         cover,
     }
+}
+
+async fn search_apple_web(keyword: &str, limit: usize) -> Result<Vec<MusicSearchItem>, BotError> {
+    let url = apple_web_search_url(keyword);
+    let response = CLIENT
+        .get(url)
+        .header("User-Agent", APPLE_MUSIC_UA)
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        return Err(BotError::Custom(format!(
+            "Apple Music 网页搜索失败：HTTP {}",
+            response.status()
+        )));
+    }
+    parse_apple_web_search_results(&response.text().await?, limit)
+}
+
+fn parse_apple_web_search_results(
+    html: &str,
+    limit: usize,
+) -> Result<Vec<MusicSearchItem>, BotError> {
+    let result_selector = Selector::parse(r#"[data-testid="top-search-result"]"#)
+        .expect("valid Apple Music search result selector");
+    let action_selector = Selector::parse(r#"a[data-testid="click-action"]"#)
+        .expect("valid Apple Music action selector");
+    let title_selector = Selector::parse(r#"[data-testid="top-search-result-title"]"#)
+        .expect("valid Apple Music title selector");
+    let subtitle_selector = Selector::parse(r#"[data-testid="top-search-result-subtitle"]"#)
+        .expect("valid Apple Music subtitle selector");
+    let artwork_selector =
+        Selector::parse("source[srcset]").expect("valid Apple Music artwork selector");
+
+    let mut items = Vec::new();
+    for result in Html::parse_document(html).select(&result_selector) {
+        let Some(action) = result.select(&action_selector).next() else {
+            continue;
+        };
+        let Some(href) = action.value().attr("href") else {
+            continue;
+        };
+        let Some(id) = parse_apple_track_id(href) else {
+            continue;
+        };
+
+        let title = result
+            .select(&title_selector)
+            .next()
+            .map(|element| normalized_html_text(element.text()))
+            .filter(|value| !value.is_empty())
+            .unwrap_or_default();
+        if title.is_empty() {
+            continue;
+        }
+        let subtitle = result
+            .select(&subtitle_selector)
+            .next()
+            .map(|element| normalized_html_text(element.text()))
+            .unwrap_or_default();
+        let aria_label = result.value().attr("aria-label").unwrap_or_default();
+        let singer = subtitle
+            .rsplit('·')
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .or_else(|| aria_label.rsplit('·').next())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("未知歌手")
+            .to_string();
+        let cover = result
+            .select(&artwork_selector)
+            .next()
+            .and_then(|element| element.value().attr("srcset"))
+            .and_then(|srcset| srcset.split(',').next())
+            .and_then(|candidate| candidate.split_whitespace().next())
+            .unwrap_or_default()
+            .to_string();
+
+        if items.iter().any(|item: &MusicSearchItem| item.id == id) {
+            continue;
+        }
+        items.push(MusicSearchItem {
+            platform: MusicPlatform::AppleMusic,
+            id,
+            song: title,
+            singer,
+            cover,
+        });
+        if items.len() >= limit {
+            break;
+        }
+    }
+    if items.is_empty() {
+        return Err(BotError::Custom(
+            "Apple Music 网页搜索没有找到歌曲".to_string(),
+        ));
+    }
+    Ok(items)
+}
+
+fn normalized_html_text<'a>(text: impl Iterator<Item = &'a str>) -> String {
+    text.flat_map(str::split_whitespace)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn apple_web_search_url(keyword: &str) -> String {
+    let mut url = Url::parse(&format!(
+        "{APPLE_MUSIC_ORIGIN}/{}/search",
+        apple_storefront()
+    ))
+    .unwrap();
+    url.query_pairs_mut().append_pair("term", keyword);
+    url.to_string()
+}
+
+fn is_apple_rate_limited(error: &BotError) -> bool {
+    matches!(
+        error,
+        BotError::AppleMusicApi {
+            status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+            ..
+        }
+    )
+}
+
+fn apple_api_error(url: &str, status: reqwest::StatusCode) -> BotError {
+    BotError::AppleMusicApi {
+        status,
+        path: Url::parse(url)
+            .map(|url| url.path().to_string())
+            .unwrap_or_default(),
+    }
+}
+
+fn should_search_numeric_title(keyword: &str, selected_id: Option<&str>, error: &BotError) -> bool {
+    selected_id.is_none()
+        && is_apple_numeric_id(keyword.trim())
+        && matches!(
+            error,
+            BotError::AppleMusicApi {
+                status: reqwest::StatusCode::NOT_FOUND,
+                ..
+            }
+        )
 }
 
 fn parse_apple_track_id(text: &str) -> Option<String> {
@@ -2229,6 +2571,48 @@ fn absolute_hls_url(base_url: &str, value: &str) -> String {
         .rsplit_once('/')
         .map(|(base, _)| format!("{base}/{value}"))
         .unwrap_or_else(|| value.to_string())
+}
+
+fn is_m3u8_url(value: &str) -> bool {
+    validate_hls_master_url(value, "音源").is_ok()
+}
+
+fn validate_hls_master_url(value: &str, source: &str) -> Result<String, BotError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(BotError::Custom(format!(
+            "Apple Music {source} 没有返回 HLS 播放列表"
+        )));
+    }
+    if value.chars().any(|ch| ch.is_control() || ch.is_whitespace()
+        || matches!(ch, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{206f}' | '\u{feff}')) {
+        return Err(BotError::Custom(format!("Apple Music {source} 返回的 HLS 地址包含空白或不可见控制字符")));
+    }
+    let url = Url::parse(value)
+        .ok()
+        .filter(|url| {
+            matches!(url.scheme(), "https" | "http")
+                && url.host_str().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+        })
+        .ok_or_else(|| {
+            BotError::Custom(format!(
+                "Apple Music {source} 返回了无效的 HTTP(S) HLS 地址"
+            ))
+        })?;
+    let path = url.path().to_ascii_lowercase();
+    if path.ends_with(".m4p") {
+        return Err(BotError::Custom(format!(
+            "Apple Music {source} 返回了受保护的 M4P 文件，未返回可用的 HLS 播放列表"
+        )));
+    }
+    if !path.ends_with(".m3u8") {
+        return Err(BotError::Custom(format!(
+            "Apple Music {source} 返回的资源不是 HLS 播放列表"
+        )));
+    }
+    Ok(value.to_string())
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -3667,6 +4051,29 @@ mod tests {
     use crate::funcs::command::music::provider::download_track_media;
 
     #[test]
+    fn default_widevine_device_supports_offline_license_challenge() {
+        // Exercise the embedded fallback itself: a configured override must
+        // not conceal a truncated or otherwise unusable bundled device.
+        let bytes = general_purpose::STANDARD
+            .decode(DEFAULT_WV_DEVICE_WVD_BASE64)
+            .expect("embedded Widevine device must be valid base64");
+        let device = Device::read_wvd(Cursor::new(bytes))
+            .expect("embedded Widevine device must parse as a WVD device");
+        let pssh = build_widevine_pssh(&[7; 16]).expect("synthetic PSSH must be valid");
+        let request = Cdm::new(device)
+            .open()
+            .get_license_request(pssh, LicenseType::AUTOMATIC)
+            .expect("embedded device must create a license request offline");
+        let challenge = request
+            .challenge()
+            .expect("embedded device must sign its license challenge offline");
+        assert!(
+            !challenge.is_empty(),
+            "license challenge must contain bytes"
+        );
+    }
+
+    #[test]
     fn parses_apple_music_url_query_song_id() {
         assert_eq!(
             parse_apple_track_id("https://music.apple.com/us/album/x/1440841360?i=1440841363"),
@@ -3679,6 +4086,309 @@ mod tests {
         assert_eq!(
             parse_apple_track_id("am:1440841363"),
             Some("1440841363".to_string())
+        );
+    }
+
+    #[test]
+    fn numeric_title_fallback_is_only_for_bare_input_and_catalog_404() {
+        let error = apple_api_error(
+            "https://amp-api.music.apple.com/v1/catalog/cn/songs/123456?token=secret",
+            reqwest::StatusCode::NOT_FOUND,
+        );
+        assert!(should_search_numeric_title(" 123456 ", None, &error));
+        assert!(!should_search_numeric_title(
+            "123456",
+            Some("123456"),
+            &error
+        ));
+        assert!(!should_search_numeric_title("am:123456", None, &error));
+        assert!(!should_search_numeric_title(
+            "https://music.apple.com/cn/song/123456",
+            None,
+            &error
+        ));
+        assert!(!should_search_numeric_title(
+            "123456",
+            None,
+            &apple_api_error(
+                "https://amp-api.music.apple.com/v1/catalog/cn/songs/123456",
+                reqwest::StatusCode::UNAUTHORIZED
+            )
+        ));
+        assert!(!error.to_string().contains("secret"));
+    }
+
+    #[test]
+    fn accepts_signed_hls_urls_but_not_arbitrary_schemes() {
+        assert!(is_m3u8_url(
+            "https://example.com/audio.m3u8?token=signature"
+        ));
+        assert!(!is_m3u8_url("https://example.com/audio.mp4?file=.m3u8"));
+        assert!(!is_m3u8_url("file:///audio.m3u8"));
+    }
+
+    #[test]
+    fn hls_validation_classifies_protected_files_without_disclosing_signatures() {
+        let error = validate_hls_master_url(
+            "https://example.test/audio.lwhq.aac.a.m4p?accessKey=TEST_SECRET",
+            "wrapper device",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("受保护的 M4P 文件"));
+        assert!(error.contains("wrapper device"));
+        assert!(!error.contains("TEST_SECRET"));
+        assert!(!error.contains("https://"));
+        assert_eq!(
+            validate_hls_master_url(
+                " \nhttps://example.test/master.m3u8?token=test#part\r\n",
+                "catalog",
+            )
+            .unwrap(),
+            "https://example.test/master.m3u8?token=test#part"
+        );
+    }
+
+    #[test]
+    fn hls_validation_rejects_empty_control_and_non_http_addresses() {
+        for value in [
+            "",
+            " \n",
+            "\0",
+            "\0\0",
+            "\u{feff}",
+            "https://example.test/ma\nster.m3u8",
+            "https://example.test/master.m3u8?x=\u{200b}",
+            "file:///master.m3u8",
+            "https://user:secret@example.test/master.m3u8",
+            "https://example.test/audio.mp4?format=.m3u8",
+        ] {
+            assert!(
+                validate_hls_master_url(value, "wrapper-lite").is_err(),
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fallback_error_summaries_preserve_stages_and_redact_urls() {
+        let lite = apple_error_summary(&BotError::Custom(
+            "HTTP failed https://example.test/a.m3u8?accessKey=TEST_SECRET\n".into(),
+        ));
+        let error = apple_download_failure(
+            AppleMusicQuality::HiRes,
+            &[
+                format!("wrapper-lite：{lite}"),
+                "TCP wrapper：catalog 未提供流".into(),
+            ],
+        )
+        .to_string();
+        assert!(error.contains("未取得所请求的无损音频流"));
+        assert!(error.contains("wrapper-lite"));
+        assert!(error.contains("TCP wrapper"));
+        assert!(!error.contains("TEST_SECRET"));
+        assert!(!error.contains('\n'));
+    }
+
+    #[tokio::test]
+    async fn lossless_direct_and_fallback_paths_never_start_widevine_downloads() {
+        let mut updates = Vec::new();
+        for quality in [AppleMusicQuality::Lossless, AppleMusicQuality::HiRes] {
+            let mut progress = |update| updates.push(update);
+            let error = download_internal_url_with_progress_stats(
+                &apple_widevine_internal_url("1328749645", quality, Some(278)),
+                &mut progress,
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains("不会自动改为有损 AAC"));
+            let error = download_aac_fallback(
+                "1328749645",
+                quality,
+                Some(278),
+                &mut progress,
+                vec!["wrapper-lite：M4P".into(), "TCP wrapper：无 HLS".into()],
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains("wrapper-lite：M4P"));
+            assert!(error.to_string().contains("TCP wrapper：无 HLS"));
+        }
+        assert!(
+            updates.is_empty(),
+            "must reject before any download progress"
+        );
+    }
+
+    #[tokio::test]
+    async fn catalog_and_device_errors_survive_both_hls_lookup_orders() {
+        for quality in [AppleMusicQuality::High, AppleMusicQuality::HiRes] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap().to_string();
+            let responder = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let length = socket.read_u8().await.unwrap();
+                let mut id = vec![0; length as usize];
+                socket.read_exact(&mut id).await.unwrap();
+                assert_eq!(id, b"1328749645");
+                socket
+                    .write_all(b"https://example.test/audio.m4p?accessKey=TEST_SECRET\n")
+                    .await
+                    .unwrap();
+            });
+            let endpoint = AppleWrapperEndpoint {
+                index: None,
+                spec: address.clone(),
+                decrypt_addr: address.clone(),
+                m3u8_addr: address,
+            };
+            let mut catalog = Some(Err("catalog 没有 enhancedHls".into()));
+            let error = enhanced_hls_master_url(&endpoint, "1328749645", quality, &mut catalog)
+                .await
+                .unwrap_err()
+                .to_string();
+            responder.await.unwrap();
+            assert!(error.contains("catalog 没有 enhancedHls"));
+            assert!(error.contains("受保护的 M4P 文件"));
+            assert!(!error.contains("TEST_SECRET"));
+        }
+    }
+
+    fn webplayback_test_asset(flavor: &str, rate: i64, duration: i64) -> WebPlaybackAsset {
+        serde_json::from_value(serde_json::json!({
+            "URL": format!("https://example.test/{flavor}.m3u8"),
+            "flavor": flavor,
+            "metadata": { "bitRate": rate, "duration": duration },
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn widevine_selection_respects_quality_and_known_encryption_family() {
+        let assets = vec![
+            webplayback_test_asset("28:cbcp256", 256, 278_361),
+            webplayback_test_asset("28:ibhp256", 256, 278_361),
+            webplayback_test_asset("32:ctrp64", 64, 278_361),
+            webplayback_test_asset("28:ctrp256", 256, 278_361),
+        ];
+        assert_eq!(
+            select_widevine_asset(&assets, AppleMusicQuality::Standard, Some(278))
+                .unwrap()
+                .flavor
+                .as_deref(),
+            Some("32:ctrp64")
+        );
+        assert_eq!(
+            select_widevine_asset(&assets, AppleMusicQuality::High, Some(278))
+                .unwrap()
+                .flavor
+                .as_deref(),
+            Some("28:ctrp256")
+        );
+        for quality in [AppleMusicQuality::Lossless, AppleMusicQuality::HiRes] {
+            assert!(select_widevine_asset(&assets, quality, Some(278)).is_err());
+        }
+    }
+
+    #[test]
+    fn widevine_selection_ignores_fake_rates_and_prefers_full_assets() {
+        let assets = vec![
+            webplayback_test_asset("28:ctrp256", 256, 30_000),
+            webplayback_test_asset("32:ctrp64", 256_000_000, 278_361),
+            webplayback_test_asset("28:ctrp256", 256, 278_361),
+            webplayback_test_asset("28:ctrp128", 128, 278_361),
+            webplayback_test_asset("99:ctrp999999", 999_999, 278_361),
+        ];
+        assert!(std::ptr::eq(
+            select_widevine_asset(&assets, AppleMusicQuality::High, Some(278)).unwrap(),
+            &assets[2]
+        ));
+        assert!(std::ptr::eq(
+            select_widevine_asset(&assets, AppleMusicQuality::Standard, Some(278)).unwrap(),
+            &assets[3]
+        ));
+        let error = select_widevine_asset(&assets[..1], AppleMusicQuality::High, Some(278))
+            .err()
+            .unwrap();
+        assert!(is_apple_preview_error(&error));
+    }
+
+    #[test]
+    fn widevine_selection_rejects_non_hls_and_unknown_asset_types() {
+        let mut protected = webplayback_test_asset("28:ctrp256", 256, 278_361);
+        protected.url = "https://example.test/audio.m4p?accessKey=test".into();
+        let mut unknown = webplayback_test_asset("28:ctrp256", 256, 278_361);
+        unknown.flavor = None;
+        let assets = vec![
+            protected,
+            unknown,
+            webplayback_test_asset("28:cbcp256", 256, 278_361),
+        ];
+        assert!(select_widevine_asset(&assets, AppleMusicQuality::High, Some(278)).is_err());
+    }
+
+    #[test]
+    fn widevine_hls_duration_rejects_previews_even_when_asset_metadata_was_full() {
+        let error = validate_widevine_hls_duration("#EXTM3U\n#EXTINF:23.777,\na.m4a\n", Some(278))
+            .unwrap_err();
+        assert!(is_apple_preview_error(&error));
+        validate_widevine_hls_duration(
+            "#EXTM3U\n#EXTINF:140,\na.m4a\n#EXTINF:138.361,\na.m4a\n",
+            Some(278),
+        )
+        .unwrap();
+        // Some WebPlayback manifests omit EXTINF; retain the metadata check.
+        validate_widevine_hls_duration("#EXTM3U\n#EXT-X-MAP:URI=\"a.m4a\"", Some(278)).unwrap();
+        assert!(validate_widevine_hls_duration("#EXTINF:NaN,", Some(278)).is_err());
+        assert!(validate_widevine_hls_duration("#EXTINF:-1,", Some(278)).is_err());
+    }
+
+    #[test]
+    fn parses_slugless_apple_collection_and_song_links() {
+        assert_eq!(
+            parse_apple_track_id("https://music.apple.com/cn/song/1624001324/"),
+            Some("1624001324".into())
+        );
+        for path in [
+            "album/1624000713",
+            "album/1624000713/",
+            "album/name/1624000713/",
+        ] {
+            let collection =
+                parse_apple_collection_id(&format!("https://music.apple.com/cn/{path}")).unwrap();
+            assert_eq!(collection.kind, AppleCollectionKind::Album);
+            assert_eq!(collection.id, "1624000713");
+        }
+        let collection =
+            parse_apple_collection_id("https://music.apple.com/cn/playlist/pl.u-abc123DEF/")
+                .unwrap();
+        assert_eq!(collection.kind, AppleCollectionKind::Playlist);
+        assert_eq!(collection.id, "pl.u-abc123DEF");
+        assert!(
+            parse_apple_collection_id("https://music.apple.com/cn/album/1624000713/?i=1624001324")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live Apple catalog; no Telegram or download"]
+    async fn live_numeric_title_resolves_without_telegram() {
+        let direct = get_apple_song("123456").await;
+        assert!(matches!(
+            direct,
+            Err(BotError::AppleMusicApi {
+                status: reqwest::StatusCode::NOT_FOUND,
+                ..
+            })
+        ));
+        let track = resolve_with_quality("123456", None, "high").await.unwrap();
+        assert_ne!(track.id, "123456");
+        assert!(!track.song.is_empty());
+        eprintln!("123456 -> {} / {} / {}", track.id, track.song, track.singer);
+        assert!(
+            resolve_with_quality("123456", Some("123456"), "high")
+                .await
+                .is_err()
         );
     }
 
@@ -3742,6 +4452,34 @@ mod tests {
     }
 
     #[test]
+    fn parses_apple_web_search_results() {
+        let html = r#"
+            <div data-testid="top-search-result" aria-label="晴天 · 歌曲 · 周杰伦">
+              <a data-testid="click-action" href="https://music.apple.com/cn/album/x/535824731?i=535824738"></a>
+              <div data-testid="top-search-result-title">晴天</div>
+              <div data-testid="top-search-result-subtitle">歌曲 · 周杰伦</div>
+              <picture><source srcset="https://example.test/220x220.jpg 220w"></picture>
+            </div>
+            <div data-testid="top-search-result" aria-label="晴天 · 歌曲 · 周杰伦">
+              <a data-testid="click-action" href="https://music.apple.com/cn/album/x/535824731?i=535824738"></a>
+              <div data-testid="top-search-result-title">重复结果</div>
+            </div>
+            <div data-testid="top-search-result" aria-label="晴天 (Live) · 歌曲 · 周杰伦">
+              <a data-testid="click-action" href="https://music.apple.com/cn/album/x/535913600?i=535913714"></a>
+              <div data-testid="top-search-result-title">晴天 (Live)</div>
+              <div data-testid="top-search-result-subtitle">歌曲 · 周杰伦</div>
+            </div>
+        "#;
+        let items = parse_apple_web_search_results(html, 2).unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, "535824738");
+        assert_eq!(items[0].song, "晴天");
+        assert_eq!(items[0].singer, "周杰伦");
+        assert_eq!(items[0].cover, "https://example.test/220x220.jpg");
+        assert_eq!(items[1].id, "535913714");
+    }
+
+    #[test]
     fn extracts_media_user_token_from_cookie_string() {
         assert_eq!(
             normalize_media_user_token("foo=bar; media-user-token=token-value; baz=qux"),
@@ -3780,10 +4518,7 @@ mod tests {
         let asset = WebPlaybackAsset {
             url: "https://example.test/preview.m3u8".to_string(),
             flavor: Some("28:ctrp256".to_string()),
-            metadata: WebPlaybackMetadata {
-                bit_rate: 256,
-                duration: 23_777,
-            },
+            metadata: WebPlaybackMetadata { duration: 23_777 },
         };
         let err = validate_webplayback_asset_duration(&asset, Some(232))
             .expect_err("preview asset should be rejected");

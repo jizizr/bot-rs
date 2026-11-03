@@ -12,7 +12,7 @@ use crate::{
             },
         },
         mysql::music_cache::{
-            MusicCache, delete_cache as delete_music_cache, find_cache as find_music_cache,
+            MusicCache, delete_cache as delete_music_cache, find_cache as find_stored_music_cache,
             find_cache_by_file_id, upsert_cache as upsert_music_cache,
         },
     },
@@ -32,8 +32,8 @@ use std::{
     time::{Duration, Instant},
 };
 use teloxide::types::{
-    ChatId, ChosenInlineResult, InlineQuery, InputMedia, InputMediaAudio, InputMediaDocument,
-    MaybeInaccessibleMessage,
+    ChatId, ChosenInlineResult, InlineKeyboardButtonKind, InlineQuery, InputMedia, InputMediaAudio,
+    InputMediaDocument, MaybeInaccessibleMessage,
 };
 use tokio::{sync::mpsc, task::JoinHandle};
 use url::Url;
@@ -46,11 +46,13 @@ mod provider;
 mod queue;
 mod ratelimit;
 mod soda;
+mod telegram_audio;
 mod tencent;
 mod youtubemusic;
 
 const CALLBACK_PREFIX: &str = "music";
 const CALLBACK_LIMIT: usize = 64;
+const MUSIC_PANEL_OWNER_NOTICE: &str = "这是其他用户的音乐面板，请发送 /music 打开自己的面板";
 const MUSIC_PLATFORM_OPTIONS: &[(&str, &str)] = &[
     ("soda", "汽水"),
     ("tencent", "QQ音乐"),
@@ -82,10 +84,10 @@ cmd!(
     "获取音乐",
     MusicCmd ,
     {
-        ///子命令：search 搜索候选，get 直接下载；省略时兼容旧用法
+        ///子命令：search 搜索候选，get 直接下载
         #[command(subcommand)]
         command: Option<MusicSubcommand>,
-        ///兼容旧用法：/music 歌名 或 /music qq 歌名
+        ///歌曲名、链接或 ID；不填写时打开音乐平台面板
         #[arg(required = false, num_args = 1.., trailing_var_arg = true)]
         query: Vec<String>,
     }
@@ -99,7 +101,7 @@ enum MusicSubcommand {
     ///直接下载第一首或指定 ID/链接
     #[command(alias = "download", alias = "dl")]
     Get(MusicGetCmd),
-    ///设置默认平台、Apple Music 音质和封面
+    ///设置默认平台、音质、封面和歌词文字
     #[command(alias = "settings")]
     Setting,
     ///查看收藏列表
@@ -115,9 +117,6 @@ enum MusicSubcommand {
 
 #[derive(Clone, Debug, clap::Args)]
 struct MusicSearchCmd {
-    ///音乐平台：qq/tencent/netease/163/kugou/bilibili/soda/applemusic/youtubemusic
-    #[arg(short, long)]
-    platform: Option<String>,
     ///音乐名、链接或 ID
     #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
     query: Vec<String>,
@@ -125,9 +124,6 @@ struct MusicSearchCmd {
 
 #[derive(Clone, Debug, clap::Args)]
 struct MusicGetCmd {
-    ///音乐平台：qq/tencent/netease/163/kugou/bilibili/soda/applemusic/youtubemusic
-    #[arg(short, long)]
-    platform: Option<String>,
     ///音乐名、链接或 ID
     #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
     query: Vec<String>,
@@ -142,9 +138,6 @@ struct MusicFavoriteCmd {
 
 #[derive(Clone, Debug, clap::Args)]
 struct MusicCollectionCmd {
-    ///音乐平台：qq/tencent/netease/163/kugou/bilibili/soda/applemusic/youtubemusic
-    #[arg(short, long)]
-    platform: Option<String>,
     ///歌单或专辑链接/ID
     #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
     query: Vec<String>,
@@ -177,6 +170,10 @@ enum MusicCallbackAction {
     },
     Favorite(MusicFavoriteAction),
     Setting(MusicSettingAction),
+    Panel {
+        requester_id: i64,
+        action: MusicPanelAction,
+    },
     /// 下载队列状态弹窗（常量负载，无状态自描述回调）
     QueueStatus,
     Close,
@@ -261,6 +258,77 @@ enum MusicSettingAction {
     Quality(String),
     Cover(bool),
     LyricScript(String),
+}
+
+impl MusicSettingAction {
+    fn encode(&self) -> String {
+        match self {
+            Self::Platform(value) => format!("platform {value}"),
+            Self::Quality(value) => format!("quality {value}"),
+            Self::Cover(enabled) => format!("cover {}", if *enabled { "on" } else { "off" }),
+            Self::LyricScript(value) => format!("lyric_script {value}"),
+        }
+    }
+
+    fn decode(payload: &str) -> Result<Self, BotError> {
+        let invalid = || BotError::Custom("Unknown music setting data".to_string());
+        let (action, value) = payload.split_once(' ').ok_or_else(invalid)?;
+        if !is_callback_token(value) {
+            return Err(invalid());
+        }
+        match action {
+            "platform" => Ok(Self::Platform(value.to_string())),
+            "quality" => Ok(Self::Quality(value.to_string())),
+            "cover" if value == "on" || value == "off" => Ok(Self::Cover(value == "on")),
+            "lyric_script" => Ok(Self::LyricScript(value.to_string())),
+            _ => Err(invalid()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MusicPanelView {
+    Platforms,
+    Settings,
+}
+
+#[derive(Clone, Debug)]
+enum MusicPanelAction {
+    Show(MusicPanelView),
+    Platform(MusicPlatform),
+    Setting(MusicSettingAction),
+    Close,
+}
+
+impl MusicPanelAction {
+    fn encode(&self) -> String {
+        match self {
+            Self::Show(MusicPanelView::Platforms) => "home".to_string(),
+            Self::Show(MusicPanelView::Settings) => "settings".to_string(),
+            Self::Platform(platform) => format!("platform {}", platform.callback_code()),
+            Self::Setting(action) => format!("setting {}", action.encode()),
+            Self::Close => "close".to_string(),
+        }
+    }
+
+    fn decode(payload: &str) -> Result<Self, BotError> {
+        match payload {
+            "home" => Ok(Self::Show(MusicPanelView::Platforms)),
+            "settings" => Ok(Self::Show(MusicPanelView::Settings)),
+            "close" => Ok(Self::Close),
+            _ => {
+                if let Some(value) = payload.strip_prefix("platform ")
+                    && let Some(platform) = MusicPlatform::from_callback_code(value)
+                {
+                    return Ok(Self::Platform(platform));
+                }
+                if let Some(value) = payload.strip_prefix("setting ") {
+                    return MusicSettingAction::decode(value).map(Self::Setting);
+                }
+                Err(BotError::Custom("Unknown music panel action".to_string()))
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -374,21 +442,18 @@ impl MusicCallbackAction {
                 )
             }
             MusicCallbackAction::Favorite(action) => action.encode()?,
-            MusicCallbackAction::Setting(action) => match action {
-                MusicSettingAction::Platform(platform) => {
-                    format!("{CALLBACK_PREFIX} setting platform {platform}")
+            MusicCallbackAction::Setting(action) => {
+                format!("{CALLBACK_PREFIX} setting {}", action.encode())
+            }
+            MusicCallbackAction::Panel {
+                requester_id,
+                action,
+            } => {
+                if *requester_id <= 0 {
+                    return None;
                 }
-                MusicSettingAction::Quality(quality) => {
-                    format!("{CALLBACK_PREFIX} setting quality {quality}")
-                }
-                MusicSettingAction::Cover(enabled) => format!(
-                    "{CALLBACK_PREFIX} setting cover {}",
-                    if *enabled { "on" } else { "off" }
-                ),
-                MusicSettingAction::LyricScript(script) => {
-                    format!("{CALLBACK_PREFIX} setting lyric_script {script}")
-                }
-            },
+                format!("{CALLBACK_PREFIX} panel {requester_id} {}", action.encode())
+            }
             MusicCallbackAction::QueueStatus => format!("{CALLBACK_PREFIX} queue"),
             MusicCallbackAction::Close => format!("{CALLBACK_PREFIX} close"),
         };
@@ -405,27 +470,19 @@ impl MusicCallbackAction {
             .next()
             .ok_or_else(|| BotError::Custom("Unknown music callback".to_string()))?;
         if action == "setting" {
-            let setting_action = parts
-                .next()
-                .ok_or_else(|| BotError::Custom("Unknown music setting action".to_string()))?;
-            let value = parts
-                .next()
-                .ok_or_else(|| BotError::Custom("Unknown music setting data".to_string()))?;
-            return match setting_action {
-                "platform" => Ok(MusicCallbackAction::Setting(MusicSettingAction::Platform(
-                    value.to_string(),
-                ))),
-                "quality" => Ok(MusicCallbackAction::Setting(MusicSettingAction::Quality(
-                    value.to_string(),
-                ))),
-                "cover" => Ok(MusicCallbackAction::Setting(MusicSettingAction::Cover(
-                    value == "on",
-                ))),
-                "lyric_script" => Ok(MusicCallbackAction::Setting(
-                    MusicSettingAction::LyricScript(value.to_string()),
-                )),
-                _ => Err(BotError::Custom("Unknown music setting action".to_string())),
-            };
+            return MusicSettingAction::decode(payload.strip_prefix("setting ").unwrap_or(""))
+                .map(MusicCallbackAction::Setting);
+        }
+        if action == "panel" {
+            let requester_id = parse_callback_i64(parts.next(), "Invalid music panel owner")?;
+            if requester_id <= 0 {
+                return Err(BotError::Custom("Invalid music panel owner".to_string()));
+            }
+            let action = MusicPanelAction::decode(parts.next().unwrap_or(""))?;
+            return Ok(MusicCallbackAction::Panel {
+                requester_id,
+                action,
+            });
         }
         if action == "fav" {
             let value = payload
@@ -740,21 +797,38 @@ fn music_settings_text(settings: &UserMusicSettings) -> String {
 }
 
 fn music_settings_menu(settings: &UserMusicSettings) -> InlineKeyboardMarkup {
+    music_settings_menu_with_owner(settings, None)
+}
+
+fn music_settings_menu_with_owner(
+    settings: &UserMusicSettings,
+    requester_id: Option<i64>,
+) -> InlineKeyboardMarkup {
     let mut keyboard: Vec<Vec<InlineKeyboardButton>> = Vec::new();
+    let encode_setting = |action| {
+        match requester_id {
+            Some(requester_id) => MusicCallbackAction::Panel {
+                requester_id,
+                action: MusicPanelAction::Setting(action),
+            },
+            None => MusicCallbackAction::Setting(action),
+        }
+        .encode()
+    };
 
     for chunk in MUSIC_PLATFORM_OPTIONS.chunks(3) {
         keyboard.push(
             chunk
                 .iter()
                 .filter_map(|(value, label)| {
-                    MusicCallbackAction::Setting(MusicSettingAction::Platform(value.to_string()))
-                        .encode()
-                        .map(|callback| {
+                    encode_setting(MusicSettingAction::Platform(value.to_string())).map(
+                        |callback| {
                             InlineKeyboardButton::callback(
                                 selected_label(label, settings.default_platform == *value),
                                 callback,
                             )
-                        })
+                        },
+                    )
                 })
                 .collect(),
         );
@@ -764,21 +838,17 @@ fn music_settings_menu(settings: &UserMusicSettings) -> InlineKeyboardMarkup {
         MUSIC_QUALITY_OPTIONS
             .iter()
             .filter_map(|(value, label)| {
-                MusicCallbackAction::Setting(MusicSettingAction::Quality(value.to_string()))
-                    .encode()
-                    .map(|callback| {
-                        InlineKeyboardButton::callback(
-                            selected_label(label, settings.quality == *value),
-                            callback,
-                        )
-                    })
+                encode_setting(MusicSettingAction::Quality(value.to_string())).map(|callback| {
+                    InlineKeyboardButton::callback(
+                        selected_label(label, settings.quality == *value),
+                        callback,
+                    )
+                })
             })
             .collect(),
     );
 
-    if let Some(callback) =
-        MusicCallbackAction::Setting(MusicSettingAction::Cover(!settings.send_cover)).encode()
-    {
+    if let Some(callback) = encode_setting(MusicSettingAction::Cover(!settings.send_cover)) {
         keyboard.push(vec![InlineKeyboardButton::callback(
             format!("发送封面 {}", if settings.send_cover { "✅" } else { "❌" }),
             callback,
@@ -789,19 +859,94 @@ fn music_settings_menu(settings: &UserMusicSettings) -> InlineKeyboardMarkup {
         MUSIC_LYRIC_SCRIPT_OPTIONS
             .iter()
             .filter_map(|(value, label)| {
-                MusicCallbackAction::Setting(MusicSettingAction::LyricScript(value.to_string()))
-                    .encode()
-                    .map(|callback| {
-                        InlineKeyboardButton::callback(
-                            selected_label(label, settings.lyric_script == *value),
-                            callback,
-                        )
-                    })
+                encode_setting(MusicSettingAction::LyricScript(value.to_string())).map(|callback| {
+                    InlineKeyboardButton::callback(
+                        selected_label(label, settings.lyric_script == *value),
+                        callback,
+                    )
+                })
             })
             .collect(),
     );
 
     InlineKeyboardMarkup::new(keyboard)
+}
+
+fn music_panel_text(settings: &UserMusicSettings, view: MusicPanelView) -> String {
+    match view {
+        MusicPanelView::Platforms => format!(
+            "音乐\n\n默认平台：{}\n默认音质：{}",
+            platform_label(&settings.default_platform),
+            quality_label(&settings.quality),
+        ),
+        MusicPanelView::Settings => music_settings_text(settings),
+    }
+}
+
+fn music_panel_menu(settings: &UserMusicSettings, view: MusicPanelView) -> InlineKeyboardMarkup {
+    let button = |label: String, action| {
+        MusicCallbackAction::Panel {
+            requester_id: settings.user_id,
+            action,
+        }
+        .encode()
+        .map(|callback| InlineKeyboardButton::callback(label, callback))
+    };
+    let mut keyboard = match view {
+        MusicPanelView::Platforms => {
+            let current = settings_platform(settings);
+            let mut rows = Vec::new();
+            if let Some(current_button) = button(
+                selected_label(current.label(), true),
+                MusicPanelAction::Platform(current),
+            ) {
+                rows.push(vec![current_button]);
+            }
+            let others = MUSIC_PLATFORM_OPTIONS
+                .iter()
+                .filter_map(|(id, label)| {
+                    let platform = MusicPlatform::from_alias(id)?;
+                    (platform != current)
+                        .then(|| button(label.to_string(), MusicPanelAction::Platform(platform)))?
+                })
+                .collect::<Vec<_>>();
+            rows.extend(others.chunks(2).map(<[_]>::to_vec));
+            rows
+        }
+        MusicPanelView::Settings => {
+            music_settings_menu_with_owner(settings, Some(settings.user_id)).inline_keyboard
+        }
+    };
+    let (label, destination) = match view {
+        MusicPanelView::Platforms => ("更多设置", MusicPanelView::Settings),
+        MusicPanelView::Settings => ("返回", MusicPanelView::Platforms),
+    };
+    keyboard.push(
+        [
+            button(label.to_string(), MusicPanelAction::Show(destination)),
+            button("关闭".to_string(), MusicPanelAction::Close),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+    );
+    InlineKeyboardMarkup::new(keyboard)
+}
+
+fn music_panel_owner(msg: &Message) -> Option<i64> {
+    msg.reply_markup()?
+        .inline_keyboard
+        .iter()
+        .flatten()
+        .find_map(|button| {
+            let InlineKeyboardButtonKind::CallbackData(data) = &button.kind else {
+                return None;
+            };
+            match MusicCallbackAction::decode(data).ok()? {
+                MusicCallbackAction::Panel { requester_id, .. } => Some(requester_id),
+                _ => None,
+            }
+        })
 }
 
 fn inline_music_settings_menu(settings: &UserMusicSettings) -> InlineKeyboardMarkup {
@@ -844,17 +989,37 @@ fn lyric_script_label(value: &str) -> &'static str {
         .unwrap_or("简体")
 }
 
-async fn send_music_settings(bot: &Bot, msg: &Message, settings: &UserMusicSettings) -> BotResult {
-    bot.send_message(msg.chat.id, music_settings_text(settings))
+async fn send_music_panel(
+    bot: &Bot,
+    msg: &Message,
+    settings: &UserMusicSettings,
+    view: MusicPanelView,
+) -> BotResult {
+    if settings.user_id <= 0 {
+        return Err(BotError::Custom(
+            "无法识别用户，请使用个人账号打开音乐设置".to_string(),
+        ));
+    }
+    bot.send_message(msg.chat.id, music_panel_text(settings, view))
         .reply_parameters(ReplyParameters::new(msg.id))
-        .reply_markup(music_settings_menu(settings))
+        .reply_markup(music_panel_menu(settings, view))
         .await?;
     Ok(())
 }
 
-async fn edit_music_settings(bot: &Bot, msg: &Message, settings: &UserMusicSettings) -> BotResult {
-    bot.edit_message_text(msg.chat.id, msg.id, music_settings_text(settings))
-        .reply_markup(music_settings_menu(settings))
+async fn edit_music_panel(
+    bot: &Bot,
+    msg: &Message,
+    settings: &UserMusicSettings,
+    view: MusicPanelView,
+) -> BotResult {
+    let text = music_panel_text(settings, view);
+    let markup = music_panel_menu(settings, view);
+    if msg.text() == Some(text.as_str()) && msg.reply_markup() == Some(&markup) {
+        return Ok(());
+    }
+    bot.edit_message_text(msg.chat.id, msg.id, text)
+        .reply_markup(markup)
         .await?;
     Ok(())
 }
@@ -1057,6 +1222,7 @@ async fn handle_setting_callback(
     msg: &Message,
     user_id: i64,
     action: MusicSettingAction,
+    view: MusicPanelView,
 ) -> BotResult {
     let mut settings = match get_user_settings(user_id).await {
         Ok(settings) => settings,
@@ -1086,11 +1252,53 @@ async fn handle_setting_callback(
         bot.answer_callback_query(callback_id.to_string())
             .text(response_text)
             .await?;
-        edit_music_settings(bot, msg, &settings).await?;
     } else {
         bot.answer_callback_query(callback_id.to_string()).await?;
     }
-    Ok(())
+    edit_music_panel(bot, msg, &settings, view).await
+}
+
+async fn handle_music_panel_callback(
+    bot: &Bot,
+    callback_id: &str,
+    msg: &Message,
+    user_id: i64,
+    action: MusicPanelAction,
+) -> BotResult {
+    match action {
+        MusicPanelAction::Show(view) => {
+            bot.answer_callback_query(callback_id.to_string()).await?;
+            let settings = get_user_settings(user_id).await?;
+            edit_music_panel(bot, msg, &settings, view).await
+        }
+        MusicPanelAction::Platform(platform) => {
+            handle_setting_callback(
+                bot,
+                callback_id,
+                msg,
+                user_id,
+                MusicSettingAction::Platform(platform.id().to_string()),
+                MusicPanelView::Platforms,
+            )
+            .await
+        }
+        MusicPanelAction::Setting(action) => {
+            handle_setting_callback(
+                bot,
+                callback_id,
+                msg,
+                user_id,
+                action,
+                MusicPanelView::Settings,
+            )
+            .await
+        }
+        MusicPanelAction::Close => {
+            bot.answer_callback_query(callback_id.to_string()).await?;
+            bot.delete_message(msg.chat.id, msg.id).await?;
+            Ok(())
+        }
+    }
 }
 
 async fn handle_inline_setting_callback(
@@ -1502,8 +1710,22 @@ async fn send_cached_track(
     .await
 }
 
+async fn find_music_cache(
+    platform: &str,
+    track_id: &str,
+    quality: &str,
+) -> Result<Option<MusicCache>, BotError> {
+    let quality = MusicPlatform::from_alias(platform)
+        .map(|platform| telegram_audio::cache_quality(platform, quality))
+        .unwrap_or_else(|| quality.to_string());
+    find_stored_music_cache(platform, track_id, &quality).await
+}
+
 async fn delete_music_cache_best_effort(platform: &str, track_id: &str, quality: &str) {
-    if let Err(err) = delete_music_cache(platform, track_id, quality).await {
+    let quality = MusicPlatform::from_alias(platform)
+        .map(|platform| telegram_audio::cache_quality(platform, quality))
+        .unwrap_or_else(|| quality.to_string());
+    if let Err(err) = delete_music_cache(platform, track_id, &quality).await {
         log::warn!("failed to delete music cache: {err}");
     }
 }
@@ -1543,7 +1765,7 @@ async fn save_track_cache_for_context(
     let cache = MusicCache {
         platform: track.platform.id().to_string(),
         track_id: track.id.clone(),
-        quality: quality.to_string(),
+        quality: telegram_audio::cache_quality(track.platform, quality),
         song: track.song.clone(),
         singer: track.singer.clone(),
         album: track.album.clone(),
@@ -1638,7 +1860,7 @@ async fn get_music(
     settings: &UserMusicSettings,
 ) -> Result<(), BotError> {
     let user_id = user_id_from_message(msg);
-    let track = resolve_track(&query, None, settings).await?;
+    let mut track = resolve_track(&query, None, settings).await?;
     if try_send_cached_track(
         bot,
         msg,
@@ -1690,12 +1912,8 @@ async fn get_music(
     };
     let (mut progress, progress_task) =
         download_progress_updater(bot.clone(), status_msg, track.song.clone());
-    let media_result = provider::download_track_media_with_cover_progress(
-        &track,
-        settings.send_cover,
-        &mut progress,
-    )
-    .await;
+    let media_result =
+        download_telegram_media_with_progress(&mut track, settings.send_cover, &mut progress).await;
     drop(progress);
     progress_task.abort();
     let _ = progress_task.await;
@@ -2256,7 +2474,7 @@ async fn run_inline_send_flow_inner(
     if try_edit_inline_cached_track_by_id(bot, inline_message_id, platform, id, quality).await? {
         return Ok(());
     }
-    let track = resolve_track(&query, Some(id), &settings).await?;
+    let mut track = resolve_track(&query, Some(id), &settings).await?;
     // tencent 可能把数字 id 规范化成 mid，缓存行可能以规范化后的 id 存储，因此解析后再查一次
     if try_edit_inline_cached_track(bot, inline_message_id, &track, quality).await? {
         return Ok(());
@@ -2294,12 +2512,8 @@ async fn run_inline_send_flow_inner(
         inline_message_id.to_string(),
         track.song.clone(),
     );
-    let media_result = provider::download_track_media_with_cover_progress(
-        &track,
-        settings.send_cover,
-        &mut progress,
-    )
-    .await;
+    let media_result =
+        download_telegram_media_with_progress(&mut track, settings.send_cover, &mut progress).await;
     drop(progress);
     progress_task.abort();
     let _ = progress_task.await;
@@ -3312,7 +3526,7 @@ async fn get_callback_music(
         .await?;
         return Ok(());
     }
-    let track = resolve_track(&query, Some(id), settings).await?;
+    let mut track = resolve_track(&query, Some(id), settings).await?;
     // tencent 可能把数字 id 规范化成 mid，缓存行可能以规范化后的 id 存储，因此解析后再查一次
     if try_send_cached_track(
         &bot,
@@ -3366,12 +3580,8 @@ async fn get_callback_music(
     };
     let (mut progress, progress_task) =
         download_progress_updater(bot.clone(), &msg, track.song.clone());
-    let media_result = provider::download_track_media_with_cover_progress(
-        &track,
-        settings.send_cover,
-        &mut progress,
-    )
-    .await;
+    let media_result =
+        download_telegram_media_with_progress(&mut track, settings.send_cover, &mut progress).await;
     drop(progress);
     progress_task.abort();
     let _ = progress_task.await;
@@ -3395,6 +3605,20 @@ async fn get_callback_music(
     }
     delete_callback_status(&bot, &msg, done).await?;
     Ok(())
+}
+
+async fn download_telegram_media_with_progress<F>(
+    track: &mut MusicTrack,
+    include_cover: bool,
+    progress: &mut F,
+) -> Result<MusicMedia, BotError>
+where
+    F: FnMut(DownloadProgress) + Send,
+{
+    let mut media =
+        provider::download_track_media_with_cover_progress(track, include_cover, progress).await?;
+    telegram_audio::prepare(track, &mut media).await?;
+    Ok(media)
 }
 
 fn download_progress_updater(
@@ -3637,6 +3861,15 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
                 return Err(e);
             }
         };
+        if let MusicCallbackAction::Panel { requester_id, .. } = &action
+            && *requester_id != user_id
+        {
+            bot.answer_callback_query(callback_id)
+                .text(MUSIC_PANEL_OWNER_NOTICE)
+                .show_alert(true)
+                .await?;
+            return Ok(());
+        }
         let action = match action {
             // 队列状态与消息上下文无关（inline 与普通消息都可点），直接弹窗返回
             MusicCallbackAction::QueueStatus => {
@@ -3755,6 +3988,15 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
                 MaybeInaccessibleMessage::Regular(msg) => msg,
             },
         };
+        // A client can forge callback data, so also check the bot-generated
+        // keyboard rather than trusting the owner encoded in the click alone.
+        if music_panel_owner(&msg).is_some_and(|owner| owner != user_id) {
+            bot.answer_callback_query(callback_id)
+                .text(MUSIC_PANEL_OWNER_NOTICE)
+                .show_alert(true)
+                .await?;
+            return Ok(());
+        }
         let lock_flag = hashing((msg.chat.id, msg.id));
         if LIMITER.is_running(lock_flag) {
             bot.answer_callback_query(callback_id)
@@ -3763,9 +4005,14 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
             return Ok(());
         }
         let _guard = Guard::new(&LIMITER, lock_flag);
+        let preserve_panel = matches!(
+            &action,
+            MusicCallbackAction::Panel { .. } | MusicCallbackAction::Setting(_)
+        );
         if !matches!(
             action,
             MusicCallbackAction::Setting(_)
+                | MusicCallbackAction::Panel { .. }
                 | MusicCallbackAction::Favorite(_)
                 | MusicCallbackAction::Lyrics(_, _, _)
                 | MusicCallbackAction::InlineLyrics(_, _, _)
@@ -3825,7 +4072,18 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
                 .await
             }
             MusicCallbackAction::Setting(action) => {
-                handle_setting_callback(&bot, &callback_id, &msg, user_id, action).await
+                handle_setting_callback(
+                    &bot,
+                    &callback_id,
+                    &msg,
+                    user_id,
+                    action,
+                    MusicPanelView::Settings,
+                )
+                .await
+            }
+            MusicCallbackAction::Panel { action, .. } => {
+                handle_music_panel_callback(&bot, &callback_id, &msg, user_id, action).await
             }
             MusicCallbackAction::Close => {
                 let _ = bot.delete_message(msg.chat.id, msg.id).await;
@@ -3838,7 +4096,7 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
         };
         if let Err(e) = result {
             // 限流/排队等瞬时拒绝（Busy）只弹提示，不能抹掉消息里已有的菜单
-            if !matches!(e, BotError::Busy(_)) && message_has_text(&msg) {
+            if !preserve_panel && !matches!(e, BotError::Busy(_)) && message_has_text(&msg) {
                 let _ = edit_callback_status(&bot, &msg, format!("{e}")).await;
             }
             let _ = bot
@@ -4038,7 +4296,12 @@ pub async fn music(bot: &Bot, msg: &Message) -> BotResult {
     let action = MusicAction::from_cmd(music, &settings)?;
 
     let query = match action {
-        MusicAction::Setting => return send_music_settings(bot, msg, &settings).await,
+        MusicAction::Platforms => {
+            return send_music_panel(bot, msg, &settings, MusicPanelView::Platforms).await;
+        }
+        MusicAction::Setting => {
+            return send_music_panel(bot, msg, &settings, MusicPanelView::Settings).await;
+        }
         MusicAction::Queue => return send_queue_status(bot, msg).await,
         MusicAction::Favorite(scope) => {
             return send_music_favorites(bot, msg, user_id_from_message(msg), scope).await;
@@ -4117,6 +4380,7 @@ pub async fn comment_buttons(bot: &Bot, msg: &Message) -> BotResult {
 enum MusicAction {
     Get(MusicQuery),
     Search(MusicQuery),
+    Platforms,
     Setting,
     Favorite(FavoriteScope),
     Collection(MusicQuery),
@@ -4127,32 +4391,21 @@ impl MusicAction {
     fn from_cmd(cmd: MusicCmd, settings: &UserMusicSettings) -> Result<Self, BotError> {
         let default_platform = settings_platform(settings);
         match cmd.command {
-            Some(MusicSubcommand::Search(search)) => {
-                let platform =
-                    parse_optional_platform(search.platform.as_deref(), default_platform)?;
-                Ok(Self::Search(provider::build_query_with_platform(
-                    platform,
-                    &search.query,
-                )?))
-            }
-            Some(MusicSubcommand::Get(get)) => {
-                let platform = parse_optional_platform(get.platform.as_deref(), default_platform)?;
-                Ok(Self::Get(provider::build_query_with_platform(
-                    platform, &get.query,
-                )?))
-            }
+            Some(MusicSubcommand::Search(search)) => Ok(Self::Search(
+                provider::build_query_with_platform(default_platform, &search.query)?,
+            )),
+            Some(MusicSubcommand::Get(get)) => Ok(Self::Get(provider::build_query_with_platform(
+                default_platform,
+                &get.query,
+            )?)),
             Some(MusicSubcommand::Setting) => Ok(Self::Setting),
             Some(MusicSubcommand::Queue) => Ok(Self::Queue),
             Some(MusicSubcommand::Favorite(favorite)) => Ok(Self::Favorite(favorite.scope.into())),
-            Some(MusicSubcommand::Collection(collection)) => {
-                let platform =
-                    parse_optional_platform(collection.platform.as_deref(), default_platform)?;
-                Ok(Self::Collection(provider::build_query_with_platform(
-                    platform,
-                    &collection.query,
-                )?))
-            }
-            None => Ok(Self::Get(provider::build_legacy_query_with_default(
+            Some(MusicSubcommand::Collection(collection)) => Ok(Self::Collection(
+                provider::build_query_with_platform(default_platform, &collection.query)?,
+            )),
+            None if cmd.query.is_empty() => Ok(Self::Platforms),
+            None => Ok(Self::Get(provider::build_query_with_platform(
                 default_platform,
                 &cmd.query,
             )?)),
@@ -4160,22 +4413,11 @@ impl MusicAction {
     }
 }
 
-fn parse_optional_platform(
-    platform_alias: Option<&str>,
-    default_platform: MusicPlatform,
-) -> Result<MusicPlatform, BotError> {
-    match platform_alias {
-        Some(platform_alias) => MusicPlatform::from_alias(platform_alias)
-            .ok_or_else(|| BotError::Custom(format!("暂不支持音乐平台：{platform_alias}"))),
-        None => Ok(default_platform),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use image::{ImageBuffer, ImageFormat, Rgb};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
     fn test_settings(default_platform: &str) -> UserMusicSettings {
         UserMusicSettings {
@@ -4188,68 +4430,58 @@ mod tests {
     }
 
     #[test]
-    fn parses_platform_prefix() {
-        let args = vec!["qq".to_string(), "晴天".to_string()];
-        let query = provider::build_legacy_query(&args).unwrap();
-        assert_eq!(query.platform, MusicPlatform::Tencent);
-        assert_eq!(query.keyword, "晴天");
+    fn bare_music_opens_platform_panel() {
+        let cmd = MusicCmd::parse_i18n_from_bot(["/music"], Some("zh-CN")).unwrap();
+        assert!(matches!(
+            MusicAction::from_cmd(cmd, &test_settings("applemusic")).unwrap(),
+            MusicAction::Platforms
+        ));
     }
 
     #[test]
-    fn parses_youtube_music_platform_alias() {
-        let args = vec!["ytm".to_string(), "Lemon".to_string()];
-        let query = provider::build_legacy_query(&args).unwrap();
-        assert_eq!(query.platform, MusicPlatform::YouTubeMusic);
-        assert_eq!(query.keyword, "Lemon");
-        assert_eq!(
-            MusicPlatform::from_callback_code("y"),
-            Some(MusicPlatform::YouTubeMusic)
-        );
+    fn platform_names_in_song_queries_do_not_override_default() {
+        for keyword in ["qq", "网易云", "ytm", "#qq"] {
+            let cmd =
+                MusicCmd::parse_i18n_from_bot(["/music", keyword, "晴天"], Some("zh-CN")).unwrap();
+            let MusicAction::Get(query) =
+                MusicAction::from_cmd(cmd, &test_settings("applemusic")).unwrap()
+            else {
+                panic!("expected get action");
+            };
+            assert_eq!(query.platform, MusicPlatform::AppleMusic);
+            assert_eq!(query.keyword, format!("{keyword} 晴天"));
+        }
     }
 
     #[test]
-    fn parses_platform_flag() {
-        let cmd = MusicCmd::parse_i18n_from_bot(
-            ["/music", "get", "-p", "qqmusic", "夜曲"],
-            Some("zh-CN"),
-        )
-        .unwrap();
-        let MusicAction::Get(query) =
-            MusicAction::from_cmd(cmd, &test_settings("tencent")).unwrap()
-        else {
-            panic!("expected get action");
-        };
-        assert_eq!(query.platform, MusicPlatform::Tencent);
-        assert_eq!(query.keyword, "夜曲");
+    fn music_commands_reject_platform_flags() {
+        for command in [None, Some("get"), Some("search"), Some("collection")] {
+            for flag in ["-p", "--platform"] {
+                let mut args = vec!["/music"];
+                args.extend(command);
+                args.extend([flag, "netease", "晴天"]);
+                assert!(MusicCmd::parse_i18n_from_bot(args, Some("zh-CN")).is_err());
+            }
+        }
     }
 
     #[test]
-    fn parses_search_subcommand() {
-        let cmd = MusicCmd::parse_i18n_from_bot(
-            ["/music", "search", "--platform", "netease", "稻香"],
-            Some("zh-CN"),
-        )
-        .unwrap();
-        let MusicAction::Search(query) =
-            MusicAction::from_cmd(cmd, &test_settings("tencent")).unwrap()
-        else {
-            panic!("expected search action");
-        };
-        assert_eq!(query.platform, MusicPlatform::Netease);
-        assert_eq!(query.keyword, "稻香");
-    }
-
-    #[test]
-    fn omitted_subcommand_platform_uses_user_default() {
-        let cmd =
-            MusicCmd::parse_i18n_from_bot(["/music", "search", "稻香"], Some("zh-CN")).unwrap();
-        let MusicAction::Search(query) =
-            MusicAction::from_cmd(cmd, &test_settings("netease")).unwrap()
-        else {
-            panic!("expected search action");
-        };
-        assert_eq!(query.platform, MusicPlatform::Netease);
-        assert_eq!(query.keyword, "稻香");
+    fn music_commands_use_saved_default_platform() {
+        for command in [None, Some("get"), Some("search"), Some("collection")] {
+            let mut args = vec!["/music"];
+            args.extend(command);
+            args.push("稻香");
+            let cmd = MusicCmd::parse_i18n_from_bot(args, Some("zh-CN")).unwrap();
+            let action = MusicAction::from_cmd(cmd, &test_settings("netease")).unwrap();
+            let query = match (command, action) {
+                (None | Some("get"), MusicAction::Get(query))
+                | (Some("search"), MusicAction::Search(query))
+                | (Some("collection"), MusicAction::Collection(query)) => query,
+                _ => panic!("unexpected music action"),
+            };
+            assert_eq!(query.platform, MusicPlatform::Netease);
+            assert_eq!(query.keyword, "稻香");
+        }
     }
 
     #[test]
@@ -4281,23 +4513,203 @@ mod tests {
     }
 
     #[test]
-    fn parses_netease_alias() {
-        let args = vec!["网易云".to_string(), "稻香".to_string()];
-        let query = provider::build_legacy_query(&args).unwrap();
-        assert_eq!(query.platform, MusicPlatform::Netease);
-        assert_eq!(query.keyword, "稻香");
+    fn parses_added_provider_aliases() {
+        for (alias, platform) in [
+            ("kugou", MusicPlatform::Kugou),
+            ("bilibili", MusicPlatform::Bilibili),
+            ("汽水", MusicPlatform::Soda),
+            ("applemusic", MusicPlatform::AppleMusic),
+            ("网易云", MusicPlatform::Netease),
+            ("ytm", MusicPlatform::YouTubeMusic),
+        ] {
+            assert_eq!(MusicPlatform::from_alias(alias), Some(platform));
+            assert_eq!(
+                MusicPlatform::from_callback_code(platform.callback_code()),
+                Some(platform)
+            );
+        }
     }
 
     #[test]
-    fn parses_added_provider_aliases() {
-        let kugou = provider::build_query("kugou", &["晴天".to_string()]).unwrap();
-        assert_eq!(kugou.platform, MusicPlatform::Kugou);
-        let bili = provider::build_query("bilibili", &["晴天".to_string()]).unwrap();
-        assert_eq!(bili.platform, MusicPlatform::Bilibili);
-        let soda = provider::build_query("汽水", &["晴天".to_string()]).unwrap();
-        assert_eq!(soda.platform, MusicPlatform::Soda);
-        let apple = provider::build_query("applemusic", &["晴天".to_string()]).unwrap();
-        assert_eq!(apple.platform, MusicPlatform::AppleMusic);
+    fn panel_buttons_are_owned_self_describing_and_within_telegram_limit() {
+        let mut settings = test_settings("applemusic");
+        settings.user_id = i64::MAX;
+        for view in [MusicPanelView::Platforms, MusicPanelView::Settings] {
+            let menu = music_panel_menu(&settings, view);
+            for button in menu.inline_keyboard.iter().flatten() {
+                let InlineKeyboardButtonKind::CallbackData(payload) = &button.kind else {
+                    panic!("expected callback button");
+                };
+                assert!(payload.len() <= CALLBACK_LIMIT);
+                let decoded = MusicCallbackAction::decode(payload).unwrap();
+                let MusicCallbackAction::Panel { requester_id, .. } = &decoded else {
+                    panic!("all panel buttons must carry their owner");
+                };
+                assert_eq!(*requester_id, settings.user_id);
+                assert_eq!(decoded.encode().as_ref(), Some(payload));
+            }
+            let footer = menu.inline_keyboard.last().unwrap();
+            assert_eq!(footer.len(), 2);
+            assert_eq!(footer[1].text, "关闭");
+        }
+        let home = music_panel_menu(&settings, MusicPanelView::Platforms);
+        assert_eq!(
+            home.inline_keyboard[0][0].text,
+            selected_label("Apple Music", true)
+        );
+        assert_eq!(
+            home.inline_keyboard.iter().flatten().count(),
+            MUSIC_PLATFORM_OPTIONS.len() + 2
+        );
+        assert!(home.inline_keyboard.iter().all(|row| row.len() <= 2));
+    }
+
+    #[test]
+    fn panel_platform_selection_changes_only_saved_default() {
+        let mut settings = test_settings("applemusic");
+        let mut expected = settings.clone();
+        expected.default_platform = "netease".to_string();
+        let MusicCallbackAction::Panel {
+            requester_id,
+            action: MusicPanelAction::Platform(platform),
+        } = MusicCallbackAction::decode("panel 1 platform n").unwrap()
+        else {
+            panic!("expected platform selection");
+        };
+        assert_eq!(requester_id, settings.user_id);
+        let (changed, _) = apply_music_setting(
+            &mut settings,
+            MusicSettingAction::Platform(platform.id().to_string()),
+        )
+        .unwrap();
+        assert!(changed);
+        assert_eq!(settings, expected);
+        assert_eq!(
+            music_panel_menu(&settings, MusicPanelView::Platforms).inline_keyboard[0][0].text,
+            selected_label("网易云音乐", true),
+        );
+    }
+
+    #[test]
+    fn panel_callbacks_reject_invalid_owners_and_actions() {
+        for payload in [
+            "panel 0 home",
+            "panel -1 close",
+            "panel abc settings",
+            "panel 1",
+            "panel 1 platform z",
+            "panel 1 platform a extra",
+            "panel 1 setting cover maybe",
+            "panel 1 close extra",
+        ] {
+            assert!(MusicCallbackAction::decode(payload).is_err(), "{payload}");
+        }
+        assert!(
+            MusicCallbackAction::Panel {
+                requester_id: 0,
+                action: MusicPanelAction::Show(MusicPanelView::Platforms),
+            }
+            .encode()
+            .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn other_users_cannot_modify_or_close_music_panel() {
+        let mut payloads = [
+            MusicPanelAction::Show(MusicPanelView::Platforms),
+            MusicPanelAction::Show(MusicPanelView::Settings),
+            MusicPanelAction::Platform(MusicPlatform::Netease),
+            MusicPanelAction::Setting(MusicSettingAction::Quality("high".to_string())),
+            MusicPanelAction::Close,
+        ]
+        .into_iter()
+        .map(|action| {
+            MusicCallbackAction::Panel {
+                requester_id: 1,
+                action,
+            }
+            .encode()
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+        payloads.extend(
+            [
+                "music panel 2 close",
+                "music panel 2 platform n",
+                "music setting platform netease",
+                "music close",
+            ]
+            .map(str::to_string),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let count = payloads.len();
+        let server = tokio::spawn(async move {
+            for _ in 0..count {
+                let (stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                assert!(line.to_ascii_lowercase().contains("/answercallbackquery "));
+                let mut size = None;
+                loop {
+                    line.clear();
+                    assert!(reader.read_line(&mut line).await.unwrap() > 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = line.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                    {
+                        size = Some(value.trim().parse::<usize>().unwrap());
+                    }
+                }
+                let mut body = vec![0; size.unwrap()];
+                reader.read_exact(&mut body).await.unwrap();
+                let data: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(data["show_alert"], true);
+                assert!(data["text"].as_str().unwrap().contains("其他用户"));
+                let response = r#"{"ok":true,"result":true}"#;
+                reader.get_mut().write_all(format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+                    response.len(),
+                ).as_bytes()).await.unwrap();
+            }
+        });
+        let bot = Bot::with_client(
+            "1:test",
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+        )
+        .set_api_url(Url::parse(&format!("http://{addr}")).unwrap());
+        for payload in payloads {
+            let callback: CallbackQuery = serde_json::from_value(serde_json::json!({
+                "id": "panel-click",
+                "from": { "id": 2, "is_bot": false, "first_name": "Other user" },
+                "chat_instance": "test-chat",
+                "data": payload,
+                "message": {
+                    "message_id": 123,
+                    "date": 1700000000,
+                    "chat": { "id": -100123, "type": "supergroup", "title": "Test group" },
+                    "from": { "id": 99, "is_bot": true, "first_name": "Test bot" },
+                    "text": "音乐",
+                    "reply_markup": music_panel_menu(&test_settings("applemusic"), MusicPanelView::Platforms),
+                },
+            }))
+            .unwrap();
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                music_callback(bot.clone(), callback),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        }
+        server.await.unwrap();
     }
 
     #[test]
@@ -4939,7 +5351,7 @@ mod tests {
 
         let (keyword, platform, quality) = parse_inline_music_query("晴天", &settings);
         assert_eq!(keyword, "晴天");
-        assert_eq!(platform, MusicPlatform::Soda);
+        assert_eq!(platform, MusicPlatform::AppleMusic);
         assert_eq!(quality, "lossless");
     }
 
