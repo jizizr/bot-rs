@@ -12,7 +12,7 @@ use crate::funcs::pkg::rich::{self, RichPage};
 use ferrous_opencc::{OpenCC, config::BuiltinConfig};
 use futures::future::join_all;
 use lazy_static::lazy_static;
-use lyrics_view::{Cover, LyricSong, LyricTarget, LyricView, lyric_cover};
+use lyrics_view::{Cover, LyricSong, LyricView, lyric_cover};
 use provider::{
     DownloadProgress, JobState, MediaRequest, MusicCollection, MusicMedia, MusicPlatform,
     MusicQuery, MusicSearchItem, MusicTrack,
@@ -2128,12 +2128,7 @@ async fn answer_inline_lyric_query(
         .iter()
         .map(|(track, _)| LyricSong::from_search_item(track))
         .collect::<Vec<_>>();
-    let covers = join_all(
-        songs
-            .iter()
-            .map(|song| lyric_cover(bot, song, LyricTarget::Inline)),
-    )
-    .await;
+    let covers = join_all(songs.iter().map(|song| lyric_cover(bot, song))).await;
     for (((track, lyrics), song), cover) in found.iter().zip(&songs).zip(&covers) {
         let view = LyricView::new(song, track.platform, lyrics, script);
         results.push(inline_lyric_result(track, &view, cover, script));
@@ -3239,7 +3234,7 @@ async fn send_lyric_page(
     script: MusicLyricScript,
 ) -> BotResult {
     let view = LyricView::new(song, platform, lyrics, script);
-    let cover = lyric_cover(bot, song, LyricTarget::Chat).await;
+    let cover = lyric_cover(bot, song).await;
     let send = |cover: &Cover| {
         SendRichMessage::new(chat_id, view.rich(cover))
             .reply_parameters_option(reply.map(reply_to))
@@ -3268,7 +3263,7 @@ async fn edit_lyric_page(
     script: MusicLyricScript,
 ) -> BotResult {
     let view = LyricView::new(song, platform, lyrics, script);
-    let cover = lyric_cover(bot, song, LyricTarget::Chat).await;
+    let cover = lyric_cover(bot, song).await;
     let edit = |cover: &Cover| {
         EditMessageText::new()
             .chat_id(msg.chat().id())
@@ -3421,7 +3416,7 @@ async fn handle_inline_lyric_text_callback(
     };
     // inline 消息读不回原内容，歌名靠网关解析一次
     let song = LyricSong::resolve(platform, id, user_id, LyricSong::default()).await;
-    let cover = lyric_cover(bot, &song, LyricTarget::Inline).await;
+    let cover = lyric_cover(bot, &song).await;
     bot.send(
         EditMessageText::new()
             .inline_message_id(inline_message_id)

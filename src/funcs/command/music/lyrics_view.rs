@@ -3,21 +3,26 @@
 //! credits, platform and script — and renders it either as a rich message
 //! (chat pages, inline results, inline edits) or as a caption (an LRC file,
 //! an inline audio message), so the two look alike and change together.
-//! Covers go through `lyric_cover`, which prefers a photo already uploaded to
-//! Telegram so even inline pages, which may not link outside images, show one.
+//! Covers go through `lyric_cover`, which turns them into a short banner and
+//! uploads it once, so every page — inline ones too, which may not link
+//! outside images — shows the same cover at the same size.
 
 use super::{
     MusicLyricScript, MusicPlatform, MusicQuery, MusicTrack, convert_lyric_script,
     get_user_settings_or_default, html_escape, lock_unpoisoned, provider, resolve_track,
 };
-use crate::{Bot, InputFile, SendPhoto, funcs::pkg::rich::RichPage, settings::SETTINGS};
+use crate::{Bot, BotError, InputFile, SendPhoto, funcs::pkg::rich::RichPage, settings::SETTINGS};
 use lazy_static::lazy_static;
 use std::{collections::HashMap, sync::Mutex, time::Duration};
 use telers::types::InputRichMessage;
 
 /// Telegram's limit for a caption.
 const CAPTION_LIMIT: usize = 1024;
-const COVER_UPLOAD_TIMEOUT: Duration = Duration::from_secs(6);
+const COVER_UPLOAD_TIMEOUT: Duration = Duration::from_secs(8);
+const COVER_MAX_BYTES: u64 = 8 * 1024 * 1024;
+const BANNER_WIDTH: u32 = 1200;
+const BANNER_HEIGHT: u32 = 400;
+const BANNER_COVER_SIZE: u32 = 320;
 const COVER_CACHE_CAPACITY: usize = 1024;
 
 lazy_static! {
@@ -204,69 +209,107 @@ pub(super) fn lyric_clock(time: u64) -> String {
     format!("{:02}:{:02}", seconds / 60, seconds % 60)
 }
 
-/// Where a cover can be shown from.
+/// The cover a lyric page shows.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum Cover {
-    /// A photo already on Telegram; usable everywhere.
+    /// A banner photo already on Telegram, usable in every kind of message.
     Uploaded(String),
-    /// An outside link; only plain chat messages may use one.
-    Link(String),
     None,
 }
 
-/// Where a lyric page is going, which decides what cover it may use.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum LyricTarget {
-    Chat,
-    Inline,
-}
-
-/// The cover of `song` for `target`: uploaded once to the shared storage chat
-/// and reused by file id; a chat page falls back to the link itself.
-pub(super) async fn lyric_cover(bot: &Bot, song: &LyricSong, target: LyricTarget) -> Cover {
+/// The banner of `song`'s cover, made and uploaded once to the shared
+/// storage chat, then reused by file id. Pages go without a cover when it
+/// cannot be made, rather than fall back to a different look.
+pub(super) async fn lyric_cover(bot: &Bot, song: &LyricSong) -> Cover {
     let Some(url) = song.cover.as_deref() else {
         return Cover::None;
     };
-    if let Some(file_id) = uploaded_cover(bot, url).await {
-        return Cover::Uploaded(file_id);
-    }
-    match target {
-        LyricTarget::Chat => Cover::Link(url.to_string()),
-        LyricTarget::Inline => Cover::None,
+    match tokio::time::timeout(COVER_UPLOAD_TIMEOUT, uploaded_banner(bot, url)).await {
+        Ok(Ok(file_id)) => Cover::Uploaded(file_id),
+        Ok(Err(err)) => {
+            log::warn!("lyric cover banner failed: {err}");
+            Cover::None
+        }
+        Err(_) => {
+            log::warn!("lyric cover banner timed out");
+            Cover::None
+        }
     }
 }
 
-async fn uploaded_cover(bot: &Bot, url: &str) -> Option<String> {
+async fn uploaded_banner(bot: &Bot, url: &str) -> Result<String, BotError> {
     if let Some(file_id) = lock_unpoisoned(&COVER_PHOTOS).get(url) {
-        return Some(file_id.clone());
+        return Ok(file_id.clone());
     }
     let chat_id = SETTINGS.music.inline_upload_chat_id;
     if chat_id == 0 {
-        return None;
+        return Err(BotError::Custom("no storage chat for covers".to_string()));
     }
-    let upload = bot.send(
-        SendPhoto::new(chat_id, InputFile::url(url))
-            .disable_notification(true)
-            .caption(url),
-    );
-    let message = match tokio::time::timeout(COVER_UPLOAD_TIMEOUT, upload).await {
-        Ok(Ok(message)) => message,
-        Ok(Err(err)) => {
-            log::warn!("cover upload failed: {err}");
-            return None;
-        }
-        Err(_) => {
-            log::warn!("cover upload timed out");
-            return None;
-        }
-    };
-    let file_id = message.photo()?.last()?.file_id.to_string();
+    let response = crate::HTTP_CLIENT
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?;
+    if response.content_length().unwrap_or(0) > COVER_MAX_BYTES {
+        return Err(BotError::Custom("cover too large".to_string()));
+    }
+    let bytes = response.bytes().await?;
+    if bytes.len() as u64 > COVER_MAX_BYTES {
+        return Err(BotError::Custom("cover too large".to_string()));
+    }
+    let banner = tokio::task::spawn_blocking(move || cover_banner(&bytes)).await??;
+    let message = bot
+        .send(
+            SendPhoto::new(chat_id, InputFile::buffered_with_name(banner, "cover.jpg"))
+                .disable_notification(true)
+                .caption(url),
+        )
+        .await?;
+    let file_id = message
+        .photo()
+        .and_then(|sizes| sizes.last())
+        .map(|size| size.file_id.to_string())
+        .ok_or_else(|| BotError::Custom("uploaded cover has no photo".to_string()))?;
     let mut photos = lock_unpoisoned(&COVER_PHOTOS);
     if photos.len() >= COVER_CACHE_CAPACITY {
         photos.clear();
     }
     photos.insert(url.to_string(), file_id.clone());
-    Some(file_id)
+    Ok(file_id)
+}
+
+/// A wide, short banner from a square cover: the cover in the middle over a
+/// blurred, darkened copy of itself. Telegram shows rich-message pictures at
+/// full width with no size control, so a 3:1 picture keeps the cover small
+/// instead of filling the screen.
+pub(super) fn cover_banner(cover: &[u8]) -> Result<Vec<u8>, image::ImageError> {
+    use image::{DynamicImage, imageops, imageops::FilterType};
+    let cover = image::load_from_memory(cover)?;
+    let background = cover
+        .resize_to_fill(BANNER_WIDTH / 8, BANNER_HEIGHT / 8, FilterType::Triangle)
+        .blur(4.0)
+        .resize_exact(BANNER_WIDTH, BANNER_HEIGHT, FilterType::Triangle);
+    let mut banner = background.to_rgb8();
+    for pixel in banner.pixels_mut() {
+        for channel in &mut pixel.0 {
+            *channel = (f32::from(*channel) * 0.55) as u8;
+        }
+    }
+    let front = cover
+        .resize_to_fill(BANNER_COVER_SIZE, BANNER_COVER_SIZE, FilterType::Lanczos3)
+        .to_rgb8();
+    let offset = i64::from((BANNER_HEIGHT - BANNER_COVER_SIZE) / 2);
+    imageops::overlay(
+        &mut banner,
+        &front,
+        i64::from((BANNER_WIDTH - BANNER_COVER_SIZE) / 2),
+        offset,
+    );
+    let mut jpeg = Vec::new();
+    DynamicImage::ImageRgb8(banner).write_with_encoder(
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 85),
+    )?;
+    Ok(jpeg)
 }
 
 /// What every lyric page shows, already in the requested script.
@@ -356,7 +399,6 @@ impl LyricView {
         let mut page = RichPage::default();
         page = match cover {
             Cover::Uploaded(file_id) => page.uploaded_photo(file_id),
-            Cover::Link(url) => page.image(url, None),
             Cover::None => page,
         };
         page = page.heading(&self.title).paragraph(&self.byline);
@@ -514,11 +556,11 @@ mod tests {
             &lyrics,
             MusicLyricScript::Traditional,
         );
-        let rich = view.rich(&Cover::Link("https://example.com/c.jpg".to_string()));
+        let rich = view.rich(&Cover::Uploaded("AgAD".to_string()));
         assert_eq!(
             rich.html.as_deref(),
             Some(
-                "<img src=\"https://example.com/c.jpg\"/><h3>晴天</h3>\
+                "<img src=\"tg://photo?id=media0\"/><h3>晴天</h3>\
                  <p>周杰伦 &amp; &lt;Band&gt; · QQ音乐 · 叶惠美</p>\
                  <blockquote expandable><code>00:01</code> 故事的小黃花<br><i>Little flower</i></blockquote>\
                  <details><summary>制作人员</summary><p>作詞：周杰倫</p></details>\
@@ -553,6 +595,24 @@ mod tests {
         let plain = view.rich(&Cover::None);
         assert!(plain.html.as_deref().unwrap().starts_with("<h3>晴天</h3>"));
         assert!(plain.media.is_none());
+    }
+
+    #[test]
+    fn banners_are_wide_and_short() {
+        let mut cover = image::RgbImage::new(600, 600);
+        for (x, _, pixel) in cover.enumerate_pixels_mut() {
+            *pixel = image::Rgb([(x % 256) as u8, 80, 160]);
+        }
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgb8(cover)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let banner = image::load_from_memory(&cover_banner(&png).unwrap()).unwrap();
+        assert_eq!(
+            (banner.width(), banner.height()),
+            (BANNER_WIDTH, BANNER_HEIGHT)
+        );
+        assert!(cover_banner(b"not an image").is_err());
     }
 
     #[test]
