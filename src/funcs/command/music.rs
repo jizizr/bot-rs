@@ -287,7 +287,6 @@ impl From<MusicFavoriteScopeArg> for FavoriteScope {
 enum MusicSettingAction {
     Platform(String),
     Quality(String),
-    Cover(bool),
     LyricScript(String),
 }
 
@@ -296,7 +295,6 @@ impl MusicSettingAction {
         match self {
             Self::Platform(value) => format!("platform {value}"),
             Self::Quality(value) => format!("quality {value}"),
-            Self::Cover(enabled) => format!("cover {}", if *enabled { "on" } else { "off" }),
             Self::LyricScript(value) => format!("lyric_script {value}"),
         }
     }
@@ -310,7 +308,6 @@ impl MusicSettingAction {
         match action {
             "platform" => Ok(Self::Platform(value.to_string())),
             "quality" => Ok(Self::Quality(value.to_string())),
-            "cover" if value == "on" || value == "off" => Ok(Self::Cover(value == "on")),
             "lyric_script" => Ok(Self::LyricScript(value.to_string())),
             _ => Err(invalid()),
         }
@@ -836,18 +833,14 @@ async fn resolve_track(
     .await
 }
 
-fn media_request(
-    query: &MusicQuery,
-    selected_id: Option<&str>,
-    quality: &str,
-    settings: &UserMusicSettings,
-) -> MediaRequest {
+fn media_request(query: &MusicQuery, selected_id: Option<&str>, quality: &str) -> MediaRequest {
     MediaRequest {
         platform: query.platform,
         keyword: query.keyword.clone(),
         selected_id: selected_id.map(str::to_string),
         quality: provider::parse_quality(quality),
-        include_cover: settings.send_cover,
+        // MHub always gives the shared upload its cover; kept for older MHub.
+        include_cover: true,
         wait_for_lyrics: false,
     }
 }
@@ -870,15 +863,6 @@ fn music_settings_page(settings: &UserMusicSettings) -> RichPage {
         .bullets_html([
             setting_item("🎵", "默认平台", platform_label(&settings.default_platform)),
             setting_item("🎧", "默认音质", quality_label(&settings.quality)),
-            setting_item(
-                "🖼️",
-                "发送封面",
-                if settings.send_cover {
-                    "开启"
-                } else {
-                    "关闭"
-                },
-            ),
             setting_item("📝", "歌词文字", lyric_script_label(&settings.lyric_script)),
         ])
         .footer("点击下方按钮修改设置")
@@ -932,13 +916,6 @@ fn music_settings_menu_with_owner(
             })
             .collect(),
     );
-
-    if let Some(callback) = encode_setting(MusicSettingAction::Cover(!settings.send_cover)) {
-        keyboard.push(vec![callback_button(
-            format!("发送封面 {}", if settings.send_cover { "✅" } else { "❌" }),
-            callback,
-        )]);
-    }
 
     keyboard.push(
         MUSIC_LYRIC_SCRIPT_OPTIONS
@@ -1492,17 +1469,6 @@ fn apply_music_setting(
             }
             format!("音质已设置为 {}", quality_label(&quality))
         }
-        MusicSettingAction::Cover(enabled) => {
-            if settings.send_cover != enabled {
-                settings.send_cover = enabled;
-                changed = true;
-            }
-            if enabled {
-                "已开启发送封面".to_string()
-            } else {
-                "已关闭发送封面".to_string()
-            }
-        }
         MusicSettingAction::LyricScript(script) => {
             if !MUSIC_LYRIC_SCRIPT_OPTIONS
                 .iter()
@@ -1961,7 +1927,7 @@ async fn get_music(
     status_msg: &Message,
     settings: &UserMusicSettings,
 ) -> Result<(), BotError> {
-    let request = media_request(&query, None, &settings.quality, settings);
+    let request = media_request(&query, None, &settings.quality);
     deliver(
         bot,
         request,
@@ -2473,7 +2439,6 @@ async fn run_inline_send_flow_inner(
     id: &str,
     quality: &str,
 ) -> BotResult {
-    let settings = get_user_settings_or_default(from.id).await;
     let query = MusicQuery {
         platform,
         keyword: id.to_string(),
@@ -2487,7 +2452,7 @@ async fn run_inline_send_flow_inner(
     // inline 消息没有会话 chat，只按用户与全局维度限制
     deliver(
         bot,
-        media_request(&query, Some(id), quality, &settings),
+        media_request(&query, Some(id), quality),
         from.id,
         None,
         &StatusTarget::Inline(inline_message_id.to_string()),
@@ -3408,7 +3373,7 @@ async fn inline_song_media(
             .filter(|quality| *quality != preferred),
     );
     for quality in qualities {
-        let request = media_request(&query, Some(id), quality, settings);
+        let request = media_request(&query, Some(id), quality);
         if let Ok(lookup) = gateway.lookup_media(&request).await
             && let Some(media) = lookup.media
         {
@@ -3924,7 +3889,7 @@ async fn get_callback_music(
     let status_msg = is_page_message(&msg).then_some(&msg);
     let media = deliver(
         &bot,
-        media_request(&query, Some(id), &settings.quality, settings),
+        media_request(&query, Some(id), &settings.quality),
         user_id,
         Some(msg.chat().id()),
         &StatusTarget::Message(Box::new(msg.clone())),
@@ -4808,7 +4773,6 @@ mod tests {
             user_id: 1,
             default_platform: default_platform.to_string(),
             quality: "lossless".to_string(),
-            send_cover: true,
             lyric_script: "simplified".to_string(),
         }
     }

@@ -13,8 +13,6 @@ pub struct UserMusicSettings {
     pub default_platform: String,
     #[serde(default = "default_quality")]
     pub quality: String,
-    #[serde(default = "default_true")]
-    pub send_cover: bool,
     #[serde(default = "default_lyric_script")]
     pub lyric_script: String,
 }
@@ -25,7 +23,6 @@ impl UserMusicSettings {
             user_id,
             default_platform: DEFAULT_PLATFORM.to_string(),
             quality: default_quality(),
-            send_cover: true,
             lyric_script: default_lyric_script(),
         }
     }
@@ -41,10 +38,6 @@ pub fn default_quality() -> String {
 
 pub fn default_lyric_script() -> String {
     DEFAULT_LYRIC_SCRIPT.to_string()
-}
-
-fn default_true() -> bool {
-    true
 }
 
 async fn async_collection() -> Collection<UserMusicSettings> {
