@@ -24,6 +24,11 @@ pub struct Bot {
     pub token: String,
     #[serde(default)]
     pub api_url: Option<String>,
+    /// 本地模式（`--local`）的 Bot API 在本机的数据目录。它的 getFile 返回
+    /// 服务端的绝对路径，不提供下载接口；放在容器里时路径和本机不同，
+    /// 按这个目录换算到本机再读
+    #[serde(default)]
+    pub files_dir: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

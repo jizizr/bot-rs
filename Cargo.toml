@@ -70,6 +70,7 @@ clap-i18n-richformatter = { git = "https://github.com/jizizr/clap-i18n-richforma
     "derive",
 ] }
 ferrous-opencc = "0.4"
+skia-safe = { version = "0.157", features = ["textlayout"] }
 [dev-dependencies]
 tempfile = "3"
 

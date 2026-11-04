@@ -23,6 +23,7 @@ pub mod hitokoto;
 pub mod id;
 pub mod music;
 pub mod ping;
+pub mod quote;
 pub mod rate;
 pub mod rom;
 pub mod short;
@@ -210,6 +211,7 @@ commands! {
     Rom => "rom": "小米刷机包链接",
     Vv => "vv": "vv不削能玩？",
     Count => "count": "发言趋势",
+    Quote => "q" ["quote"]: "回复消息生成语录贴纸",
     Test => "test" hidden: "",
     Uploader => "uploader" hidden: "",
 }
@@ -299,6 +301,7 @@ pub async fn command_handler(bot: &Bot, msg: &Message, me: &User) -> BotResult {
         Rom => rom::rom,
         Vv => vv::vv,
         Count => count::count,
+        Quote => quote::quote,
         Test => test::test,
         Uploader => uploader::uploader,
     );

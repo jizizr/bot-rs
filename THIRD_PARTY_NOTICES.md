@@ -13,3 +13,15 @@ Platform implementations, accounts and downloads now live in MHub
 the `music-gateway` crate of that repository. That crate keeps MHub's license.
 
 When distributing this bot with the ported music provider code, keep this notice and comply with GPL-3.0 requirements for the combined work.
+
+## Noto fonts
+
+`data/fonts/` bundles fonts used to render `/q` quote stickers:
+
+- `NotoSansSC-{Regular,Medium,Bold}.otf`: Noto Sans SC from https://github.com/notofonts/noto-cjk,
+  subset with fonttools to Latin, common punctuation and symbols, kana and the CJK Unified
+  Ideographs basic block.
+- `NotoColorEmoji.ttf`: Noto Color Emoji (CBDT bitmap build) from https://github.com/googlefonts/noto-emoji, unmodified.
+
+Both are licensed under the SIL Open Font License, Version 1.1; the license texts are in
+`data/fonts/OFL-NotoSansSC.txt` and `data/fonts/OFL-NotoColorEmoji.txt`.
