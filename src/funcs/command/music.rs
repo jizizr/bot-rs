@@ -848,6 +848,7 @@ fn media_request(
         selected_id: selected_id.map(str::to_string),
         quality: provider::parse_quality(quality),
         include_cover: settings.send_cover,
+        wait_for_lyrics: false,
     }
 }
 
@@ -1844,7 +1845,13 @@ async fn obtain_media(
     status: &StatusTarget,
 ) -> Result<MusicMedia, BotError> {
     let gateway = provider::gateway()?;
-    let lookup = gateway.lookup_media(&request).await?;
+    // 即将发歌：老缓存若还没内嵌歌词，让 MHub 先补上再给 file_id（超时则仍给旧文件）
+    let lookup = gateway
+        .lookup_media(&MediaRequest {
+            wait_for_lyrics: true,
+            ..request.clone()
+        })
+        .await?;
     if let Some(media) = lookup.media {
         return Ok(media);
     }

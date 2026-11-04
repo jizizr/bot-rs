@@ -3282,7 +3282,7 @@ dependencies = [
 [[package]]
 name = "music-gateway"
 version = "0.1.0"
-source = "git+https://github.com/jizizr/mhub?rev=1bc02fb0be99723de4394300334989c7c4d1083e#1bc02fb0be99723de4394300334989c7c4d1083e"
+source = "git+https://github.com/jizizr/mhub?branch=main#4c22da014bbc5f84076401c26ddf747863ed7773"
 dependencies = [
  "reqwest 0.12.15",
  "serde",
@@ -6748,7 +6748,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

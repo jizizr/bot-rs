@@ -7,7 +7,7 @@ edition = "2024"
 [dependencies]
 # Music sources, accounts and the Telegram cache live in MHub; this crate is
 # its gateway contract and client, pinned to the MHub commit it was built with.
-music-gateway = { git = "https://github.com/jizizr/mhub", rev = "1bc02fb0be99723de4394300334989c7c4d1083e", features = ["client"] }
+music-gateway = { git = "https://github.com/jizizr/mhub", branch = "main", features = ["client"] }
 tokio = "1.0"
 reqwest = { version = "0.12", features = ["rustls-tls", "json", "blocking", "cookies"] }
 serde = { version = "1", features = ["derive"] }
