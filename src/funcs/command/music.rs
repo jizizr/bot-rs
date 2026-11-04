@@ -16,13 +16,15 @@ use provider::{
     MusicQuery, MusicSearchItem, MusicTrack,
 };
 use ratelimit::ResourceAction;
+use rich::RichPage;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
 use telers::types::{
     InlineQueryResult, InlineQueryResultArticle, InlineQueryResultsButton, InputMedia,
-    InputMediaAudio, InputMediaDocument, InputRichMessage, InputTextMessageContent,
+    InputMediaAudio, InputMediaDocument, InputRichMessage, InputRichMessageContent,
+    InputTextMessageContent,
 };
 use tokio::{sync::mpsc, task::JoinHandle};
 use url::Url;
@@ -30,6 +32,7 @@ use url::Url;
 mod provider;
 mod queue;
 mod ratelimit;
+mod rich;
 
 const CALLBACK_PREFIX: &str = "music";
 const CALLBACK_LIMIT: usize = 64;
@@ -68,7 +71,7 @@ const SEARCH_PAGE_SIZE: usize = 8;
 const SEARCH_RESULT_LIMIT: usize = 32;
 const SEARCH_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
 const SEARCH_CACHE_CAPACITY: usize = 256;
-/// A search page starts with this and the keyword, which is how paging and
+/// A search page's heading is this and the keyword, which is how paging and
 /// platform buttons recover the keyword without carrying it in callback data.
 const SEARCH_HEADER_PREFIX: &str = "🔍 ";
 const SEARCH_EXPIRED_NOTICE: &str = "搜索结果已过期，请重新搜索";
@@ -851,18 +854,28 @@ fn user_id_from_message(msg: &Message) -> i64 {
     msg.from().map(|user| user.id).unwrap_or(0)
 }
 
-fn music_settings_text(settings: &UserMusicSettings) -> String {
-    format!(
-        "⚙️ 音乐设置\n\n🎵 默认平台: {}\n🎧 默认音质: {}\n🖼️ 发送封面: {}\n📝 歌词文字: {}\n\n点击下方按钮修改设置",
-        platform_label(&settings.default_platform),
-        quality_label(&settings.quality),
-        if settings.send_cover {
-            "开启"
-        } else {
-            "关闭"
-        },
-        lyric_script_label(&settings.lyric_script),
-    )
+fn setting_item(icon: &str, name: &str, value: &str) -> String {
+    format!("{icon} {name}：<b>{}</b>", html_escape(value))
+}
+
+fn music_settings_page(settings: &UserMusicSettings) -> RichPage {
+    RichPage::default()
+        .heading("⚙️ 音乐设置")
+        .bullets_html([
+            setting_item("🎵", "默认平台", platform_label(&settings.default_platform)),
+            setting_item("🎧", "默认音质", quality_label(&settings.quality)),
+            setting_item(
+                "🖼️",
+                "发送封面",
+                if settings.send_cover {
+                    "开启"
+                } else {
+                    "关闭"
+                },
+            ),
+            setting_item("📝", "歌词文字", lyric_script_label(&settings.lyric_script)),
+        ])
+        .footer("点击下方按钮修改设置")
 }
 
 fn music_settings_menu(settings: &UserMusicSettings) -> InlineKeyboardMarkup {
@@ -938,14 +951,17 @@ fn music_settings_menu_with_owner(
     InlineKeyboardMarkup::new(keyboard)
 }
 
-fn music_panel_text(settings: &UserMusicSettings, view: MusicPanelView) -> String {
+fn music_panel_page(settings: &UserMusicSettings, view: MusicPanelView) -> RichPage {
     match view {
-        MusicPanelView::Platforms => format!(
-            "🎵 音乐\n\n默认平台：{}\n默认音质：{}\n\n发送「/music 歌名」搜索，点结果即可获取；下方按钮切换默认平台",
-            platform_label(&settings.default_platform),
-            quality_label(&settings.quality),
-        ),
-        MusicPanelView::Settings => music_settings_text(settings),
+        MusicPanelView::Platforms => RichPage::default()
+            .heading("🎵 音乐")
+            .bullets_html([
+                setting_item("🎵", "默认平台", platform_label(&settings.default_platform)),
+                setting_item("🎧", "默认音质", quality_label(&settings.quality)),
+            ])
+            .paragraph("发送「/music 歌名」搜索，点结果即可获取")
+            .footer("下方按钮切换默认平台"),
+        MusicPanelView::Settings => music_settings_page(settings),
     }
 }
 
@@ -1065,7 +1081,7 @@ async fn send_music_panel(
         ));
     }
     bot.send(
-        SendMessage::new(msg.chat().id(), music_panel_text(settings, view))
+        SendRichMessage::new(msg.chat().id(), music_panel_page(settings, view).build())
             .reply_parameters(reply_to(msg.message_id()))
             .reply_markup(music_panel_menu(settings, view)),
     )
@@ -1079,12 +1095,12 @@ async fn edit_music_panel(
     settings: &UserMusicSettings,
     view: MusicPanelView,
 ) -> BotResult {
-    let text = music_panel_text(settings, view);
+    let page = music_panel_page(settings, view).build();
     let markup = music_panel_menu(settings, view);
     let edit = EditMessageText::new()
         .chat_id(msg.chat().id())
         .message_id(msg.message_id())
-        .text(text)
+        .rich_message(page)
         .reply_markup(markup);
     match bot.send(edit).await.map_err(BotError::from) {
         Err(err) if !is_not_modified(&err) => return Err(err),
@@ -1101,7 +1117,7 @@ async fn edit_inline_music_settings(
     bot.send(
         EditMessageText::new()
             .inline_message_id(inline_message_id)
-            .text(music_settings_text(settings))
+            .rich_message(music_settings_page(settings).build())
             .reply_markup(inline_music_settings_menu(settings)),
     )
     .await?;
@@ -1158,10 +1174,12 @@ async fn send_music_favorites(
     let scope_id = favorite_scope_id(scope, msg, user_id)?;
     let favorites = list_favorites(scope.storage_key(), scope_id, 20).await?;
     bot.send(
-        SendMessage::new(msg.chat().id(), favorite_list_text(scope, &favorites))
-            .parse_mode(ParseMode::HTML)
-            .reply_parameters(reply_to(msg.message_id()))
-            .reply_markup(favorite_list_menu(scope, scope_id, &favorites)),
+        SendRichMessage::new(
+            msg.chat().id(),
+            favorite_list_page(scope, &favorites).build(),
+        )
+        .reply_parameters(reply_to(msg.message_id()))
+        .reply_markup(favorite_list_menu(scope, scope_id, &favorites)),
     )
     .await?;
     Ok(())
@@ -1178,35 +1196,38 @@ async fn edit_music_favorites(
         EditMessageText::new()
             .chat_id(msg.chat().id())
             .message_id(msg.message_id())
-            .text(favorite_list_text(scope, &favorites))
-            .parse_mode(ParseMode::HTML)
+            .rich_message(favorite_list_page(scope, &favorites).build())
             .reply_markup(favorite_list_menu(scope, scope_id, &favorites)),
     )
     .await?;
     Ok(())
 }
 
-fn favorite_list_text(scope: FavoriteScope, favorites: &[MusicFavorite]) -> String {
+fn favorite_list_page(scope: FavoriteScope, favorites: &[MusicFavorite]) -> RichPage {
+    let head = RichPage::default().heading(&format!("⭐ {}", scope.label()));
     if favorites.is_empty() {
-        return format!("{}为空", scope.label());
+        return head.paragraph("还没有收藏，在歌曲下方点「收藏」即可加入");
     }
-    let mut text = format!("<b>{}</b>\n", scope.label());
-    for (index, favorite) in favorites.iter().enumerate() {
+    let items = favorites.iter().map(|favorite| {
         let song = html_escape(&favorite.song);
-        let singer = html_escape(&favorite.singer);
         let title = if favorite.link.trim().is_empty() {
-            song
+            format!("<b>{song}</b>")
         } else {
-            format!("<a href=\"{}\">{song}</a>", html_escape(&favorite.link))
+            format!(
+                "<a href=\"{}\"><b>{song}</b></a>",
+                html_escape(&favorite.link)
+            )
         };
         let album = if favorite.album.trim().is_empty() {
             String::new()
         } else {
-            format!(" · {}", html_escape(&favorite.album))
+            format!(" · <i>{}</i>", html_escape(&favorite.album))
         };
-        text.push_str(&format!("{}. {} - {}{}\n", index + 1, title, singer, album));
-    }
-    text
+        format!("{title} — {}{album}", html_escape(&favorite.singer))
+    });
+    head.paragraph(&format!("共 {} 首", favorites.len()))
+        .numbered_html(items)
+        .footer("「发送」获取歌曲，「取消」移出收藏")
 }
 
 fn favorite_list_menu(
@@ -1509,14 +1530,7 @@ async fn send_media(
         } else {
             "📤 获取成功，正在发送…"
         };
-        let _ = bot
-            .send(
-                EditMessageText::new()
-                    .chat_id(status_msg.chat().id())
-                    .message_id(status_msg.message_id())
-                    .text(text),
-            )
-            .await;
+        let _ = edit_callback_status(bot, status_msg, text).await;
     }
 
     let mut request = SendAudio::new(msg.chat().id(), InputFile::id(media.file_id.clone()))
@@ -2074,15 +2088,14 @@ pub async fn inline_platform_picker(bot: &Bot, msg: &Message) -> BotResult {
         })
         .collect::<Vec<_>>();
     bot.send(
-        SendMessage::new(
+        SendRichMessage::new(
             msg.chat().id(),
-            format!(
-                "{SEARCH_HEADER_PREFIX}<b>{}</b>\n当前：{}\n\n选择平台后会回到原来的聊天继续搜索",
-                html_escape(&search.keyword),
-                search.platform.label()
-            ),
+            RichPage::default()
+                .heading(&format!("{SEARCH_HEADER_PREFIX}{}", search.keyword))
+                .paragraph(&format!("当前平台：{}", search.platform.label()))
+                .footer("选择平台后会回到原来的聊天继续搜索")
+                .build(),
         )
-        .parse_mode(ParseMode::HTML)
         .reply_markup(InlineKeyboardMarkup::new(
             buttons.chunks(4).map(<[_]>::to_vec).collect::<Vec<_>>(),
         )),
@@ -2267,7 +2280,7 @@ fn inline_settings_result(settings: &UserMusicSettings, user_id: i64) -> InlineQ
                 platform.label(),
                 quality_label(&quality)
             ),
-            InputTextMessageContent::new(music_settings_text(settings)),
+            InputRichMessageContent::new(music_settings_page(settings).build()),
         )
         .description("点击修改设置，可在关键词后临时追加参数")
         .reply_markup(inline_music_settings_menu(settings)),
@@ -2361,12 +2374,18 @@ fn inline_lyric_result(
     script: MusicLyricScript,
     cover: Option<&str>,
 ) -> Option<InlineQueryResult> {
-    let message = inline_lyric_text(&track.song, &track.singer, lyrics, script);
+    let page = lyric_page_html(
+        Some(&track.song),
+        Some(&track.singer),
+        track.platform,
+        lyrics,
+        script,
+    );
     let title = format!("歌词：{} - {}", track.song, track.singer);
     let mut result = InlineQueryResultArticle::new(
         inline_result_id("lyric", track.platform, &track.id, script.callback_code()),
         title,
-        InputTextMessageContent::new(message).parse_mode(ParseMode::HTML),
+        InputRichMessageContent::new(lyric_message(page)),
     )
     .description(format!("{} · {}", track.platform.label(), script.label()))
     .reply_markup(inline_lyric_switch_menu(track.platform, &track.id, script));
@@ -2506,17 +2525,29 @@ fn rich_lyric_html(
     lyrics: &provider::MusicLyrics,
     script: MusicLyricScript,
 ) -> String {
-    let convert = |text: &str| html_escape(&convert_lyric_script(text, script));
     let audio = lyric_song_audio(msg);
-    let song = audio
-        .and_then(|audio| audio.title.as_deref())
+    lyric_page_html(
+        audio.and_then(|audio| audio.title.as_deref()),
+        audio.and_then(|audio| audio.performer.as_deref()),
+        platform,
+        lyrics,
+        script,
+    )
+}
+
+fn lyric_page_html(
+    song: Option<&str>,
+    singer: Option<&str>,
+    platform: MusicPlatform,
+    lyrics: &provider::MusicLyrics,
+    script: MusicLyricScript,
+) -> String {
+    let convert = |text: &str| html_escape(&convert_lyric_script(text, script));
+    let song = song
         .map(str::trim)
         .filter(|title| !title.is_empty())
         .unwrap_or("歌词");
-    let singer = audio
-        .and_then(|audio| audio.performer.as_deref())
-        .map(str::trim)
-        .filter(|performer| !performer.is_empty());
+    let singer = singer.map(str::trim).filter(|singer| !singer.is_empty());
     let mut head = format!("<h3>{}</h3>", html_escape(song));
     head.push_str(&match singer {
         Some(singer) => format!("<p>{} · {}</p>", html_escape(singer), platform.label()),
@@ -2563,6 +2594,12 @@ fn rich_lyric_html(
         body.push_str("暂无歌词信息");
     }
     format!("{head}<blockquote expandable>{body}</blockquote>{tail}")
+}
+
+fn lyric_message(html: String) -> InputRichMessage {
+    InputRichMessage::new()
+        .html(html)
+        .skip_entity_detection(true)
 }
 
 /// Under a rich lyric page: switch script, or get the lyrics as an LRC file.
@@ -2952,13 +2989,13 @@ async fn open_search_page(
     query: MusicQuery,
     user_id: i64,
 ) -> BotResult {
-    let mut request = SendMessage::new(
+    let mut request = SendRichMessage::new(
         chat_id,
-        format!(
+        rich::status(&format!(
             "⏳ 正在{}搜索「{}」…",
             query.platform.label(),
             query.keyword
-        ),
+        )),
     );
     if let Some(reply_to) = reply_to {
         request = request.reply_parameters(crate::reply_to(reply_to));
@@ -2988,12 +3025,12 @@ async fn show_search_page(
     user_id: i64,
 ) -> BotResult {
     let needed = page.saturating_mul(SEARCH_PAGE_SIZE);
-    let (text, markup) =
+    let (content, markup) =
         match cached_search(query, needed, user_id, Some(page_msg.chat().id())).await {
             Ok(results) => {
                 let page = page.min(results.page_count());
                 (
-                    search_page_text(query, &results, page),
+                    search_page(query, &results, page),
                     search_page_menu(query, Some(&results), page, requester_id),
                 )
             }
@@ -3004,7 +3041,7 @@ async fn show_search_page(
                     query.platform.id()
                 );
                 (
-                    search_failure_text(query, &err),
+                    search_failure_page(query, &err),
                     search_page_menu(query, None, 1, requester_id),
                 )
             }
@@ -3013,37 +3050,36 @@ async fn show_search_page(
         EditMessageText::new()
             .chat_id(page_msg.chat().id())
             .message_id(page_msg.message_id())
-            .text(text)
-            .parse_mode(ParseMode::HTML)
+            .rich_message(content.build())
             .reply_markup(markup),
     )
     .await?;
     Ok(())
 }
 
-/// The keyword a search page was made for, from its first line.
+/// The keyword a search page was made for, from its heading (or the first
+/// line of a page sent before pages became rich messages).
 fn search_page_keyword(msg: &Message) -> Option<String> {
-    let keyword = msg
-        .text()?
-        .lines()
-        .next()?
-        .strip_prefix(SEARCH_HEADER_PREFIX)?
-        .trim();
+    let title = rich::first_heading(msg).or_else(|| {
+        msg.text()
+            .and_then(|text| text.lines().next())
+            .map(str::to_string)
+    })?;
+    let keyword = title.strip_prefix(SEARCH_HEADER_PREFIX)?.trim();
     (!keyword.is_empty()).then(|| keyword.to_string())
 }
 
-fn search_page_header(query: &MusicQuery) -> String {
-    format!(
-        "{SEARCH_HEADER_PREFIX}<b>{}</b>\n{}",
-        html_escape(&query.keyword),
-        query.platform.label()
-    )
+fn search_page_head(query: &MusicQuery) -> RichPage {
+    RichPage::default().heading(&format!("{SEARCH_HEADER_PREFIX}{}", query.keyword))
 }
 
-fn search_page_text(query: &MusicQuery, results: &SearchResults, page: usize) -> String {
-    let header = search_page_header(query);
+fn search_page(query: &MusicQuery, results: &SearchResults, page: usize) -> RichPage {
+    let head = search_page_head(query);
+    let platform = query.platform.label();
     if results.tracks.is_empty() {
-        return format!("{header} · 没有找到结果\n\n换个关键词，或者点下面换个平台试试");
+        return head
+            .paragraph(&format!("{platform} · 没有找到结果"))
+            .footer("换个关键词，或者点下面换个平台试试");
     }
     let pages = results.page_count();
     let position = if !results.complete {
@@ -3053,43 +3089,38 @@ fn search_page_text(query: &MusicQuery, results: &SearchResults, page: usize) ->
     } else {
         format!("共 {} 首", results.tracks.len())
     };
-    format!(
-        "{header} · {position}\n\n{}\n\n<i>点击下方序号获取歌曲</i>",
-        track_list_text(results.page(page))
-    )
+    head.paragraph(&format!("{platform} · {position}"))
+        .numbered_html(track_list_items(results.page(page)))
+        .footer("点击下方序号获取歌曲")
 }
 
-fn search_failure_text(query: &MusicQuery, err: &BotError) -> String {
-    format!(
-        "{} · 搜索失败\n\n{}\n\n可以稍后重试，或者点下面换个平台",
-        search_page_header(query),
-        html_escape(&err.to_string())
-    )
+fn search_failure_page(query: &MusicQuery, err: &BotError) -> RichPage {
+    search_page_head(query)
+        .paragraph(&format!("{} · 搜索失败", query.platform.label()))
+        .quote(&err.to_string())
+        .footer("可以稍后重试，或者点下面换个平台")
 }
 
-/// Numbered `song — singer` lines, matching the number buttons below them.
-fn track_list_text(tracks: &[MusicSearchItem]) -> String {
+/// `<b>song</b> — singer` items, numbered like the buttons below them.
+fn track_list_items(tracks: &[MusicSearchItem]) -> Vec<String> {
     tracks
         .iter()
-        .enumerate()
-        .map(|(index, track)| {
+        .map(|track| {
             let song = html_escape(&truncate_chars(track.song.trim(), SEARCH_TEXT_LIMIT));
             let singer = track.singer.trim();
             if singer.is_empty() {
-                format!("<b>{}.</b> {song}", index + 1)
+                format!("<b>{song}</b>")
             } else {
                 format!(
-                    "<b>{}.</b> {song} — {}",
-                    index + 1,
+                    "<b>{song}</b> — {}",
                     html_escape(&truncate_chars(singer, SEARCH_TEXT_LIMIT))
                 )
             }
         })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .collect()
 }
 
-/// Number buttons for `track_list_text`: one row up to five, else two
+/// Number buttons for `track_list_items`: one row up to five, else two
 /// balanced rows.
 fn track_pick_rows(
     tracks: &[MusicSearchItem],
@@ -3212,32 +3243,26 @@ async fn send_collection_results(
     collection: MusicCollection,
     requester_id: i64,
 ) -> Result<(), BotError> {
-    let header = format!(
-        "💿 <b>{}</b>\n{}",
-        html_escape(&collection.title),
-        collection.platform.label()
-    );
-    let text = if collection.items.is_empty() {
-        format!("{header} · 没有可发送的曲目")
+    let head = RichPage::default().heading(&format!("💿 {}", collection.title));
+    let platform = collection.platform.label();
+    let page = if collection.items.is_empty() {
+        head.paragraph(&format!("{platform} · 没有可发送的曲目"))
     } else {
-        format!(
-            "{header} · {} {} 首\n\n{}\n\n<i>点击下方序号获取歌曲</i>",
-            if collection.items.len() < 10 {
-                "共"
-            } else {
-                "前"
-            },
-            collection.items.len(),
-            track_list_text(&collection.items)
-        )
+        let count = if collection.items.len() < 10 {
+            format!("共 {} 首", collection.items.len())
+        } else {
+            format!("前 {} 首", collection.items.len())
+        };
+        head.paragraph(&format!("{platform} · {count}"))
+            .numbered_html(track_list_items(&collection.items))
+            .footer("点击下方序号获取歌曲")
     };
     let mut rows = track_pick_rows(&collection.items, None);
     if let Some(callback) = (MusicCallbackAction::SearchClose { requester_id }).encode() {
         rows.push(vec![callback_button("❌ 关闭", callback)]);
     }
-    let mut request = SendMessage::new(chat_id, text)
-        .parse_mode(ParseMode::HTML)
-        .reply_markup(InlineKeyboardMarkup::new(rows));
+    let mut request =
+        SendRichMessage::new(chat_id, page.build()).reply_markup(InlineKeyboardMarkup::new(rows));
     if let Some(reply_to) = reply_to {
         request = request.reply_parameters(crate::reply_to(reply_to));
     }
@@ -3446,7 +3471,7 @@ async fn handle_lyrics_callback(
         .await?;
         return Ok(());
     }
-    let page = InputRichMessage::new().html(rich_lyric_html(msg, platform, &lyrics, script));
+    let page = lyric_message(rich_lyric_html(msg, platform, &lyrics, script));
     let menu = rich_lyric_menu(platform, id, script);
     if matches!(msg, Message::RichMessage(_)) {
         let edit = EditMessageText::new()
@@ -3611,11 +3636,24 @@ async fn handle_inline_lyric_text_callback(
         .await?;
         return Ok(());
     };
+    // inline 消息读不回原内容，歌名靠网关解析一次（失败就只写“歌词”）
+    let settings = get_user_settings_or_default(user_id).await;
+    let query = MusicQuery {
+        platform,
+        keyword: id.to_string(),
+    };
+    let track = resolve_track(&query, Some(id), &settings).await.ok();
+    let page = lyric_page_html(
+        track.as_ref().map(|track| track.song.as_str()),
+        track.as_ref().map(|track| track.singer.as_str()),
+        platform,
+        &lyrics,
+        script,
+    );
     bot.send(
         EditMessageText::new()
             .inline_message_id(inline_message_id)
-            .text(inline_lyric_text("歌词", platform.label(), &lyrics, script))
-            .parse_mode(ParseMode::HTML)
+            .rich_message(lyric_message(page))
             .reply_markup(inline_lyric_switch_menu(platform, id, script)),
     )
     .await?;
@@ -4014,7 +4052,7 @@ async fn get_callback_music(
             keyword: keyword.to_string(),
         });
     let query_for_menu = search_query.as_ref().unwrap_or(&query);
-    let status_msg = message_has_text(&msg).then_some(&msg);
+    let status_msg = is_page_message(&msg).then_some(&msg);
     let media = deliver(
         &bot,
         media_request(&query, Some(id), &settings.quality, settings),
@@ -4109,12 +4147,18 @@ fn message_has_text(msg: &Message) -> bool {
     matches!(msg, Message::Text(_))
 }
 
+/// A message the bot wrote as a page (plain or rich text) rather than a
+/// file with a caption.
+fn is_page_message(msg: &Message) -> bool {
+    matches!(msg, Message::Text(_) | Message::RichMessage(_))
+}
+
 fn message_has_document(msg: &Message) -> bool {
     matches!(msg, Message::Document(_))
 }
 
 fn callback_reply_target(msg: &Message) -> Option<i64> {
-    if message_has_text(msg) {
+    if is_page_message(msg) {
         msg.reply_to_message().map(|msg| msg.message_id())
     } else {
         Some(msg.message_id())
@@ -4140,7 +4184,14 @@ async fn edit_callback_status_with_markup(
     markup: Option<InlineKeyboardMarkup>,
 ) -> Result<(), BotError> {
     let text = text.into();
-    if message_has_text(msg) {
+    if matches!(msg, Message::RichMessage(_)) {
+        let request = EditMessageText::new()
+            .chat_id(msg.chat().id())
+            .message_id(msg.message_id())
+            .rich_message(rich::status(&text))
+            .reply_markup(markup.unwrap_or_else(empty_keyboard));
+        bot.send(request).await?;
+    } else if message_has_text(msg) {
         let mut request = EditMessageText::new()
             .chat_id(msg.chat().id())
             .message_id(msg.message_id())
@@ -4169,7 +4220,7 @@ async fn delete_callback_status(
     msg: &Message,
     fallback_text: String,
 ) -> Result<(), BotError> {
-    if message_has_text(msg) {
+    if is_page_message(msg) {
         let _ = bot
             .send(DeleteMessage::new(msg.chat().id(), msg.message_id()))
             .await;
@@ -4530,7 +4581,7 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
         };
         if let Err(e) = result {
             // 限流/排队等瞬时拒绝（Busy）只弹提示，不能抹掉消息里已有的菜单
-            if !preserve_panel && !matches!(e, BotError::Busy(_)) && message_has_text(&msg) {
+            if !preserve_panel && !matches!(e, BotError::Busy(_)) && is_page_message(&msg) {
                 let _ = edit_callback_status(&bot, &msg, format!("{e}")).await;
             }
             let _ = bot
@@ -5335,13 +5386,15 @@ mod tests {
             panic!("expected callback button");
         };
         assert_eq!(callback, "music ilyric a 1624001324 t");
-        let telers::types::InputMessageContent::InputTextMessageContent(content) =
+        let telers::types::InputMessageContent::InputRichMessageContent(content) =
             article.input_message_content
         else {
-            panic!("expected text content");
+            panic!("expected rich content");
         };
-        assert_eq!(content.parse_mode.as_deref(), Some("HTML"));
-        assert!(content.message_text.contains("<blockquote expandable>"));
+        let html = content.rich_message.html.unwrap();
+        assert!(html.starts_with(&format!("<h3>{}</h3>", item.song)));
+        assert!(html.contains("<blockquote expandable>"));
+        assert_eq!(content.rich_message.skip_entity_detection, Some(true));
     }
 
     #[test]
@@ -5956,9 +6009,13 @@ mod tests {
             tracks: (1..=10).map(search_item).collect(),
             complete: true,
         };
-        let text = search_page_text(&query, &results, 2);
-        assert!(text.starts_with("🔍 <b>晴天 &amp; 稻香</b>\nQQ音乐 · 第 2/2 页\n\n"));
-        assert!(text.contains("<b>1.</b> 歌&lt;9&gt; — 周杰伦\n<b>2.</b> 歌&lt;10&gt; — 周杰伦"));
+        let page = search_page(&query, &results, 2);
+        assert_eq!(
+            page.html(),
+            "<h3>🔍 晴天 &amp; 稻香</h3><p>QQ音乐 · 第 2/2 页</p>\
+             <ol><li><b>歌&lt;9&gt;</b> — 周杰伦</li><li><b>歌&lt;10&gt;</b> — 周杰伦</li></ol>\
+             <footer>点击下方序号获取歌曲</footer>"
+        );
 
         let rows = callbacks(&search_page_menu(&query, Some(&results), 2, 42));
         assert_eq!(
@@ -6008,7 +6065,11 @@ mod tests {
             tracks: (1..=SEARCH_PAGE_SIZE).map(search_item).collect(),
             complete: false,
         };
-        assert!(search_page_text(&query, &results, 1).contains("QQ音乐 · 第 1 页"));
+        assert!(
+            search_page(&query, &results, 1)
+                .html()
+                .contains("<p>QQ音乐 · 第 1 页</p>")
+        );
         let rows = callbacks(&search_page_menu(&query, Some(&results), 1, 42));
         assert_eq!(rows[0].len(), 4);
         assert_eq!(rows[1].len(), 4);
@@ -6028,9 +6089,17 @@ mod tests {
             tracks: Vec::new(),
             complete: true,
         };
-        assert!(search_page_text(&query, &results, 1).contains("酷狗音乐 · 没有找到结果"));
-        let failure = search_failure_text(&query, &BotError::Custom("超时 <x>".to_string()));
-        assert!(failure.contains("酷狗音乐 · 搜索失败\n\n超时 &lt;x&gt;"));
+        assert!(
+            search_page(&query, &results, 1)
+                .html()
+                .contains("<p>酷狗音乐 · 没有找到结果</p>")
+        );
+        let failure = search_failure_page(&query, &BotError::Custom("超时 <x>".to_string()));
+        assert!(
+            failure
+                .html()
+                .contains("<p>酷狗音乐 · 搜索失败</p><blockquote>超时 &lt;x&gt;</blockquote>")
+        );
         for results in [Some(&results), None] {
             let rows = callbacks(&search_page_menu(&query, results, 1, 42));
             assert_eq!(rows.len(), 3);
