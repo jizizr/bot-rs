@@ -44,7 +44,7 @@ pub struct Music {
     pub gateway: MusicGateway,
     /// Telegram chat MHub stores its uploads in (shared `[music]` key);
     /// lyric covers are uploaded there once so every page can reuse them.
-    /// 0 leaves inline lyric pages without covers.
+    /// 0 keeps them in the owner's private chat, as MHub does.
     #[serde(default)]
     pub inline_upload_chat_id: i64,
     // Download governor (funcs/command/music/queue.rs): concurrent download

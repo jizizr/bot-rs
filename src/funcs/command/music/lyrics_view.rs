@@ -241,9 +241,13 @@ async fn uploaded_banner(bot: &Bot, url: &str) -> Result<String, BotError> {
     if let Some(file_id) = lock_unpoisoned(&COVER_PHOTOS).get(url) {
         return Ok(file_id.clone());
     }
-    let chat_id = SETTINGS.music.inline_upload_chat_id;
+    // 与 MHub 的音频缓存同一个落点：没配存储群时传到 bot 主人的私聊
+    let chat_id = match SETTINGS.music.inline_upload_chat_id {
+        0 => SETTINGS.bot.owner,
+        chat_id => chat_id,
+    };
     if chat_id == 0 {
-        return Err(BotError::Custom("no storage chat for covers".to_string()));
+        return Err(BotError::Custom("no chat to keep covers in".to_string()));
     }
     let response = crate::HTTP_CLIENT
         .get(url)
