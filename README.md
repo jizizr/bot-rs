@@ -7,7 +7,8 @@ Music commands:
 - `/music get <song>`: fetch the first result directly.
 - Inline mode (`@bot <song> [platform] [quality]`): the button above the results opens a private-chat platform picker that returns to the same search on another platform. Inline lyrics (`@bot 歌词 <song>`) and inline settings are rich messages too.
 - Search results, collections, the music panel and settings, favorites and the inline platform picker are rich messages (headings, numbered lists, footers); song files stay audio messages, since Telegram allows only ordinary formatting in captions.
-- The lyrics button on a song sends a rich message (Bot API rich messages): the song, each line with its translation under it in a quote that opens on demand, folded credits, and buttons to switch simplified/traditional script or get the lyrics as an LRC file.
+- The lyrics button on a song sends a rich message (Bot API rich messages): the cover, the song with its singer, platform and album, each line with its time and its translation under it in a quote that opens on demand, folded credits, and buttons to switch simplified/traditional script or get the lyrics as an LRC file. Songs sent inline can only show lyrics in their caption, so they also get a "full lyrics" link that opens the page in the private chat.
+- `/curl <url>` answers with a rich page: status, address and network in a table, the certificate and headers folded, and the body on Paste.
 - `/music setting`: configure the default platform, quality, cover, and lyric script.
 - `/music collection <link-or-id>`: open a collection using the saved default platform.
 

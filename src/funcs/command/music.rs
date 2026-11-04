@@ -8,6 +8,7 @@ use crate::dao::mongo::{
         UserMusicSettings, get_user_settings, get_user_settings_or_default, save_user_settings,
     },
 };
+use crate::funcs::pkg::rich::{self, RichPage};
 use ferrous_opencc::{OpenCC, config::BuiltinConfig};
 use futures::future::join_all;
 use lazy_static::lazy_static;
@@ -16,15 +17,13 @@ use provider::{
     MusicQuery, MusicSearchItem, MusicTrack,
 };
 use ratelimit::ResourceAction;
-use rich::RichPage;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
 use telers::types::{
     InlineQueryResult, InlineQueryResultArticle, InlineQueryResultsButton, InputMedia,
-    InputMediaAudio, InputMediaDocument, InputRichMessage, InputRichMessageContent,
-    InputTextMessageContent,
+    InputMediaAudio, InputMediaDocument, InputRichMessageContent, InputTextMessageContent,
 };
 use tokio::{sync::mpsc, task::JoinHandle};
 use url::Url;
@@ -32,7 +31,6 @@ use url::Url;
 mod provider;
 mod queue;
 mod ratelimit;
-mod rich;
 
 const CALLBACK_PREFIX: &str = "music";
 const CALLBACK_LIMIT: usize = 64;
@@ -79,6 +77,8 @@ const SEARCH_OWNER_NOTICE: &str = "这是其他用户的搜索结果，请自己
 const SEARCH_TEXT_LIMIT: usize = 40;
 /// Deep-link parameter of the platform picker above inline results.
 pub const INLINE_PLATFORM_START: &str = "music_platform";
+/// Deep-link prefix that opens a song's full lyric page in the private chat.
+pub const LYRIC_START_PREFIX: &str = "lyric-";
 const INLINE_KEYWORD_TTL: Duration = Duration::from_secs(30 * 60);
 const INLINE_KEYWORD_CAPACITY: usize = 1024;
 
@@ -2374,18 +2374,18 @@ fn inline_lyric_result(
     script: MusicLyricScript,
     cover: Option<&str>,
 ) -> Option<InlineQueryResult> {
-    let page = lyric_page_html(
-        Some(&track.song),
-        Some(&track.singer),
-        track.platform,
-        lyrics,
-        script,
-    );
+    // inline 结果里的富文本只能引用已上传的文件，封面图用不了外链
+    let song = LyricSong {
+        title: Some(track.song.clone()),
+        singer: Some(track.singer.clone()),
+        ..LyricSong::default()
+    };
+    let page = lyric_page(&song, track.platform, lyrics, script);
     let title = format!("歌词：{} - {}", track.song, track.singer);
     let mut result = InlineQueryResultArticle::new(
         inline_result_id("lyric", track.platform, &track.id, script.callback_code()),
         title,
-        InputRichMessageContent::new(lyric_message(page)),
+        InputRichMessageContent::new(page.build()),
     )
     .description(format!("{} · {}", track.platform.label(), script.label()))
     .reply_markup(inline_lyric_switch_menu(track.platform, &track.id, script));
@@ -2440,9 +2440,10 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 /// Telegram's limit for a rich message, with room for the closing tags.
 const RICH_MESSAGE_LIMIT: usize = 32_000;
 
-/// One sung line and the translation shown under it.
+/// One sung line, when it is sung, and the translation shown under it.
 #[derive(Debug, Eq, PartialEq)]
 struct LyricLine {
+    time: Option<u64>,
     text: String,
     translation: Option<String>,
 }
@@ -2491,6 +2492,7 @@ fn timed_lyric_lines(plain: &str, translation: &str) -> Vec<LyricLine> {
         if times.is_empty() {
             if !line.trim_start().starts_with('[') {
                 untimed.push(LyricLine {
+                    time: None,
                     text: text.to_string(),
                     translation: None,
                 });
@@ -2508,6 +2510,7 @@ fn timed_lyric_lines(plain: &str, translation: &str) -> Vec<LyricLine> {
     timed
         .into_iter()
         .map(|(time, text)| LyricLine {
+            time: Some(time),
             text: text.to_string(),
             translation: translations
                 .get(&time)
@@ -2517,67 +2520,144 @@ fn timed_lyric_lines(plain: &str, translation: &str) -> Vec<LyricLine> {
         .collect()
 }
 
-/// A lyric page: the song, its lines with translations under them in a
-/// quote that opens on demand, the credits folded away, and where it is from.
-fn rich_lyric_html(
-    msg: &Message,
-    platform: MusicPlatform,
-    lyrics: &provider::MusicLyrics,
-    script: MusicLyricScript,
-) -> String {
-    let audio = lyric_song_audio(msg);
-    lyric_page_html(
-        audio.and_then(|audio| audio.title.as_deref()),
-        audio.and_then(|audio| audio.performer.as_deref()),
-        platform,
-        lyrics,
-        script,
-    )
+/// What a lyric page shows about its song; any of it may be unknown.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct LyricSong {
+    title: Option<String>,
+    singer: Option<String>,
+    album: Option<String>,
+    cover: Option<String>,
 }
 
-fn lyric_page_html(
-    song: Option<&str>,
-    singer: Option<&str>,
+impl LyricSong {
+    fn from_track(track: &MusicTrack) -> Self {
+        let known = |value: &str| Some(value.trim().to_string()).filter(|value| !value.is_empty());
+        Self {
+            title: known(&track.song),
+            singer: known(&track.singer),
+            album: known(&track.album),
+            cover: known(&track.cover).map(|cover| sized_cover(track.platform, &cover)),
+        }
+    }
+
+    fn from_audio(audio: Option<&telers::types::Audio>) -> Self {
+        let known = |value: Option<&str>| {
+            value
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        };
+        Self {
+            title: known(audio.and_then(|audio| audio.title.as_deref())),
+            singer: known(audio.and_then(|audio| audio.performer.as_deref())),
+            ..Self::default()
+        }
+    }
+
+    /// The song as MHub knows it, filling in whatever `fallback` says.
+    async fn resolve(
+        platform: MusicPlatform,
+        id: &str,
+        user_id: i64,
+        fallback: LyricSong,
+    ) -> LyricSong {
+        let settings = get_user_settings_or_default(user_id).await;
+        let query = MusicQuery {
+            platform,
+            keyword: id.to_string(),
+        };
+        match resolve_track(&query, Some(id), &settings).await {
+            Ok(track) => {
+                let song = Self::from_track(&track);
+                Self {
+                    title: song.title.or(fallback.title),
+                    singer: song.singer.or(fallback.singer),
+                    album: song.album.or(fallback.album),
+                    cover: song.cover.or(fallback.cover),
+                }
+            }
+            Err(err) => {
+                log::warn!("lyric page could not resolve {}:{id}: {err}", platform.id());
+                fallback
+            }
+        }
+    }
+
+    fn without_cover(&self) -> Self {
+        Self {
+            cover: None,
+            ..self.clone()
+        }
+    }
+}
+
+/// Covers at a size that reads well beside lyrics without a heavy download.
+/// URLs whose size cannot be chosen are kept as they are.
+fn sized_cover(platform: MusicPlatform, url: &str) -> String {
+    lazy_static! {
+        static ref APPLE_SIZE: regex::Regex =
+            regex::Regex::new(r"/\d+x\d+(bb|cc)?\.(jpg|jpeg|png|webp)$").unwrap();
+        static ref QQ_SIZE: regex::Regex = regex::Regex::new(r"R\d+x\d+").unwrap();
+    }
+    match platform {
+        MusicPlatform::AppleMusic => APPLE_SIZE.replace(url, "/600x600bb.jpg").into_owned(),
+        MusicPlatform::Tencent => QQ_SIZE.replace(url, "R500x500").into_owned(),
+        MusicPlatform::Netease if !url.contains('?') => format!("{url}?param=600y600"),
+        _ => url.to_string(),
+    }
+}
+
+/// `mm:ss` for a time in milliseconds.
+fn lyric_clock(time: u64) -> String {
+    let seconds = time / 1000;
+    format!("{:02}:{:02}", seconds / 60, seconds % 60)
+}
+
+/// A lyric page: the cover, the song, its timed lines with translations
+/// under them in a quote that opens on demand, the credits folded away, and
+/// where it is from.
+fn lyric_page(
+    song: &LyricSong,
     platform: MusicPlatform,
     lyrics: &provider::MusicLyrics,
     script: MusicLyricScript,
-) -> String {
+) -> RichPage {
     let convert = |text: &str| html_escape(&convert_lyric_script(text, script));
-    let song = song
-        .map(str::trim)
-        .filter(|title| !title.is_empty())
-        .unwrap_or("歌词");
-    let singer = singer.map(str::trim).filter(|singer| !singer.is_empty());
-    let mut head = format!("<h3>{}</h3>", html_escape(song));
-    head.push_str(&match singer {
-        Some(singer) => format!("<p>{} · {}</p>", html_escape(singer), platform.label()),
-        None => format!("<p>{}</p>", platform.label()),
-    });
-    let mut tail = String::new();
+    let mut page = RichPage::default();
+    if let Some(cover) = &song.cover {
+        page = page.image(cover, None);
+    }
+    page = page.heading(song.title.as_deref().unwrap_or("歌词"));
+    let byline = [
+        song.singer.as_deref(),
+        Some(platform.label()),
+        song.album.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" · ");
+    page = page.paragraph(&byline);
+
     let credits = lyrics
         .credits
         .iter()
         .map(|credit| credit.trim())
         .filter(|credit| !credit.is_empty())
-        .collect::<Vec<_>>();
-    if !credits.is_empty() {
-        tail.push_str("<details><summary>制作人员</summary>");
-        for credit in credits {
-            tail.push_str(&format!("<p>{}</p>", convert(credit)));
-        }
-        tail.push_str("</details>");
-    }
-    tail.push_str(&format!(
-        "<footer>{} · {}</footer>",
-        platform.label(),
-        script.label()
-    ));
+        .fold(RichPage::default(), |page, credit| {
+            page.paragraph_html(&convert(credit))
+        });
+    let tail = RichPage::default()
+        .details("制作人员", credits)
+        .footer(&format!("{} · {}", platform.label(), script.label()));
 
+    let budget = RICH_MESSAGE_LIMIT.saturating_sub(page.html().len() + tail.html().len() + 64);
     let mut body = String::new();
-    let budget = RICH_MESSAGE_LIMIT.saturating_sub(head.len() + tail.len() + 64);
-    let lines = timed_lyric_lines(&lyrics.plain, &lyrics.translation);
-    for line in &lines {
-        let mut entry = convert(&line.text);
+    for line in timed_lyric_lines(&lyrics.plain, &lyrics.translation) {
+        let mut entry = match line.time {
+            Some(time) => format!("<code>{}</code> {}", lyric_clock(time), convert(&line.text)),
+            None => convert(&line.text),
+        };
         if let Some(translation) = &line.translation {
             entry.push_str(&format!("<br><i>{}</i>", convert(translation)));
         }
@@ -2593,13 +2673,8 @@ fn lyric_page_html(
     if body.is_empty() {
         body.push_str("暂无歌词信息");
     }
-    format!("{head}<blockquote expandable>{body}</blockquote>{tail}")
-}
-
-fn lyric_message(html: String) -> InputRichMessage {
-    InputRichMessage::new()
-        .html(html)
-        .skip_entity_detection(true)
+    page.block_html(&format!("<blockquote expandable>{body}</blockquote>"))
+        .block_html(tail.html())
 }
 
 /// Under a rich lyric page: switch script, or get the lyrics as an LRC file.
@@ -3471,18 +3546,10 @@ async fn handle_lyrics_callback(
         .await?;
         return Ok(());
     }
-    let page = lyric_message(rich_lyric_html(msg, platform, &lyrics, script));
-    let menu = rich_lyric_menu(platform, id, script);
+    let fallback = LyricSong::from_audio(lyric_song_audio(msg));
+    let song = LyricSong::resolve(platform, id, user_id, fallback).await;
     if matches!(msg, Message::RichMessage(_)) {
-        let edit = EditMessageText::new()
-            .chat_id(msg.chat().id())
-            .message_id(msg.message_id())
-            .rich_message(page)
-            .reply_markup(menu);
-        match bot.send(edit).await.map_err(BotError::from) {
-            Err(err) if !is_not_modified(&err) => return Err(err),
-            _ => {}
-        }
+        edit_lyric_page(bot, msg, &song, platform, id, &lyrics, script).await?;
         bot.send(
             AnswerCallbackQuery::new(callback_id.to_string())
                 .text(format!("已切换{}", script.label())),
@@ -3490,15 +3557,81 @@ async fn handle_lyrics_callback(
         .await?;
         return Ok(());
     }
-    bot.send(
-        SendRichMessage::new(msg.chat().id(), page)
-            .reply_parameters(reply_to(msg.message_id()))
-            .reply_markup(menu),
+    send_lyric_page(
+        bot,
+        msg.chat().id(),
+        Some(msg.message_id()),
+        &song,
+        platform,
+        id,
+        &lyrics,
+        script,
     )
     .await?;
     bot.send(AnswerCallbackQuery::new(callback_id.to_string()).text("已发送歌词"))
         .await?;
     Ok(())
+}
+
+/// Sends a lyric page, without the cover if Telegram cannot fetch it.
+#[allow(clippy::too_many_arguments)]
+async fn send_lyric_page(
+    bot: &Bot,
+    chat_id: i64,
+    reply: Option<i64>,
+    song: &LyricSong,
+    platform: MusicPlatform,
+    id: &str,
+    lyrics: &provider::MusicLyrics,
+    script: MusicLyricScript,
+) -> BotResult {
+    let send = |song: &LyricSong| {
+        SendRichMessage::new(chat_id, lyric_page(song, platform, lyrics, script).build())
+            .reply_parameters_option(reply.map(reply_to))
+            .reply_markup(rich_lyric_menu(platform, id, script))
+    };
+    match bot.send(send(song)).await {
+        Ok(_) => Ok(()),
+        Err(err) if song.cover.is_some() => {
+            log::warn!("lyric page with cover failed, sending without: {err}");
+            bot.send(send(&song.without_cover())).await?;
+            Ok(())
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// Rewrites a lyric page in place, without the cover if Telegram cannot
+/// fetch it.
+async fn edit_lyric_page(
+    bot: &Bot,
+    msg: &Message,
+    song: &LyricSong,
+    platform: MusicPlatform,
+    id: &str,
+    lyrics: &provider::MusicLyrics,
+    script: MusicLyricScript,
+) -> BotResult {
+    let edit = |song: &LyricSong| {
+        EditMessageText::new()
+            .chat_id(msg.chat().id())
+            .message_id(msg.message_id())
+            .rich_message(lyric_page(song, platform, lyrics, script).build())
+            .reply_markup(rich_lyric_menu(platform, id, script))
+    };
+    let result = match bot.send(edit(song)).await.map_err(BotError::from) {
+        Err(err) if song.cover.is_some() && !is_not_modified(&err) => {
+            log::warn!("lyric page with cover failed, editing without: {err}");
+            bot.send(edit(&song.without_cover()))
+                .await
+                .map_err(BotError::from)
+        }
+        result => result,
+    };
+    match result {
+        Err(err) if !is_not_modified(&err) => Err(err),
+        _ => Ok(()),
+    }
 }
 
 /// Sends the lyrics of a rich lyric page as an LRC file, answering the page.
@@ -3636,24 +3769,14 @@ async fn handle_inline_lyric_text_callback(
         .await?;
         return Ok(());
     };
-    // inline 消息读不回原内容，歌名靠网关解析一次（失败就只写“歌词”）
-    let settings = get_user_settings_or_default(user_id).await;
-    let query = MusicQuery {
-        platform,
-        keyword: id.to_string(),
-    };
-    let track = resolve_track(&query, Some(id), &settings).await.ok();
-    let page = lyric_page_html(
-        track.as_ref().map(|track| track.song.as_str()),
-        track.as_ref().map(|track| track.singer.as_str()),
-        platform,
-        &lyrics,
-        script,
-    );
+    // inline 消息读不回原内容，歌名靠网关解析一次；编辑 inline 消息不能引用外链图片
+    let song = LyricSong::resolve(platform, id, user_id, LyricSong::default())
+        .await
+        .without_cover();
     bot.send(
         EditMessageText::new()
             .inline_message_id(inline_message_id)
-            .rich_message(lyric_message(page))
+            .rich_message(lyric_page(&song, platform, &lyrics, script).build())
             .reply_markup(inline_lyric_switch_menu(platform, id, script)),
     )
     .await?;
@@ -4654,12 +4777,77 @@ fn inline_track_menu_with_lyric_label(
     {
         action_row.push(callback_button("收藏", callback));
     }
+    // inline 消息里只能改音频说明，完整的富文本歌词页放到私聊
+    let full_lyrics = track
+        .platform
+        .supports_lyrics()
+        .then(|| full_lyrics_button(track.platform, &track.id))
+        .flatten();
 
-    let rows = [utility_row, action_row]
+    let rows = [utility_row, action_row, full_lyrics.into_iter().collect()]
         .into_iter()
         .filter(|row| !row.is_empty())
         .collect::<Vec<_>>();
     (!rows.is_empty()).then(|| InlineKeyboardMarkup::new(rows))
+}
+
+/// The `/start` parameter of a song's full lyric page, if its id fits one.
+fn lyric_start_parameter(platform: MusicPlatform, id: &str) -> Option<String> {
+    let parameter = format!("{LYRIC_START_PREFIX}{}-{id}", platform.callback_code());
+    (!id.is_empty()
+        && parameter.len() <= 64
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'))
+    .then_some(parameter)
+}
+
+fn parse_lyric_start_parameter(parameter: &str) -> Option<(MusicPlatform, &str)> {
+    let (code, id) = parameter
+        .strip_prefix(LYRIC_START_PREFIX)?
+        .split_once('-')?;
+    Some((MusicPlatform::from_callback_code(code)?, id)).filter(|(_, id)| !id.is_empty())
+}
+
+fn full_lyrics_button(platform: MusicPlatform, id: &str) -> Option<InlineKeyboardButton> {
+    let username = crate::ME.get()?.username.as_deref()?;
+    let parameter = lyric_start_parameter(platform, id)?;
+    let url = Url::parse(&format!("https://t.me/{username}?start={parameter}")).ok()?;
+    Some(url_button("📖 完整歌词", url))
+}
+
+/// Answers the deep link of a full lyric page with the page.
+pub async fn send_lyric_start(bot: &Bot, msg: &Message, parameter: &str) -> BotResult {
+    let Some((platform, id)) = parse_lyric_start_parameter(parameter) else {
+        return Ok(());
+    };
+    let user_id = user_id_from_message(msg);
+    let Some(lyrics) = fetch_lyrics_limited(platform, id, user_id, Some(msg.chat().id())).await?
+    else {
+        bot.send(
+            SendMessage::new(
+                msg.chat().id(),
+                format!("{} 没有可用歌词", platform.label()),
+            )
+            .reply_parameters(reply_to(msg.message_id())),
+        )
+        .await?;
+        return Ok(());
+    };
+    let settings = get_user_settings_or_default(user_id).await;
+    let script = MusicLyricScript::from_stored_value(&settings.lyric_script);
+    let song = LyricSong::resolve(platform, id, user_id, LyricSong::default()).await;
+    send_lyric_page(
+        bot,
+        msg.chat().id(),
+        Some(msg.message_id()),
+        &song,
+        platform,
+        id,
+        &lyrics,
+        script,
+    )
+    .await
 }
 
 fn track_menu_for_context(
@@ -5866,14 +6054,17 @@ mod tests {
             lines,
             [
                 LyricLine {
+                    time: Some(1_500),
                     text: "故事的小黄花".to_string(),
                     translation: Some("The little yellow flower".to_string()),
                 },
                 LyricLine {
+                    time: Some(5_000),
                     text: "从出生那年就飘着".to_string(),
                     translation: None,
                 },
                 LyricLine {
+                    time: Some(30_000),
                     text: "从出生那年就飘着".to_string(),
                     translation: Some("Drifting since birth".to_string()),
                 },
@@ -5901,19 +6092,35 @@ mod tests {
             roman: String::new(),
             credits: vec!["作词：周杰伦".to_string()],
         };
-        let html = rich_lyric_html(
-            &msg,
+        let song = LyricSong::from_audio(lyric_song_audio(&msg));
+        let page = lyric_page(
+            &song,
             MusicPlatform::Tencent,
             &lyrics,
             MusicLyricScript::Traditional,
         );
         assert_eq!(
-            html,
+            page.html(),
             "<h3>晴天</h3><p>周杰伦 &amp; &lt;Band&gt; · QQ音乐</p>\
-             <blockquote expandable>故事的小黃花<br><i>Little flower</i></blockquote>\
+             <blockquote expandable><code>00:01</code> 故事的小黃花<br><i>Little flower</i></blockquote>\
              <details><summary>制作人员</summary><p>作詞：周杰倫</p></details>\
              <footer>QQ音乐 · 繁体</footer>"
         );
+        let with_cover = LyricSong {
+            album: Some("叶惠美".to_string()),
+            cover: Some("https://example.com/c.jpg".to_string()),
+            ..song
+        };
+        let page = lyric_page(
+            &with_cover,
+            MusicPlatform::Tencent,
+            &lyrics,
+            MusicLyricScript::Simplified,
+        );
+        assert!(page.html().starts_with(
+            "<img src=\"https://example.com/c.jpg\"/><h3>晴天</h3>\
+             <p>周杰伦 &amp; &lt;Band&gt; · QQ音乐 · 叶惠美</p>"
+        ));
         let rows = callbacks(&rich_lyric_menu(
             MusicPlatform::Tencent,
             "001",
@@ -5931,6 +6138,50 @@ mod tests {
             MusicCallbackAction::LyricsFile(MusicPlatform::Tencent, ref id, MusicLyricScript::Traditional) if id == "001"
         ));
         assert!(MusicCallbackAction::decode("music lyricf t 001").is_err());
+    }
+
+    #[test]
+    fn covers_are_sized_per_platform() {
+        assert_eq!(
+            sized_cover(
+                MusicPlatform::AppleMusic,
+                "https://is1.mzstatic.com/image/thumb/a/b.jpg/1000x1000bb.jpg"
+            ),
+            "https://is1.mzstatic.com/image/thumb/a/b.jpg/600x600bb.jpg"
+        );
+        assert_eq!(
+            sized_cover(
+                MusicPlatform::Tencent,
+                "https://y.gtimg.cn/music/photo_new/T002R800x800M000x.jpg"
+            ),
+            "https://y.gtimg.cn/music/photo_new/T002R500x500M000x.jpg"
+        );
+        assert_eq!(
+            sized_cover(MusicPlatform::Netease, "https://p1.music.126.net/x.jpg"),
+            "https://p1.music.126.net/x.jpg?param=600y600"
+        );
+        assert_eq!(
+            sized_cover(MusicPlatform::Netease, "https://p1.music.126.net/x.jpg?a=1"),
+            "https://p1.music.126.net/x.jpg?a=1"
+        );
+        assert_eq!(lyric_clock(62_340), "01:02");
+    }
+
+    #[test]
+    fn lyric_deep_links_carry_platform_and_id() {
+        let parameter = lyric_start_parameter(MusicPlatform::Netease, "1893321422").unwrap();
+        assert_eq!(parameter, "lyric-n-1893321422");
+        assert_eq!(
+            parse_lyric_start_parameter(&parameter),
+            Some((MusicPlatform::Netease, "1893321422"))
+        );
+        assert_eq!(
+            parse_lyric_start_parameter("lyric-y-dQw4w9-WgXcQ"),
+            Some((MusicPlatform::YouTubeMusic, "dQw4w9-WgXcQ"))
+        );
+        assert!(lyric_start_parameter(MusicPlatform::Netease, "a b").is_none());
+        assert!(lyric_start_parameter(MusicPlatform::Netease, &"9".repeat(60)).is_none());
+        assert!(parse_lyric_start_parameter("lyric-n-").is_none());
     }
 
     fn search_item(index: usize) -> MusicSearchItem {

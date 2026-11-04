@@ -1,12 +1,18 @@
-//! Rich messages (Bot API 10.1+). Every music page is written in the small
-//! HTML subset Telegram accepts for them; all text handed to a page builder
-//! is escaped here, and only `*_html` methods take markup.
+//! Rich messages (Bot API 10.1+). Pages are written in the small HTML subset
+//! Telegram accepts for them; all text handed to a page builder is escaped
+//! here, and only `*_html` methods take markup.
 
-use super::html_escape;
 use telers::types::{InputRichMessage, Message, RichBlock, RichText};
 
+pub fn html_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
 #[derive(Debug, Default)]
-pub(super) struct RichPage {
+pub struct RichPage {
     html: String,
 }
 
@@ -57,13 +63,65 @@ impl RichPage {
         self
     }
 
+    /// A picture from an HTTP(S) URL, with an optional caption under it.
+    pub fn image(mut self, url: &str, caption: Option<&str>) -> Self {
+        let img = format!("<img src=\"{}\"/>", html_escape(url));
+        self.html.push_str(
+            &match caption.filter(|caption| !caption.trim().is_empty()) {
+                Some(caption) => format!(
+                    "<figure>{img}<figcaption>{}</figcaption></figure>",
+                    html_escape(caption)
+                ),
+                None => img,
+            },
+        );
+        self
+    }
+
+    /// A two-column table of `name | value` rows; values are markup.
+    pub fn fields_html<'a>(mut self, rows: impl IntoIterator<Item = (&'a str, String)>) -> Self {
+        let rows = rows
+            .into_iter()
+            .map(|(name, value)| format!("<tr><th>{}</th><td>{value}</td></tr>", html_escape(name)))
+            .collect::<String>();
+        if !rows.is_empty() {
+            self.html
+                .push_str(&format!("<table bordered striped compact>{rows}</table>"));
+        }
+        self
+    }
+
+    /// A block folded under `summary` until opened.
+    pub fn details(mut self, summary: &str, inner: RichPage) -> Self {
+        if !inner.html.is_empty() {
+            self.html.push_str(&format!(
+                "<details><summary>{}</summary>{}</details>",
+                html_escape(summary),
+                inner.html
+            ));
+        }
+        self
+    }
+
+    /// Preformatted text, kept as written.
+    pub fn pre(mut self, text: &str) -> Self {
+        self.html
+            .push_str(&format!("<pre>{}</pre>", html_escape(text.trim_end())));
+        self
+    }
+
+    /// Markup for a block Telegram supports but this builder does not name.
+    pub fn block_html(mut self, html: &str) -> Self {
+        self.html.push_str(html);
+        self
+    }
+
     pub fn footer(mut self, text: &str) -> Self {
         self.html
             .push_str(&format!("<footer>{}</footer>", html_escape(text)));
         self
     }
 
-    #[cfg(test)]
     pub fn html(&self) -> &str {
         &self.html
     }
@@ -77,7 +135,7 @@ impl RichPage {
 }
 
 /// A status line such as download progress, one paragraph per line.
-pub(super) fn status(text: &str) -> InputRichMessage {
+pub fn status(text: &str) -> InputRichMessage {
     text.lines()
         .filter(|line| !line.trim().is_empty())
         .fold(RichPage::default(), RichPage::paragraph)
@@ -85,7 +143,7 @@ pub(super) fn status(text: &str) -> InputRichMessage {
 }
 
 /// The text of the first heading of a rich message.
-pub(super) fn first_heading(msg: &Message) -> Option<String> {
+pub fn first_heading(msg: &Message) -> Option<String> {
     let Message::RichMessage(message) = msg else {
         return None;
     };

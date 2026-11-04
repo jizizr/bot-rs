@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use super::*;
+use crate::funcs::pkg::rich::{RichPage, html_escape};
 use reqwest::{
     Client, ClientBuilder, Response, Version,
     header::{HeaderMap, HeaderValue},
@@ -87,13 +88,6 @@ fn get_title(body: &str) -> Option<String> {
     }
 }
 
-fn html_escape(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
 fn html_link(label: &str, url: &str) -> String {
     format!(
         "<a href=\"{}\">{}</a>",
@@ -115,44 +109,43 @@ fn get_http_version(resq: &Response) -> String {
     .to_string()
 }
 
-async fn get_ip_info(ip: &str) -> String {
+/// Where an address is and which network announces it, as table rows.
+async fn get_ip_info(ip: &str) -> Vec<(&'static str, String)> {
     let ip_info: Result<Ip, reqwest::Error> = get(&format!("http://ipwho.is/{ip}")).await;
     match ip_info {
         Ok(ip) if ip.message.is_some() => {
-            if ip.message.as_ref().unwrap() == "Invalid IP address"
-                || ip.message.unwrap() == "Reserved range"
-            {
-                format!(
-                    "<b>Location:</b> {}\n<b>Announced By:</b> {}",
-                    "Reserved range", "Reserved range"
-                )
+            let message = ip.message.unwrap_or_default();
+            if message == "Invalid IP address" || message == "Reserved range" {
+                vec![("位置", "保留地址".to_string())]
             } else {
-                "API到达限额".to_string()
+                vec![("位置", "查询额度已用完".to_string())]
             }
         }
-        Ok(ip) => format!(
-            "<b>Location:</b> {}\n<b>Announced By:</b> {}",
-            html_escape(&format!(
-                "{} {} {} {}",
-                ip.continent.unwrap_or(String::new()),
-                ip.country.unwrap_or(String::new()),
-                ip.region.unwrap_or(String::new()),
-                ip.city.unwrap_or(String::new())
-            )),
-            html_escape(&format!(
-                "AS{} {}",
-                ip.connection.as_ref().unwrap().asn,
-                ip.connection.as_ref().unwrap().isp
-            ))
-        ),
+        Ok(ip) => {
+            let place = [ip.continent, ip.country, ip.region, ip.city]
+                .into_iter()
+                .flatten()
+                .filter(|part| !part.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let mut rows = vec![("位置", html_escape(&place))];
+            if let Some(connection) = ip.connection {
+                rows.push((
+                    "网络",
+                    html_escape(&format!("AS{} {}", connection.asn, connection.isp)),
+                ));
+            }
+            rows
+        }
         Err(e) => {
             log::error!("{e}");
-            "".to_string()
+            Vec::new()
         }
     }
 }
 
-async fn get_ssl(url: &str) -> Result<String, BotError> {
+/// The certificate the server presents, as table rows.
+async fn get_ssl(url: &str) -> Result<Vec<(&'static str, String)>, BotError> {
     // 连接到远程服务器
     let stream = CONNECTOR
         .connect(url, TcpStream::connect(format!("{url}:443")).await?)
@@ -174,13 +167,12 @@ async fn get_ssl(url: &str) -> Result<String, BotError> {
     let valid_from = cert.tbs_certificate.validity.not_before;
     let valid_until = cert.tbs_certificate.validity.not_after;
 
-    Ok(format!(
-        "<b>Subject:</b> {}\n<b>Issuer:</b> {}\n<b>Valid from:</b> {}\n<b>Valid until:</b> {}",
-        html_escape(&subject.to_string()),
-        html_escape(&issuer.to_string()),
-        html_escape(&valid_from.to_string()),
-        html_escape(&valid_until.to_string())
-    ))
+    Ok(vec![
+        ("主体", html_escape(&subject.to_string())),
+        ("签发者", html_escape(&issuer.to_string())),
+        ("生效", html_escape(&valid_from.to_string())),
+        ("到期", html_escape(&valid_until.to_string())),
+    ])
 }
 
 async fn get_resp(url: &str) -> Result<Response, BotError> {
@@ -199,7 +191,8 @@ async fn get_resp(url: &str) -> Result<Response, BotError> {
     Ok(resp)
 }
 
-async fn get_header(resp: &Response) -> Result<String, BotError> {
+/// Response headers one per line, cookies left out, and how many there are.
+async fn get_header(resp: &Response) -> Result<(usize, String), BotError> {
     let mut header = String::new();
     let mut hash_set = HashSet::new();
     resp.headers().iter().for_each(|(k, v)| {
@@ -216,7 +209,7 @@ async fn get_header(resp: &Response) -> Result<String, BotError> {
             String::from_utf8_lossy(v.as_bytes())
         ));
     });
-    Ok(header)
+    Ok((hash_set.len(), header))
 }
 
 async fn post_paste(text: String) -> Result<String, BotError> {
@@ -230,65 +223,70 @@ async fn post_paste(text: String) -> Result<String, BotError> {
     Ok(format!("https://paste.op.wiki/{}", resp.key))
 }
 
-async fn get_curl(msg: &Message) -> Result<String, BotError> {
+/// A page summarising one request: what answered, from where, its
+/// certificate and headers folded away, and the body on Paste.
+async fn get_curl(msg: &Message) -> Result<RichPage, BotError> {
     let language_tag = Some("zh-CN");
     let curl = CurlCmd::parse_i18n_from_bot(getor(msg).unwrap().split_whitespace(), language_tag)?;
-    let url = curl.url;
-    let resp = get_resp(&url).await?;
-    let ip = &resp.remote_addr().unwrap().ip().to_string();
-    let header = get_header(&resp).await?;
+    let resp = get_resp(&curl.url).await?;
+    let ip = resp
+        .remote_addr()
+        .map(|addr| addr.ip().to_string())
+        .unwrap_or_default();
+    let (header_count, header) = get_header(&resp).await?;
     let url = resp.url().clone();
+    let status = resp.status();
     let version = get_http_version(&resp);
     let body = resp.text().await?;
-    let title = match get_title(&body) {
-        Some(s) => format!("<b>Page Title:</b> {}", html_escape(&s)),
-        None => String::new(),
-    };
+    let title = get_title(&body).filter(|title| !title.is_empty());
     let (ssl, ip_info, paste_url) = if url.scheme() == "https" {
-        tokio::join!(
+        let (ssl, ip_info, paste) = tokio::join!(
             get_ssl(url.host_str().unwrap()),
-            get_ip_info(ip),
+            get_ip_info(&ip),
             post_paste(body)
-        )
+        );
+        (Some(ssl), ip_info, paste)
     } else {
-        let temp = tokio::join!(get_ip_info(ip), post_paste(body));
-        (Ok("".to_string()), temp.0, temp.1)
+        let (ip_info, paste) = tokio::join!(get_ip_info(&ip), post_paste(body));
+        (None, ip_info, paste)
     };
-    let ssl = ssl.unwrap_or_else(|e| html_escape(&e.to_string()));
-    let paste_url = paste_url.unwrap_or_else(|e| e.to_string());
-    let result = format!(
-        "<b>HTTP Request Summary</b>
-{}
-{title}
 
-<b>Server Info</b>
-<blockquote expandable>
-{}
-<b>IP Address:</b> {}
-{ip_info}
-</blockquote>
-
-<b>Headers</b>
-<blockquote expandable>{}</blockquote>
-
-<b>Body</b>
-{}",
-        html_link(url.as_ref(), url.as_ref()),
-        ssl,
-        html_escape(ip),
-        html_escape(&format!("{version}\n{header}")),
-        html_link("打开 Paste", &paste_url),
+    let host = url.host_str().unwrap_or(url.as_str());
+    let mut rows = vec![
+        ("状态", html_escape(&format!("{version} {status}"))),
+        ("IP", format!("<code>{}</code>", html_escape(&ip))),
+    ];
+    rows.extend(ip_info);
+    let mut page = RichPage::default()
+        .heading(&format!("🌐 {}", title.as_deref().unwrap_or(host)))
+        .paragraph_html(&html_link(url.as_str(), url.as_str()))
+        .fields_html(rows);
+    match ssl {
+        Some(Ok(certificate)) => {
+            page = page.details("🔒 证书", RichPage::default().fields_html(certificate));
+        }
+        Some(Err(err)) => {
+            page = page.details("🔒 证书", RichPage::default().paragraph(&err.to_string()));
+        }
+        None => {}
+    }
+    page = page.details(
+        &format!("📋 响应头（{header_count} 条）"),
+        RichPage::default().pre(&header),
     );
-    Ok(result)
+    Ok(match paste_url {
+        Ok(paste_url) => {
+            page.paragraph_html(&format!("📄 {}", html_link("查看完整响应内容", &paste_url)))
+        }
+        Err(err) => page.paragraph(&format!("📄 响应内容上传失败：{err}")),
+    })
 }
 
 pub async fn curl(bot: &Bot, msg: &Message) -> BotResult {
     show_typing(bot, msg.chat().id());
     bot.send(
-        SendMessage::new(msg.chat().id(), get_curl(msg).await?)
-            .reply_parameters(reply_to(msg.message_id()))
-            .link_preview_options(no_link_preview())
-            .parse_mode(ParseMode::HTML),
+        SendRichMessage::new(msg.chat().id(), get_curl(msg).await?.build())
+            .reply_parameters(reply_to(msg.message_id())),
     )
     .await?;
     Ok(())
