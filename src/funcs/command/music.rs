@@ -3454,7 +3454,11 @@ async fn handle_inline_lyrics_callback(
         .await?;
         return Ok(());
     };
-    let song = LyricSong::from_track(&media.track);
+    // 缓存里的歌曲信息不带封面，缺了就向网关补一次
+    let song = match LyricSong::from_track(&media.track) {
+        song if song.cover.is_some() => song,
+        song => LyricSong::resolve(platform, id, user_id, song).await,
+    };
     let cover = lyric_cover(bot, &song).await;
     let audio = song_audio(&media);
     let page = LyricView::new(&song, platform, &lyrics, script).rich_with_audio(&cover, &audio);
