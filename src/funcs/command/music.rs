@@ -1526,6 +1526,9 @@ fn apply_music_setting(
 }
 
 /// Sends a song MHub has in the shared Telegram cache, by `file_id`.
+/// Delivers a song in a chat. The status message that showed the progress
+/// becomes the song card itself; only without one, or when Telegram refuses
+/// the edit, is a new message sent (and the status removed).
 async fn send_media(
     bot: &Bot,
     msg: &Message,
@@ -1533,30 +1536,58 @@ async fn send_media(
     reply_to: Option<i64>,
     query: &MusicQuery,
     media: &MusicMedia,
-) -> Result<Message, BotError> {
+) -> BotResult {
     let track = &media.track;
-    if let Some(status_msg) = status_msg {
-        let text = if media.cached {
-            "📤 命中缓存，正在发送…"
-        } else {
-            "📤 获取成功，正在发送…"
-        };
-        let _ = edit_callback_status(bot, status_msg, text).await;
+    let markup = track_menu(track, Some(query), msg);
+    if let Some(status) = status_msg {
+        let mut edit = SongMessage::Chat(status)
+            .edit()
+            .rich_message(chat_song_card(media));
+        if let Some(markup) = markup.clone() {
+            edit = edit.reply_markup(markup);
+        }
+        match bot.send(edit).await.map_err(BotError::from) {
+            Ok(_) => return Ok(()),
+            // 文件失效交给上层作废缓存重取
+            Err(err) if is_invalid_cached_file_error(&err) => return Err(err),
+            Err(err) => log::error!("status could not become the song card: {err}"),
+        }
     }
 
     let mut card = SendRichMessage::new(msg.chat().id(), chat_song_card(media));
     if let Some(reply_to) = reply_to {
         card = card.reply_parameters(crate::reply_to(reply_to));
     }
-    if let Some(markup) = track_menu(track, Some(query), msg) {
+    if let Some(markup) = markup.clone() {
         card = card.reply_markup(markup);
     }
-    match bot.send(card).await.map_err(BotError::from) {
-        Ok(sent) => return Ok(sent),
-        // 文件失效交给上层作废缓存重取；其余原因退回普通音频消息
+    let sent = match bot.send(card).await.map_err(BotError::from) {
+        Ok(_) => Ok(()),
         Err(err) if is_invalid_cached_file_error(&err) => return Err(err),
-        Err(err) => log::error!("song card refused, sending audio: {err}"),
+        Err(err) => {
+            // 其余原因退回普通音频消息
+            log::error!("song card refused, sending audio: {err}");
+            send_audio_message(bot, msg, reply_to, markup, media).await
+        }
+    };
+    if sent.is_ok()
+        && let Some(status) = status_msg
+    {
+        let _ = bot
+            .send(DeleteMessage::new(status.chat().id(), status.message_id()))
+            .await;
     }
+    sent
+}
+
+async fn send_audio_message(
+    bot: &Bot,
+    msg: &Message,
+    reply_to: Option<i64>,
+    markup: Option<InlineKeyboardMarkup>,
+    media: &MusicMedia,
+) -> BotResult {
+    let track = &media.track;
     let mut request = SendAudio::new(msg.chat().id(), InputFile::id(media.file_id.clone()))
         .caption(build_music_caption(media))
         .parse_mode(ParseMode::HTML)
@@ -1568,7 +1599,7 @@ async fn send_media(
     if let Some(duration) = track.duration.filter(|duration| *duration > 0) {
         request = request.duration(duration);
     }
-    if let Some(markup) = track_menu(track, Some(query), msg) {
+    if let Some(markup) = markup {
         request = request.reply_markup(markup);
     }
     if let Some(file_id) = media
@@ -1579,7 +1610,8 @@ async fn send_media(
     {
         request = request.thumbnail(InputFile::id(file_id.to_string()));
     }
-    Ok(bot.send(request).await?)
+    bot.send(request).await?;
+    Ok(())
 }
 
 /// A song as chat and inline messages show it: a rich card whose lyrics can
@@ -1771,9 +1803,7 @@ impl Destination<'_> {
                 status_msg,
                 reply_to,
                 query,
-            } => send_media(bot, msg, *status_msg, *reply_to, query, media)
-                .await
-                .map(|_| ()),
+            } => send_media(bot, msg, *status_msg, *reply_to, query, media).await,
             Destination::Inline(id) => edit_inline_song_card(bot, id, media).await,
         }
     }
@@ -2784,15 +2814,9 @@ async fn send_direct_music(
         )
         .await?;
 
+    // 成功时状态消息已经原地变成歌曲卡片
     match get_music(bot, query, msg, &status_msg, settings).await {
-        Ok(()) => {
-            bot.send(DeleteMessage::new(
-                status_msg.chat().id(),
-                status_msg.message_id(),
-            ))
-            .await?;
-            Ok(())
-        }
+        Ok(()) => Ok(()),
         Err(e) => {
             bot.send(
                 EditMessageText::new()
@@ -3995,6 +4019,9 @@ async fn get_callback_music(
         },
     )
     .await?;
+    if status_msg.is_some() {
+        return Ok(());
+    }
     let verb = if media.cached {
         "已从缓存发送"
     } else {
