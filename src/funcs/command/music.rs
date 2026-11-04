@@ -79,6 +79,8 @@ const SEARCH_OWNER_NOTICE: &str = "这是其他用户的搜索结果，请自己
 const SEARCH_TEXT_LIMIT: usize = 40;
 /// Deep-link prefix that opens a song's full lyric page in the private chat.
 pub const LYRIC_START_PREFIX: &str = "lyric-";
+/// 空 inline 查询的「搜索音乐」条目发出的提示里，按钮一点就搜这首
+const INLINE_EXAMPLE_KEYWORD: &str = "稻香";
 
 /// Search results by platform and keyword, with when they were fetched.
 type SearchCache =
@@ -2186,6 +2188,7 @@ pub async fn music_chosen_inline_handler(bot: Bot, chosen: ChosenInlineResult) -
     .await
 }
 
+/// 空查询：「搜索音乐」只发一句提示，按钮一点就在当前输入框填好示例歌名
 async fn answer_inline_music_help(
     bot: &Bot,
     q: &InlineQuery,
@@ -2193,21 +2196,21 @@ async fn answer_inline_music_help(
 ) -> BotResult {
     let platform = settings_platform(settings);
     let quality = music_cache_quality(settings);
-    let text = format!(
-        "输入歌名搜索音乐\n当前平台：{}\n当前音质：{}\n\n也可以在关键词后追加平台或音质，例如：稻香 qq high",
-        platform.label(),
-        quality_label(&quality)
-    );
+    let username = crate::me().username.as_deref().unwrap_or_default();
     let result = InlineQueryResultArticle::new(
         inline_result_id("help", platform, &q.from.id.to_string(), &quality),
         "搜索音乐",
-        InputTextMessageContent::new(text),
+        InputTextMessageContent::new(inline_help_text(username)),
     )
     .description(format!(
-        "{} · {}",
-        platform.label(),
-        quality_label(&quality)
-    ));
+        "在 @{username} 后面输入歌名，例如：{INLINE_EXAMPLE_KEYWORD}"
+    ))
+    .reply_markup(InlineKeyboardMarkup::new([[
+        switch_inline_current_chat_button(
+            format!("🔍 试试搜索「{INLINE_EXAMPLE_KEYWORD}」"),
+            INLINE_EXAMPLE_KEYWORD,
+        ),
+    ]]));
     bot.send(
         AnswerInlineQuery::new(
             q.id.clone(),
@@ -2221,6 +2224,10 @@ async fn answer_inline_music_help(
     )
     .await?;
     Ok(())
+}
+
+fn inline_help_text(username: &str) -> String {
+    format!("🎵 在输入框里 @{username} 后面输入歌名就能搜索音乐")
 }
 
 fn inline_settings_result(settings: &UserMusicSettings, user_id: i64) -> InlineQueryResult {
@@ -4797,6 +4804,13 @@ mod tests {
             send_cover: true,
             lyric_script: "simplified".to_string(),
         }
+    }
+
+    #[test]
+    fn inline_help_is_one_line_naming_the_bot() {
+        let text = inline_help_text("allen_bot");
+        assert_eq!(text, "🎵 在输入框里 @allen_bot 后面输入歌名就能搜索音乐");
+        assert!(!text.contains('\n'));
     }
 
     #[test]
