@@ -335,42 +335,46 @@ pub(super) struct SongAudio {
     title: String,
     performer: String,
     duration: Option<u32>,
+    /// What the audio message's caption used to say about the file: size and
+    /// bitrate, decryption time, platform and format tags.
+    info: Vec<String>,
 }
 
 impl SongAudio {
-    pub(super) fn from_media(media: &super::MusicMedia) -> Self {
+    pub(super) fn from_media(media: &super::MusicMedia, info: Vec<String>) -> Self {
         Self {
             file_id: media.file_id.clone(),
             title: media.track.song.clone(),
             performer: media.track.singer.clone(),
             duration: media.track.duration,
+            info,
         }
+    }
+
+    /// The song as an inline message shows it: name, byline, the player and
+    /// the file's details, hashtags clickable.
+    fn card(&self, page: RichPage, title: &str, byline: &str) -> RichPage {
+        page.heading(title)
+            .paragraph(byline)
+            .uploaded_audio(&self.file_id, &self.title, &self.performer, self.duration)
+            .quote(&self.info.join("\n"))
+            .detect_entities()
     }
 }
 
-/// An inline song as a rich card: cover, name, byline and player, with
-/// `details` (platform, quality, size) as the footer. Its lyrics open by
-/// editing it into the lyric page, which a plain audio message cannot be.
+/// An inline song as a rich card. Its lyrics open by editing it into the
+/// same card with the lyric page under it, which an audio message cannot be.
 pub(super) fn song_card(
     song: &LyricSong,
     platform: MusicPlatform,
     audio: &SongAudio,
-    cover: &Cover,
-    details: &str,
 ) -> InputRichMessage {
-    let mut page = RichPage::default();
-    if let Cover::Uploaded(file_id) = cover {
-        page = page.uploaded_photo(file_id);
-    }
-    page.heading(song.title.as_deref().unwrap_or("歌曲"))
-        .paragraph(&song.byline(platform))
-        .uploaded_audio(
-            &audio.file_id,
-            &audio.title,
-            &audio.performer,
-            audio.duration,
+    audio
+        .card(
+            RichPage::default(),
+            song.title.as_deref().unwrap_or("歌曲"),
+            &song.byline(platform),
         )
-        .footer(details)
         .build()
 }
 
@@ -453,27 +457,23 @@ impl LyricView {
         self.rich_page(cover, None)
     }
 
-    /// The page with the song's player under the byline, for an inline song
-    /// whose lyrics open in place.
+    /// An inline song's card with its lyrics opened: the card as it was, then
+    /// the cover above the lyric page.
     pub(super) fn rich_with_audio(&self, cover: &Cover, audio: &SongAudio) -> InputRichMessage {
         self.rich_page(cover, Some(audio))
     }
 
     fn rich_page(&self, cover: &Cover, audio: Option<&SongAudio>) -> InputRichMessage {
-        let mut page = RichPage::default();
-        page = match cover {
+        let with_cover = |page: RichPage| match cover {
             Cover::Uploaded(file_id) => page.uploaded_photo(file_id),
             Cover::None => page,
         };
-        page = page.heading(&self.title).paragraph(&self.byline);
-        if let Some(audio) = audio {
-            page = page.uploaded_audio(
-                &audio.file_id,
-                &audio.title,
-                &audio.performer,
-                audio.duration,
-            );
-        }
+        let page = match audio {
+            Some(audio) => with_cover(audio.card(RichPage::default(), &self.title, &self.byline)),
+            None => with_cover(RichPage::default())
+                .heading(&self.title)
+                .paragraph(&self.byline),
+        };
         let credits = self
             .credits
             .iter()
@@ -603,6 +603,19 @@ mod tests {
         assert_eq!(lyric_clock(62_340), "01:02");
     }
 
+    fn sample_audio() -> SongAudio {
+        SongAudio {
+            file_id: "CQAC".to_string(),
+            title: "晴天".to_string(),
+            performer: "周杰伦".to_string(),
+            duration: Some(269),
+            info: vec![
+                "22.36MB 750.33kbps".to_string(),
+                "#AppleMusic #m4a".to_string(),
+            ],
+        }
+    }
+
     fn sample() -> (LyricSong, provider::MusicLyrics) {
         let song = LyricSong {
             title: Some("晴天".to_string()),
@@ -678,17 +691,13 @@ mod tests {
             &lyrics,
             MusicLyricScript::Simplified,
         );
-        let audio = SongAudio {
-            file_id: "CQAC".to_string(),
-            title: "晴天".to_string(),
-            performer: "周杰伦".to_string(),
-            duration: Some(269),
-        };
-        let rich = view.rich_with_audio(&Cover::Uploaded("AgAD".to_string()), &audio);
+        let rich = view.rich_with_audio(&Cover::Uploaded("AgAD".to_string()), &sample_audio());
         let html = rich.html.as_deref().unwrap();
         assert!(html.starts_with(
-            "<img src=\"tg://photo?id=media0\"/><h3>晴天</h3><p>周杰伦 &amp; &lt;Band&gt; · QQ音乐 · 叶惠美</p>\
-             <audio src=\"tg://audio?id=media1\"></audio><blockquote expandable>"
+            "<h3>晴天</h3><p>周杰伦 &amp; &lt;Band&gt; · QQ音乐 · 叶惠美</p>\
+             <audio src=\"tg://audio?id=media0\"></audio>\
+             <blockquote>22.36MB 750.33kbps<br>#AppleMusic #m4a</blockquote>\
+             <img src=\"tg://photo?id=media1\"/><blockquote expandable>"
         ));
         assert_eq!(rich.media.as_ref().map(|media| media.len()), Some(2));
     }
@@ -696,26 +705,16 @@ mod tests {
     #[test]
     fn song_cards_show_the_song_and_its_player() {
         let (song, _) = sample();
-        let audio = SongAudio {
-            file_id: "CQAC".to_string(),
-            title: "晴天".to_string(),
-            performer: "周杰伦".to_string(),
-            duration: Some(269),
-        };
-        let card = song_card(
-            &song,
-            MusicPlatform::Tencent,
-            &audio,
-            &Cover::None,
-            "QQ音乐 · 无损 · 25.0 MB",
-        );
+        let card = song_card(&song, MusicPlatform::Tencent, &sample_audio());
         assert_eq!(
             card.html.as_deref(),
             Some(
                 "<h3>晴天</h3><p>周杰伦 &amp; &lt;Band&gt; · QQ音乐 · 叶惠美</p>\
-                 <audio src=\"tg://audio?id=media0\"></audio><footer>QQ音乐 · 无损 · 25.0 MB</footer>"
+                 <audio src=\"tg://audio?id=media0\"></audio>\
+                 <blockquote>22.36MB 750.33kbps<br>#AppleMusic #m4a</blockquote>"
             )
         );
+        assert_eq!(card.skip_entity_detection, Some(false));
     }
 
     #[test]

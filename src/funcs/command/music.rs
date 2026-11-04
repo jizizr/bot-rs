@@ -1594,6 +1594,21 @@ fn build_music_caption_with_size(
     } else {
         format!("专辑: {}\n", html_escape(&track.album))
     };
+    let info = media_info_lines(track, music_size, decrypt_elapsed)
+        .iter()
+        .map(|line| format!("{}\n", html_escape(line)))
+        .collect::<String>();
+    format!("<b>「{song_html}」- {singer}</b>\n{album_line}<blockquote>{info}</blockquote>")
+}
+
+/// What a song's message says about its file, one line each: size and
+/// bitrate, decryption time, and the platform and format tags.
+fn media_info_lines(
+    track: &MusicTrack,
+    music_size: u64,
+    decrypt_elapsed: Option<Duration>,
+) -> Vec<String> {
+    let mut lines = Vec::new();
     let mut info_parts = Vec::new();
     if music_size > 0 {
         info_parts.push(format_file_size(music_size));
@@ -1604,22 +1619,18 @@ fn build_music_caption_with_size(
     if let Some(bitrate) = bitrate.filter(|bitrate| *bitrate > 0) {
         info_parts.push(format!("{:.2}kbps", bitrate as f64 / 1000.0));
     }
-    let decrypt_line = decrypt_elapsed
-        .map(|elapsed| format!("解密: {}\n", format_duration(elapsed)))
-        .unwrap_or_default();
-    let info_line = if info_parts.is_empty() {
-        String::new()
-    } else {
-        format!("{}\n", info_parts.join(" "))
-    };
-    let tags = format!(
+    if !info_parts.is_empty() {
+        lines.push(info_parts.join(" "));
+    }
+    if let Some(elapsed) = decrypt_elapsed {
+        lines.push(format!("解密: {}", format_duration(elapsed)));
+    }
+    lines.push(format!(
         "#{} #{}",
         platform_tag(track.platform),
-        html_escape(&track.file_extension())
-    );
-    format!(
-        "<b>「{song_html}」- {singer}</b>\n{album_line}<blockquote>{info_line}{decrypt_line}{tags}\n</blockquote>"
-    )
+        track.file_extension()
+    ));
+    lines
 }
 
 fn platform_tag(platform: MusicPlatform) -> &'static str {
@@ -2499,6 +2510,17 @@ async fn run_inline_send_flow_inner(
     Ok(())
 }
 
+fn song_audio(media: &MusicMedia) -> SongAudio {
+    SongAudio::from_media(
+        media,
+        media_info_lines(
+            &media.track,
+            media.byte_size,
+            media.decrypt_elapsed_ms.map(Duration::from_millis),
+        ),
+    )
+}
+
 /// Turns an inline message into the song's rich card. Rich messages can be
 /// edited into lyric pages and back; an audio message cannot, so inline songs
 /// are sent as cards and only fall back to audio if the card is refused.
@@ -2508,21 +2530,7 @@ async fn edit_inline_song_card(
     media: &MusicMedia,
 ) -> BotResult {
     let song = LyricSong::from_track(&media.track);
-    let cover = lyric_cover(bot, &song).await;
-    let mut details = vec![
-        media.track.platform.label().to_string(),
-        media.quality.label().to_string(),
-    ];
-    if media.byte_size > 0 {
-        details.push(format_file_size(media.byte_size));
-    }
-    let card = song_card(
-        &song,
-        media.track.platform,
-        &SongAudio::from_media(media),
-        &cover,
-        &details.join(" · "),
-    );
+    let card = song_card(&song, media.track.platform, &song_audio(media));
     let mut request = EditMessageText::new()
         .inline_message_id(inline_message_id)
         .rich_message(card);
@@ -3448,7 +3456,7 @@ async fn handle_inline_lyrics_callback(
     };
     let song = LyricSong::from_track(&media.track);
     let cover = lyric_cover(bot, &song).await;
-    let audio = SongAudio::from_media(&media);
+    let audio = song_audio(&media);
     let page = LyricView::new(&song, platform, &lyrics, script).rich_with_audio(&cover, &audio);
     let edit = EditMessageText::new()
         .inline_message_id(inline_message_id)

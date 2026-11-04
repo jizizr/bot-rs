@@ -19,6 +19,8 @@ pub struct RichPage {
     html: String,
     /// Telegram files the page shows, referenced from `html` by id.
     media: Vec<InputRichMessageMedia>,
+    /// Let Telegram turn hashtags, links and the like into entities.
+    detect_entities: bool,
 }
 
 impl RichPage {
@@ -166,11 +168,17 @@ impl RichPage {
         &self.html
     }
 
-    /// Links, hashtags and the like in song names stay plain text.
+    /// Make hashtags and links in the text clickable; off by default so song
+    /// names stay plain text.
+    pub fn detect_entities(mut self) -> Self {
+        self.detect_entities = true;
+        self
+    }
+
     pub fn build(self) -> InputRichMessage {
         let message = InputRichMessage::new()
             .html(self.html)
-            .skip_entity_detection(true);
+            .skip_entity_detection(!self.detect_entities);
         if self.media.is_empty() {
             message
         } else {
