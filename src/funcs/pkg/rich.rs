@@ -2,7 +2,10 @@
 //! Telegram accepts for them; all text handed to a page builder is escaped
 //! here, and only `*_html` methods take markup.
 
-use telers::types::{InputRichMessage, Message, RichBlock, RichText};
+use telers::types::{
+    InputFile, InputMediaPhoto, InputRichMessage, InputRichMessageMedia, Message, RichBlock,
+    RichText,
+};
 
 pub fn html_escape(text: &str) -> String {
     text.replace('&', "&amp;")
@@ -14,6 +17,8 @@ pub fn html_escape(text: &str) -> String {
 #[derive(Debug, Default)]
 pub struct RichPage {
     html: String,
+    /// Telegram files the page shows, referenced from `html` by id.
+    media: Vec<InputRichMessageMedia>,
 }
 
 impl RichPage {
@@ -78,6 +83,19 @@ impl RichPage {
         self
     }
 
+    /// A photo already on Telegram, by file id. Unlike `image`, this works in
+    /// inline results and inline edits, which may not link outside files.
+    pub fn uploaded_photo(mut self, file_id: &str) -> Self {
+        let id = format!("media{}", self.media.len());
+        self.html
+            .push_str(&format!("<img src=\"tg://photo?id={id}\"/>"));
+        self.media.push(InputRichMessageMedia::new(
+            id,
+            InputMediaPhoto::new(InputFile::id(file_id)),
+        ));
+        self
+    }
+
     /// A two-column table of `name | value` rows; values are markup.
     pub fn fields_html<'a>(mut self, rows: impl IntoIterator<Item = (&'a str, String)>) -> Self {
         let rows = rows
@@ -93,6 +111,7 @@ impl RichPage {
 
     /// A block folded under `summary` until opened.
     pub fn details(mut self, summary: &str, inner: RichPage) -> Self {
+        self.media.extend(inner.media);
         if !inner.html.is_empty() {
             self.html.push_str(&format!(
                 "<details><summary>{}</summary>{}</details>",
@@ -128,9 +147,14 @@ impl RichPage {
 
     /// Links, hashtags and the like in song names stay plain text.
     pub fn build(self) -> InputRichMessage {
-        InputRichMessage::new()
+        let message = InputRichMessage::new()
             .html(self.html)
-            .skip_entity_detection(true)
+            .skip_entity_detection(true);
+        if self.media.is_empty() {
+            message
+        } else {
+            message.media(self.media)
+        }
     }
 }
 

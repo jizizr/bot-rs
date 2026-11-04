@@ -42,6 +42,11 @@ pub struct Music {
     /// the shared Telegram cache. The bot keeps no music credentials.
     #[serde(default)]
     pub gateway: MusicGateway,
+    /// Telegram chat MHub stores its uploads in (shared `[music]` key);
+    /// lyric covers are uploaded there once so every page can reuse them.
+    /// 0 leaves inline lyric pages without covers.
+    #[serde(default)]
+    pub inline_upload_chat_id: i64,
     // Download governor (funcs/command/music/queue.rs): concurrent download
     // slots, bounded waiting queue, and live-work admission caps.
     #[serde(default = "default_music_download_concurrency")]
@@ -104,6 +109,7 @@ impl Default for Music {
     fn default() -> Self {
         Self {
             gateway: MusicGateway::default(),
+            inline_upload_chat_id: 0,
             download_concurrency: default_music_download_concurrency(),
             download_queue_wait_limit: default_music_download_queue_wait_limit(),
             download_queue_global_limit: default_music_download_queue_global_limit(),
