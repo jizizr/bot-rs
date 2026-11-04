@@ -23,8 +23,8 @@ use std::{
     time::{Duration, Instant},
 };
 use telers::types::{
-    InlineQueryResult, InlineQueryResultArticle, InlineQueryResultsButton, InputMedia,
-    InputMediaAudio, InputMediaDocument, InputRichMessageContent, InputTextMessageContent,
+    InlineQueryResult, InlineQueryResultArticle, InputMedia, InputMediaAudio, InputMediaDocument,
+    InputRichMessageContent, InputTextMessageContent,
 };
 use tokio::{sync::mpsc, task::JoinHandle};
 use url::Url;
@@ -77,12 +77,8 @@ const SEARCH_HEADER_PREFIX: &str = "🔍 ";
 const SEARCH_EXPIRED_NOTICE: &str = "搜索结果已过期，请重新搜索";
 const SEARCH_OWNER_NOTICE: &str = "这是其他用户的搜索结果，请自己发送 /music 歌名";
 const SEARCH_TEXT_LIMIT: usize = 40;
-/// Deep-link parameter of the platform picker above inline results.
-pub const INLINE_PLATFORM_START: &str = "music_platform";
 /// Deep-link prefix that opens a song's full lyric page in the private chat.
 pub const LYRIC_START_PREFIX: &str = "lyric-";
-const INLINE_KEYWORD_TTL: Duration = Duration::from_secs(30 * 60);
-const INLINE_KEYWORD_CAPACITY: usize = 1024;
 
 /// Search results by platform and keyword, with when they were fetched.
 type SearchCache =
@@ -90,10 +86,6 @@ type SearchCache =
 
 lazy_static! {
     static ref SEARCH_CACHE: std::sync::Mutex<SearchCache> = Default::default();
-    /// The latest inline search of each user, for the platform picker the
-    /// button above inline results opens in the private chat.
-    static ref INLINE_KEYWORDS: std::sync::Mutex<std::collections::HashMap<i64, (Instant, InlineSearch)>> =
-        Default::default();
 }
 
 lazy_static! {
@@ -1995,14 +1987,6 @@ pub async fn music_inline_query_handler(bot: Bot, q: InlineQuery) -> BotResult {
         return answer_inline_music_help(&bot, &q, &settings).await;
     }
 
-    remember_inline_search(
-        user_id,
-        InlineSearch {
-            keyword: keyword.clone(),
-            platform,
-            quality: (quality != music_cache_quality(&settings)).then(|| quality.clone()),
-        },
-    );
     let query = MusicQuery {
         platform,
         keyword: keyword.clone(),
@@ -2062,89 +2046,8 @@ pub async fn music_inline_query_handler(bot: Bot, q: InlineQuery) -> BotResult {
 
     bot.send(
         AnswerInlineQuery::new(q.id.clone(), results)
-            .button(
-                InlineQueryResultsButton::new(format!(
-                    "🎵 {} · {}  ｜  切换平台",
-                    platform.label(),
-                    quality_label(&quality)
-                ))
-                .start_parameter(INLINE_PLATFORM_START),
-            )
             .is_personal(true)
             .cache_time(1),
-    )
-    .await?;
-    Ok(())
-}
-
-/// An inline search, kept so the private-chat platform picker can send the
-/// user back to it on another platform.
-#[derive(Clone, Debug)]
-struct InlineSearch {
-    keyword: String,
-    platform: MusicPlatform,
-    /// A quality typed after the keyword, kept when switching platforms.
-    quality: Option<String>,
-}
-
-impl InlineSearch {
-    fn query_on(&self, platform: MusicPlatform) -> String {
-        let mut query = format!("{} {}", self.keyword, platform.id());
-        if let Some(quality) = &self.quality {
-            query.push(' ');
-            query.push_str(quality);
-        }
-        query
-    }
-}
-
-fn remember_inline_search(user_id: i64, search: InlineSearch) {
-    let mut searches = lock_unpoisoned(&INLINE_KEYWORDS);
-    if searches.len() >= INLINE_KEYWORD_CAPACITY {
-        searches.retain(|_, (at, _)| at.elapsed() < INLINE_KEYWORD_TTL);
-    }
-    if searches.len() >= INLINE_KEYWORD_CAPACITY {
-        searches.clear();
-    }
-    searches.insert(user_id, (Instant::now(), search));
-}
-
-/// Opened by the button above inline results: each platform button returns
-/// to the chat the user came from with the same search on that platform.
-pub async fn inline_platform_picker(bot: &Bot, msg: &Message) -> BotResult {
-    let search = lock_unpoisoned(&INLINE_KEYWORDS)
-        .get(&user_id_from_message(msg))
-        .filter(|(at, _)| at.elapsed() < INLINE_KEYWORD_TTL)
-        .map(|(_, search)| search.clone());
-    let Some(search) = search else {
-        bot.send(SendMessage::new(
-            msg.chat().id(),
-            "请先在聊天里输入「@机器人 歌名」，再点结果上方的「切换平台」",
-        ))
-        .await?;
-        return Ok(());
-    };
-    let buttons = SEARCH_PLATFORMS
-        .iter()
-        .map(|(platform, label)| {
-            switch_inline_button(
-                selected_label(label, *platform == search.platform),
-                search.query_on(*platform),
-            )
-        })
-        .collect::<Vec<_>>();
-    bot.send(
-        SendRichMessage::new(
-            msg.chat().id(),
-            RichPage::default()
-                .heading(&format!("{SEARCH_HEADER_PREFIX}{}", search.keyword))
-                .paragraph(&format!("当前平台：{}", search.platform.label()))
-                .footer("选择平台后会回到原来的聊天继续搜索")
-                .build(),
-        )
-        .reply_markup(InlineKeyboardMarkup::new(
-            buttons.chunks(4).map(<[_]>::to_vec).collect::<Vec<_>>(),
-        )),
     )
     .await?;
     Ok(())
@@ -6085,22 +5988,5 @@ mod tests {
         ] {
             assert!(is_direct_query(keyword), "{keyword}");
         }
-    }
-
-    #[test]
-    fn inline_platform_switch_keeps_keyword_and_quality() {
-        let search = InlineSearch {
-            keyword: "晴天".to_string(),
-            platform: MusicPlatform::Tencent,
-            quality: Some("high".to_string()),
-        };
-        let query = search.query_on(MusicPlatform::Netease);
-        assert_eq!(query, "晴天 netease high");
-        let (keyword, platform, quality) =
-            parse_inline_music_query(&query, &test_settings("tencent"));
-        assert_eq!(
-            (keyword.as_str(), platform, quality.as_str()),
-            ("晴天", MusicPlatform::Netease, "high")
-        );
     }
 }

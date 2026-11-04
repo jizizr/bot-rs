@@ -249,14 +249,6 @@ pub fn url_button(text: impl Into<Box<str>>, url: url::Url) -> InlineKeyboardBut
     InlineKeyboardButton::new(text).url(String::from(url))
 }
 
-/// Lets the user pick a chat and starts an inline query there.
-pub fn switch_inline_button(
-    text: impl Into<Box<str>>,
-    query: impl Into<Box<str>>,
-) -> InlineKeyboardButton {
-    InlineKeyboardButton::new(text).switch_inline_query(query)
-}
-
 /// Starts an inline query in the current chat.
 pub fn switch_inline_current_chat_button(
     text: impl Into<Box<str>>,

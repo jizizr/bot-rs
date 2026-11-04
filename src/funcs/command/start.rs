@@ -1,11 +1,7 @@
 use super::*;
 
 pub async fn start(bot: &Bot, msg: &Message) -> BotResult {
-    // inline 结果上方「切换平台」按钮带着 deep-link 参数打开私聊
     let parameter = getor(msg).and_then(|text| text.split_whitespace().nth(1));
-    if parameter == Some(music::INLINE_PLATFORM_START) {
-        return music::inline_platform_picker(bot, msg).await;
-    }
     if let Some(parameter) = parameter.filter(|p| p.starts_with(music::LYRIC_START_PREFIX)) {
         return music::send_lyric_start(bot, msg, parameter).await;
     }
