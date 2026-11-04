@@ -1544,6 +1544,19 @@ async fn send_media(
         let _ = edit_callback_status(bot, status_msg, text).await;
     }
 
+    let mut card = SendRichMessage::new(msg.chat().id(), chat_song_card(media));
+    if let Some(reply_to) = reply_to {
+        card = card.reply_parameters(crate::reply_to(reply_to));
+    }
+    if let Some(markup) = track_menu(track, Some(query), msg) {
+        card = card.reply_markup(markup);
+    }
+    match bot.send(card).await.map_err(BotError::from) {
+        Ok(sent) => return Ok(sent),
+        // 文件失效交给上层作废缓存重取；其余原因退回普通音频消息
+        Err(err) if is_invalid_cached_file_error(&err) => return Err(err),
+        Err(err) => log::error!("song card refused, sending audio: {err}"),
+    }
     let mut request = SendAudio::new(msg.chat().id(), InputFile::id(media.file_id.clone()))
         .caption(build_music_caption(media))
         .parse_mode(ParseMode::HTML)
@@ -1567,6 +1580,31 @@ async fn send_media(
         request = request.thumbnail(InputFile::id(file_id.to_string()));
     }
     Ok(bot.send(request).await?)
+}
+
+/// A song as chat and inline messages show it: a rich card whose lyrics can
+/// open in place.
+fn chat_song_card(media: &MusicMedia) -> telers::types::InputRichMessage {
+    song_card(
+        &LyricSong::from_track(&media.track),
+        media.track.platform,
+        &song_audio(media),
+    )
+}
+
+/// The song file a card plays, if `msg` is one.
+fn card_audio_file_id(msg: &Message) -> Option<&str> {
+    let Message::RichMessage(message) = msg else {
+        return None;
+    };
+    message
+        .rich_message
+        .blocks
+        .iter()
+        .find_map(|block| match block {
+            telers::types::RichBlock::Audio(audio) => Some(audio.audio.file_id.as_ref()),
+            _ => None,
+        })
 }
 
 fn build_music_caption(media: &MusicMedia) -> String {
@@ -1878,6 +1916,8 @@ fn music_cache_quality(settings: &UserMusicSettings) -> String {
 fn is_invalid_cached_file_error(err: &BotError) -> bool {
     let text = err.to_string().to_ascii_lowercase();
     text.contains("wrong file identifier")
+        || text.contains("audio_invalid")
+        || text.contains("media_invalid")
         || text.contains("file_id")
         || text.contains("file identifier")
         || text.contains("file not found")
@@ -2529,8 +2569,7 @@ async fn edit_inline_song_card(
     inline_message_id: &str,
     media: &MusicMedia,
 ) -> BotResult {
-    let song = LyricSong::from_track(&media.track);
-    let card = song_card(&song, media.track.platform, &song_audio(media));
+    let card = chat_song_card(media);
     let mut request = EditMessageText::new()
         .inline_message_id(inline_message_id)
         .rich_message(card);
@@ -3192,6 +3231,21 @@ async fn handle_lyrics_callback(
     id: &str,
     script: MusicLyricScript,
 ) -> BotResult {
+    // 歌曲卡片在原地展开歌词，和 inline 一样
+    if card_audio_file_id(msg).is_some() {
+        let settings = get_user_settings_or_default(user_id).await;
+        return handle_song_lyrics_callback(
+            bot,
+            callback_id,
+            SongMessage::Chat(msg),
+            user_id,
+            platform,
+            id,
+            script,
+            &settings,
+        )
+        .await;
+    }
     let lyrics = match fetch_lyrics_limited(platform, id, user_id, Some(msg.chat().id())).await {
         Ok(lyrics) => lyrics,
         Err(e) => {
@@ -3423,20 +3477,42 @@ async fn inline_song_media(
     None
 }
 
-/// Opens the lyrics of an inline song in place: the message becomes the rich
-/// lyric page with the song's player inside it, and can be folded back.
+/// A song card a lyrics button sits on: an inline message, or a message in a
+/// chat. Both are rich messages, so both open their lyrics in place.
+enum SongMessage<'a> {
+    Inline(&'a str),
+    Chat(&'a Message),
+}
+
+impl SongMessage<'_> {
+    fn edit(&self) -> EditMessageText {
+        match self {
+            SongMessage::Inline(id) => EditMessageText::new().inline_message_id(*id),
+            SongMessage::Chat(msg) => EditMessageText::new()
+                .chat_id(msg.chat().id())
+                .message_id(msg.message_id()),
+        }
+    }
+}
+
+/// Opens a song card's lyrics in place: the card as it was, then the cover
+/// and the lyric page, with buttons to switch script or fold it back.
 #[allow(clippy::too_many_arguments)]
-async fn handle_inline_lyrics_callback(
+async fn handle_song_lyrics_callback(
     bot: &Bot,
     callback_id: &str,
-    inline_message_id: &str,
+    target: SongMessage<'_>,
     user_id: i64,
     platform: MusicPlatform,
     id: &str,
     script: MusicLyricScript,
     settings: &UserMusicSettings,
 ) -> BotResult {
-    let Some(lyrics) = fetch_lyrics_limited(platform, id, user_id, None).await? else {
+    let chat_id = match &target {
+        SongMessage::Chat(msg) => Some(msg.chat().id()),
+        SongMessage::Inline(_) => None,
+    };
+    let Some(lyrics) = fetch_lyrics_limited(platform, id, user_id, chat_id).await? else {
         bot.send(
             AnswerCallbackQuery::new(callback_id.to_string())
                 .text(format!("{} 没有可用歌词", platform.label()))
@@ -3462,10 +3538,10 @@ async fn handle_inline_lyrics_callback(
     let cover = lyric_cover(bot, &song).await;
     let audio = song_audio(&media);
     let page = LyricView::new(&song, platform, &lyrics, script).rich_with_audio(&cover, &audio);
-    let edit = EditMessageText::new()
-        .inline_message_id(inline_message_id)
+    let edit = target
+        .edit()
         .rich_message(page)
-        .reply_markup(inline_open_lyrics_menu(platform, id, script));
+        .reply_markup(open_lyrics_menu(platform, id, script));
     match bot.send(edit).await.map_err(BotError::from) {
         Err(err) if !is_not_modified(&err) => return Err(err),
         _ => {}
@@ -3475,8 +3551,8 @@ async fn handle_inline_lyrics_callback(
     Ok(())
 }
 
-/// Under an inline song with its lyrics open: switch script, or fold back.
-fn inline_open_lyrics_menu(
+/// Under a song card with its lyrics open: switch script, or fold back.
+fn open_lyrics_menu(
     platform: MusicPlatform,
     id: &str,
     script: MusicLyricScript,
@@ -3495,11 +3571,11 @@ fn inline_open_lyrics_menu(
     InlineKeyboardMarkup::new([row])
 }
 
-/// Folds an inline song's lyrics back into the plain audio message.
-async fn handle_inline_collapse_callback(
+/// Folds a song card's lyrics back into the card.
+async fn handle_song_collapse_callback(
     bot: &Bot,
     callback_id: &str,
-    inline_message_id: &str,
+    target: SongMessage<'_>,
     platform: MusicPlatform,
     id: &str,
     settings: &UserMusicSettings,
@@ -3513,7 +3589,21 @@ async fn handle_inline_collapse_callback(
         .await?;
         return Ok(());
     };
-    edit_inline_song_card(bot, inline_message_id, &media).await?;
+    match target {
+        SongMessage::Inline(id) => edit_inline_song_card(bot, id, &media).await?,
+        SongMessage::Chat(msg) => {
+            let mut edit = SongMessage::Chat(msg)
+                .edit()
+                .rich_message(chat_song_card(&media));
+            if let Some(markup) = track_menu(&media.track, None, msg) {
+                edit = edit.reply_markup(markup);
+            }
+            match bot.send(edit).await.map_err(BotError::from) {
+                Err(err) if !is_not_modified(&err) => return Err(err),
+                _ => {}
+            }
+        }
+    }
     bot.send(AnswerCallbackQuery::new(callback_id.to_string()))
         .await?;
     Ok(())
@@ -4195,10 +4285,10 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
                 let settings = get_user_settings_or_default(user_id).await;
                 let script = script
                     .unwrap_or_else(|| MusicLyricScript::from_stored_value(&settings.lyric_script));
-                return handle_inline_lyrics_callback(
+                return handle_song_lyrics_callback(
                     &bot,
                     &callback_id,
-                    &inline_message_id,
+                    SongMessage::Inline(&inline_message_id),
                     user_id,
                     platform,
                     &id,
@@ -4207,15 +4297,15 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
                 )
                 .await;
             }
-            MusicCallbackAction::InlineCollapse(platform, id) => {
+            MusicCallbackAction::InlineCollapse(platform, id) if q.inline_message_id.is_some() => {
                 let Some(inline_message_id) = q.inline_message_id else {
                     return Ok(());
                 };
                 let settings = get_user_settings_or_default(user_id).await;
-                return handle_inline_collapse_callback(
+                return handle_song_collapse_callback(
                     &bot,
                     &callback_id,
-                    &inline_message_id,
+                    SongMessage::Inline(&inline_message_id),
                     platform,
                     &id,
                     &settings,
@@ -4325,6 +4415,7 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
                 | MusicCallbackAction::InlineLyrics(_, _, _)
                 | MusicCallbackAction::SearchPage { .. }
                 | MusicCallbackAction::SearchClose { .. }
+                | MusicCallbackAction::InlineCollapse(..)
                 | MusicCallbackAction::Close
         ) {
             bot.send(AnswerCallbackQuery::new(callback_id.clone()).text("正在处理..."))
@@ -4431,7 +4522,18 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
             // 已在前面提前返回，此处不可达
             MusicCallbackAction::QueueStatus => Ok(()),
             MusicCallbackAction::InlineSend { .. } => Ok(()),
-            MusicCallbackAction::InlineCollapse(..) => Ok(()),
+            MusicCallbackAction::InlineCollapse(platform, id) => {
+                let settings = get_user_settings_or_default(user_id).await;
+                handle_song_collapse_callback(
+                    &bot,
+                    &callback_id,
+                    SongMessage::Chat(&msg),
+                    platform,
+                    &id,
+                    &settings,
+                )
+                .await
+            }
         };
         if let Err(e) = result {
             // 限流/排队等瞬时拒绝（Busy）只弹提示，不能抹掉消息里已有的菜单
@@ -4677,14 +4779,14 @@ pub async fn comment_buttons(bot: &Bot, msg: &Message) -> BotResult {
     if msg.edit_date().is_some() {
         return Ok(());
     }
-    let Some(audio) = msg.audio() else {
+    // 歌曲以卡片或旧式音频消息发出，两种都能认出
+    let Some(file_id) =
+        card_audio_file_id(msg).or_else(|| msg.audio().map(|audio| &*audio.file_id))
+    else {
         return Ok(());
     };
     let lookup = match provider::gateway() {
-        Ok(gateway) => gateway
-            .lookup_cache(&audio.file_id)
-            .await
-            .map_err(BotError::from),
+        Ok(gateway) => gateway.lookup_cache(file_id).await.map_err(BotError::from),
         Err(err) => Err(err),
     };
     let cached = match lookup {
@@ -5729,6 +5831,29 @@ mod tests {
             Some((MusicPlatform::YouTubeMusic, "dQw4w9-WgXcQ"))
         );
         assert!(parse_lyric_start_parameter("lyric-n-").is_none());
+    }
+
+    #[test]
+    fn song_cards_are_recognised_by_their_player() {
+        let card: Message = serde_json::from_value(serde_json::json!({
+            "message_id": 9,
+            "date": 1700000000,
+            "chat": { "id": 1, "type": "private", "first_name": "u" },
+            "rich_message": { "blocks": [
+                { "type": "heading", "size": 3, "text": "晴天" },
+                { "type": "audio", "audio": { "file_id": "CQAC", "file_unique_id": "u", "duration": 269 } },
+            ] }
+        }))
+        .unwrap();
+        assert_eq!(card_audio_file_id(&card), Some("CQAC"));
+        let page: Message = serde_json::from_value(serde_json::json!({
+            "message_id": 10,
+            "date": 1700000000,
+            "chat": { "id": 1, "type": "private", "first_name": "u" },
+            "rich_message": { "blocks": [{ "type": "heading", "size": 3, "text": "歌词" }] }
+        }))
+        .unwrap();
+        assert_eq!(card_audio_file_id(&page), None);
     }
 
     fn search_item(index: usize) -> MusicSearchItem {
