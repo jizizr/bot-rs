@@ -30,6 +30,7 @@ pub mod start;
 pub mod test;
 pub mod today;
 pub mod translate;
+pub mod uploader;
 pub mod vv;
 pub mod wcloud;
 pub mod wiki;
@@ -210,6 +211,7 @@ commands! {
     Vv => "vv": "vv不削能玩？",
     Count => "count": "发言趋势",
     Test => "test" hidden: "",
+    Uploader => "uploader" hidden: "",
 }
 
 impl Cmd {
@@ -298,6 +300,7 @@ pub async fn command_handler(bot: &Bot, msg: &Message, me: &User) -> BotResult {
         Vv => vv::vv,
         Count => count::count,
         Test => test::test,
+        Uploader => uploader::uploader,
     );
     if let Err(e) = cmd_result {
         let err_msg = format!("{e}");
@@ -315,7 +318,12 @@ pub async fn command_handler(bot: &Bot, msg: &Message, me: &User) -> BotResult {
             }
         }
     }
-    log.set_command(text.to_string());
+    // 带凭据的命令不进日志
+    log.set_command(if cmd == Cmd::Uploader {
+        "/uploader <hidden>".to_string()
+    } else {
+        text.to_string()
+    });
     let user = model::User::from(msg);
     let group = model::Group::from(msg);
     let _ = insert_log((&log.into(), &user, &group)).await;
@@ -344,7 +352,15 @@ mod tests {
     fn hidden_commands_stay_out_of_menus() {
         let commands = Cmd::bot_commands();
         assert!(commands.iter().all(|command| &*command.command != "test"));
-        assert_eq!(commands.len(), Cmd::ALL.len() - 1);
+        assert_eq!(
+            commands.len(),
+            Cmd::ALL.iter().filter(|(.., hidden)| !hidden).count()
+        );
+        assert!(
+            commands
+                .iter()
+                .all(|command| &*command.command != "uploader")
+        );
         let help = Cmd::descriptions();
         assert!(help.contains("/translate, /t — 翻译"));
         assert!(!help.contains("/test"));
