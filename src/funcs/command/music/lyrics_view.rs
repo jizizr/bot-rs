@@ -123,6 +123,19 @@ pub(super) struct LyricSong {
 }
 
 impl LyricSong {
+    /// `singer · platform · album`, leaving out what is unknown.
+    pub(super) fn byline(&self, platform: MusicPlatform) -> String {
+        [
+            self.singer.as_deref(),
+            Some(platform.label()),
+            self.album.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ")
+    }
+
     pub(super) fn from_track(track: &MusicTrack) -> Self {
         let known = |value: &str| Some(value.trim().to_string()).filter(|value| !value.is_empty());
         Self {
@@ -335,6 +348,32 @@ impl SongAudio {
     }
 }
 
+/// An inline song as a rich card: cover, name, byline and player, with
+/// `details` (platform, quality, size) as the footer. Its lyrics open by
+/// editing it into the lyric page, which a plain audio message cannot be.
+pub(super) fn song_card(
+    song: &LyricSong,
+    platform: MusicPlatform,
+    audio: &SongAudio,
+    cover: &Cover,
+    details: &str,
+) -> InputRichMessage {
+    let mut page = RichPage::default();
+    if let Cover::Uploaded(file_id) = cover {
+        page = page.uploaded_photo(file_id);
+    }
+    page.heading(song.title.as_deref().unwrap_or("歌曲"))
+        .paragraph(&song.byline(platform))
+        .uploaded_audio(
+            &audio.file_id,
+            &audio.title,
+            &audio.performer,
+            audio.duration,
+        )
+        .footer(details)
+        .build()
+}
+
 /// What every lyric page shows, already in the requested script.
 pub(super) struct LyricView {
     title: String,
@@ -352,15 +391,7 @@ impl LyricView {
         script: MusicLyricScript,
     ) -> Self {
         let convert = |text: &str| convert_lyric_script(text, script);
-        let byline = [
-            song.singer.as_deref(),
-            Some(platform.label()),
-            song.album.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" · ");
+        let byline = song.byline(platform);
         let lines = timed_lyric_lines(&lyrics.plain, &lyrics.translation)
             .into_iter()
             .map(|line| LyricLine {
@@ -660,6 +691,31 @@ mod tests {
              <audio src=\"tg://audio?id=media1\"></audio><blockquote expandable>"
         ));
         assert_eq!(rich.media.as_ref().map(|media| media.len()), Some(2));
+    }
+
+    #[test]
+    fn song_cards_show_the_song_and_its_player() {
+        let (song, _) = sample();
+        let audio = SongAudio {
+            file_id: "CQAC".to_string(),
+            title: "晴天".to_string(),
+            performer: "周杰伦".to_string(),
+            duration: Some(269),
+        };
+        let card = song_card(
+            &song,
+            MusicPlatform::Tencent,
+            &audio,
+            &Cover::None,
+            "QQ音乐 · 无损 · 25.0 MB",
+        );
+        assert_eq!(
+            card.html.as_deref(),
+            Some(
+                "<h3>晴天</h3><p>周杰伦 &amp; &lt;Band&gt; · QQ音乐 · 叶惠美</p>\
+                 <audio src=\"tg://audio?id=media0\"></audio><footer>QQ音乐 · 无损 · 25.0 MB</footer>"
+            )
+        );
     }
 
     #[test]

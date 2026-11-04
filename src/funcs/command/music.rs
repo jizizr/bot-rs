@@ -12,7 +12,7 @@ use crate::funcs::pkg::rich::{self, RichPage};
 use ferrous_opencc::{OpenCC, config::BuiltinConfig};
 use futures::future::join_all;
 use lazy_static::lazy_static;
-use lyrics_view::{Cover, LyricSong, LyricView, SongAudio, lyric_cover};
+use lyrics_view::{Cover, LyricSong, LyricView, SongAudio, lyric_cover, song_card};
 use provider::{
     DownloadProgress, JobState, MediaRequest, MusicCollection, MusicMedia, MusicPlatform,
     MusicQuery, MusicSearchItem, MusicTrack,
@@ -1725,7 +1725,7 @@ impl Destination<'_> {
             } => send_media(bot, msg, *status_msg, *reply_to, query, media)
                 .await
                 .map(|_| ()),
-            Destination::Inline(id) => edit_inline_audio(bot, id, media).await,
+            Destination::Inline(id) => edit_inline_song_card(bot, id, media).await,
         }
     }
 }
@@ -2497,6 +2497,46 @@ async fn run_inline_send_flow_inner(
     )
     .await?;
     Ok(())
+}
+
+/// Turns an inline message into the song's rich card. Rich messages can be
+/// edited into lyric pages and back; an audio message cannot, so inline songs
+/// are sent as cards and only fall back to audio if the card is refused.
+async fn edit_inline_song_card(
+    bot: &Bot,
+    inline_message_id: &str,
+    media: &MusicMedia,
+) -> BotResult {
+    let song = LyricSong::from_track(&media.track);
+    let cover = lyric_cover(bot, &song).await;
+    let mut details = vec![
+        media.track.platform.label().to_string(),
+        media.quality.label().to_string(),
+    ];
+    if media.byte_size > 0 {
+        details.push(format_file_size(media.byte_size));
+    }
+    let card = song_card(
+        &song,
+        media.track.platform,
+        &SongAudio::from_media(media),
+        &cover,
+        &details.join(" · "),
+    );
+    let mut request = EditMessageText::new()
+        .inline_message_id(inline_message_id)
+        .rich_message(card);
+    if let Some(markup) = inline_track_menu(&media.track) {
+        request = request.reply_markup(markup);
+    }
+    match bot.send(request).await.map_err(BotError::from) {
+        Ok(_) => Ok(()),
+        Err(err) if is_not_modified(&err) => Ok(()),
+        Err(err) => {
+            log::error!("inline song card refused, sending audio: {err}");
+            edit_inline_audio(bot, inline_message_id, media).await
+        }
+    }
 }
 
 async fn edit_inline_audio(bot: &Bot, inline_message_id: &str, media: &MusicMedia) -> BotResult {
@@ -3461,7 +3501,7 @@ async fn handle_inline_collapse_callback(
         .await?;
         return Ok(());
     };
-    edit_inline_audio(bot, inline_message_id, &media).await?;
+    edit_inline_song_card(bot, inline_message_id, &media).await?;
     bot.send(AnswerCallbackQuery::new(callback_id.to_string()))
         .await?;
     Ok(())
