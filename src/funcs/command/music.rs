@@ -16,10 +16,14 @@ use provider::{
     MusicQuery, MusicSearchItem, MusicTrack,
 };
 use ratelimit::ResourceAction;
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use teloxide::types::{
-    ChatId, ChosenInlineResult, InlineKeyboardButtonKind, InlineQuery, InputMedia, InputMediaAudio,
-    InputMediaDocument, MaybeInaccessibleMessage,
+    ChatId, ChosenInlineResult, InlineKeyboardButtonKind, InlineQuery, InlineQueryResultsButton,
+    InlineQueryResultsButtonKind, InputMedia, InputMediaAudio, InputMediaDocument,
+    MaybeInaccessibleMessage,
 };
 use tokio::{sync::mpsc, task::JoinHandle};
 use url::Url;
@@ -49,6 +53,44 @@ const MUSIC_QUALITY_OPTIONS: &[(&str, &str)] = &[
 const MUSIC_LYRIC_SCRIPT_OPTIONS: &[(&str, &str)] =
     &[("simplified", "简体"), ("traditional", "繁体")];
 const DOWNLOAD_PROGRESS_MIN_INTERVAL: Duration = Duration::from_secs(2);
+/// Platforms offered for switching a search, most used first, with the short
+/// names their buttons carry.
+const SEARCH_PLATFORMS: &[(MusicPlatform, &str)] = &[
+    (MusicPlatform::Tencent, "QQ音乐"),
+    (MusicPlatform::Netease, "网易云"),
+    (MusicPlatform::AppleMusic, "Apple"),
+    (MusicPlatform::Soda, "汽水"),
+    (MusicPlatform::Kugou, "酷狗"),
+    (MusicPlatform::Bilibili, "B站"),
+    (MusicPlatform::YouTubeMusic, "YouTube"),
+];
+const SEARCH_PAGE_SIZE: usize = 8;
+/// The first page is fetched alone; asking for the next one fetches up to this.
+const SEARCH_RESULT_LIMIT: usize = 32;
+const SEARCH_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
+const SEARCH_CACHE_CAPACITY: usize = 256;
+/// A search page starts with this and the keyword, which is how paging and
+/// platform buttons recover the keyword without carrying it in callback data.
+const SEARCH_HEADER_PREFIX: &str = "🔍 ";
+const SEARCH_EXPIRED_NOTICE: &str = "搜索结果已过期，请重新搜索";
+const SEARCH_OWNER_NOTICE: &str = "这是其他用户的搜索结果，请自己发送 /music 歌名";
+const SEARCH_TEXT_LIMIT: usize = 40;
+/// Deep-link parameter of the platform picker above inline results.
+pub const INLINE_PLATFORM_START: &str = "music_platform";
+const INLINE_KEYWORD_TTL: Duration = Duration::from_secs(30 * 60);
+const INLINE_KEYWORD_CAPACITY: usize = 1024;
+
+/// Search results by platform and keyword, with when they were fetched.
+type SearchCache =
+    std::collections::HashMap<(MusicPlatform, String), (Instant, Arc<SearchResults>)>;
+
+lazy_static! {
+    static ref SEARCH_CACHE: std::sync::Mutex<SearchCache> = Default::default();
+    /// The latest inline search of each user, for the platform picker the
+    /// button above inline results opens in the private chat.
+    static ref INLINE_KEYWORDS: std::sync::Mutex<std::collections::HashMap<i64, (Instant, InlineSearch)>> =
+        Default::default();
+}
 
 lazy_static! {
     static ref LYRIC_TO_SIMPLIFIED: OpenCC =
@@ -65,7 +107,7 @@ cmd!(
         ///子命令：search 搜索候选，get 直接下载
         #[command(subcommand)]
         command: Option<MusicSubcommand>,
-        ///歌曲名、链接或 ID；不填写时打开音乐平台面板
+        ///歌曲名搜索候选，链接直接获取；不填写时打开音乐平台面板
         #[arg(required = false, num_args = 1.., trailing_var_arg = true)]
         query: Vec<String>,
     }
@@ -132,6 +174,15 @@ enum MusicFavoriteScopeArg {
 #[derive(Clone, Debug)]
 enum MusicCallbackAction {
     SearchMore(MusicQuery),
+    /// 搜索结果翻页或换平台；关键词取自消息首行，不占回调长度
+    SearchPage {
+        platform: MusicPlatform,
+        page: usize,
+        requester_id: i64,
+    },
+    SearchClose {
+        requester_id: i64,
+    },
     Select {
         platform: MusicPlatform,
         id: String,
@@ -368,6 +419,17 @@ impl MusicCallbackAction {
                 query.platform.callback_code(),
                 urlencoding::encode(&query.keyword)
             ),
+            MusicCallbackAction::SearchPage {
+                platform,
+                page,
+                requester_id,
+            } => format!(
+                "{CALLBACK_PREFIX} sp {} {page} {requester_id}",
+                platform.callback_code()
+            ),
+            MusicCallbackAction::SearchClose { requester_id } => {
+                format!("{CALLBACK_PREFIX} sc {requester_id}")
+            }
             MusicCallbackAction::Select {
                 platform,
                 id,
@@ -472,6 +534,27 @@ impl MusicCallbackAction {
         }
         if action == "close" {
             return Ok(MusicCallbackAction::Close);
+        }
+        if action == "sc" {
+            let requester_id = parse_callback_i64(parts.next(), "Invalid music search owner")?;
+            return Ok(MusicCallbackAction::SearchClose { requester_id });
+        }
+        if action == "sp" {
+            let invalid = || BotError::Custom("Invalid music search page".to_string());
+            let platform = parts
+                .next()
+                .and_then(MusicPlatform::from_callback_code)
+                .ok_or_else(invalid)?;
+            let (page, requester_id) = parts
+                .next()
+                .and_then(|rest| rest.split_once(' '))
+                .ok_or_else(invalid)?;
+            let page = page.parse::<usize>().ok().filter(|page| *page > 0);
+            return Ok(MusicCallbackAction::SearchPage {
+                platform,
+                page: page.ok_or_else(invalid)?,
+                requester_id: requester_id.parse().map_err(|_| invalid())?,
+            });
         }
         if action == "queue" {
             return Ok(MusicCallbackAction::QueueStatus);
@@ -751,7 +834,7 @@ fn user_id_from_message(msg: &Message) -> i64 {
 
 fn music_settings_text(settings: &UserMusicSettings) -> String {
     format!(
-        "音乐设置\n\n🎵 默认平台: {}\n🎧 默认音质: {}\n🖼️ 发送封面: {}\n📝 歌词文字: {}\n\n点击下方按钮修改设置",
+        "⚙️ 音乐设置\n\n🎵 默认平台: {}\n🎧 默认音质: {}\n🖼️ 发送封面: {}\n📝 歌词文字: {}\n\n点击下方按钮修改设置",
         platform_label(&settings.default_platform),
         quality_label(&settings.quality),
         if settings.send_cover {
@@ -842,7 +925,7 @@ fn music_settings_menu_with_owner(
 fn music_panel_text(settings: &UserMusicSettings, view: MusicPanelView) -> String {
     match view {
         MusicPanelView::Platforms => format!(
-            "音乐\n\n默认平台：{}\n默认音质：{}",
+            "🎵 音乐\n\n默认平台：{}\n默认音质：{}\n\n发送「/music 歌名」搜索，点结果即可获取；下方按钮切换默认平台",
             platform_label(&settings.default_platform),
             quality_label(&settings.quality),
         ),
@@ -1382,9 +1465,9 @@ async fn send_media(
     let track = &media.track;
     if let Some(status_msg) = status_msg {
         let text = if media.cached {
-            "命中缓存，正在发送..."
+            "📤 命中缓存，正在发送…"
         } else {
-            "获取成功，正在发送..."
+            "📤 获取成功，正在发送…"
         };
         let _ = bot
             .edit_message_text(status_msg.chat.id, status_msg.id, text)
@@ -1679,7 +1762,7 @@ async fn obtain_media(
                 queued_status
                     .show(
                         &queued_bot,
-                        "当前下载繁忙，已加入队列，请稍候...".to_string(),
+                        "⏳ 当前下载繁忙，已加入队列，请稍候…".to_string(),
                         Some(queue_status_menu()),
                     )
                     .await;
@@ -1722,7 +1805,7 @@ async fn obtain_media(
             }
             JobState::Uploading => {
                 slot.take();
-                let _ = tx.send("获取成功，正在上传...".to_string());
+                let _ = tx.send("☁️ 下载完成，正在上传…".to_string());
             }
             _ => {}
         })
@@ -1806,6 +1889,14 @@ pub async fn music_inline_query_handler(bot: Bot, q: InlineQuery) -> BotResult {
         return answer_inline_music_help(&bot, &q, &settings).await;
     }
 
+    remember_inline_search(
+        user_id,
+        InlineSearch {
+            keyword: keyword.clone(),
+            platform,
+            quality: (quality != music_cache_quality(&settings)).then(|| quality.clone()),
+        },
+    );
     let query = MusicQuery {
         platform,
         keyword: keyword.clone(),
@@ -1864,10 +1955,90 @@ pub async fn music_inline_query_handler(bot: Bot, q: InlineQuery) -> BotResult {
     results.push(inline_settings_result(&settings, user_id));
 
     bot.answer_inline_query(&q.id, results)
+        .button(InlineQueryResultsButton {
+            text: format!(
+                "🎵 {} · {}  ｜  切换平台",
+                platform.label(),
+                quality_label(&quality)
+            ),
+            kind: InlineQueryResultsButtonKind::StartParameter(INLINE_PLATFORM_START.to_string()),
+        })
         .is_personal(true)
         .cache_time(1)
         .send()
         .await?;
+    Ok(())
+}
+
+/// An inline search, kept so the private-chat platform picker can send the
+/// user back to it on another platform.
+#[derive(Clone, Debug)]
+struct InlineSearch {
+    keyword: String,
+    platform: MusicPlatform,
+    /// A quality typed after the keyword, kept when switching platforms.
+    quality: Option<String>,
+}
+
+impl InlineSearch {
+    fn query_on(&self, platform: MusicPlatform) -> String {
+        let mut query = format!("{} {}", self.keyword, platform.id());
+        if let Some(quality) = &self.quality {
+            query.push(' ');
+            query.push_str(quality);
+        }
+        query
+    }
+}
+
+fn remember_inline_search(user_id: i64, search: InlineSearch) {
+    let mut searches = lock_unpoisoned(&INLINE_KEYWORDS);
+    if searches.len() >= INLINE_KEYWORD_CAPACITY {
+        searches.retain(|_, (at, _)| at.elapsed() < INLINE_KEYWORD_TTL);
+    }
+    if searches.len() >= INLINE_KEYWORD_CAPACITY {
+        searches.clear();
+    }
+    searches.insert(user_id, (Instant::now(), search));
+}
+
+/// Opened by the button above inline results: each platform button returns
+/// to the chat the user came from with the same search on that platform.
+pub async fn inline_platform_picker(bot: &Bot, msg: &Message) -> BotResult {
+    let search = lock_unpoisoned(&INLINE_KEYWORDS)
+        .get(&user_id_from_message(msg))
+        .filter(|(at, _)| at.elapsed() < INLINE_KEYWORD_TTL)
+        .map(|(_, search)| search.clone());
+    let Some(search) = search else {
+        bot.send_message(
+            msg.chat.id,
+            "请先在聊天里输入「@机器人 歌名」，再点结果上方的「切换平台」",
+        )
+        .await?;
+        return Ok(());
+    };
+    let buttons = SEARCH_PLATFORMS
+        .iter()
+        .map(|(platform, label)| {
+            InlineKeyboardButton::switch_inline_query(
+                selected_label(label, *platform == search.platform),
+                search.query_on(*platform),
+            )
+        })
+        .collect::<Vec<_>>();
+    bot.send_message(
+        msg.chat.id,
+        format!(
+            "{SEARCH_HEADER_PREFIX}<b>{}</b>\n当前：{}\n\n选择平台后会回到原来的聊天继续搜索",
+            html_escape(&search.keyword),
+            search.platform.label()
+        ),
+    )
+    .parse_mode(ParseMode::Html)
+    .reply_markup(InlineKeyboardMarkup::new(
+        buttons.chunks(4).map(<[_]>::to_vec).collect::<Vec<_>>(),
+    ))
+    .await?;
     Ok(())
 }
 
@@ -2393,45 +2564,392 @@ fn is_inline_result_token(value: &str) -> bool {
             .all(|byte| !byte.is_ascii_whitespace() && byte != b'|')
 }
 
-async fn get_music_gui(bot: Bot, msg: Message, query: MusicQuery) -> Result<(), BotError> {
-    send_search_results(&bot, msg.chat.id, None, query).await
+/// One platform's results for a keyword, shared by every page of it.
+struct SearchResults {
+    tracks: Vec<MusicSearchItem>,
+    /// Nothing more to fetch: the platform returned fewer than asked, or the
+    /// limit was reached.
+    complete: bool,
 }
 
-async fn send_music_search(bot: &Bot, msg: &Message, query: MusicQuery) -> Result<(), BotError> {
+impl SearchResults {
+    fn page_count(&self) -> usize {
+        self.tracks.len().div_ceil(SEARCH_PAGE_SIZE).max(1)
+    }
+
+    fn page(&self, page: usize) -> &[MusicSearchItem] {
+        let start = (page - 1) * SEARCH_PAGE_SIZE;
+        let end = (start + SEARCH_PAGE_SIZE).min(self.tracks.len());
+        self.tracks.get(start..end).unwrap_or_default()
+    }
+}
+
+/// Searches through a short-lived cache, so paging and going back to a
+/// platform already shown do not ask MHub again. Only real searches are
+/// metered.
+async fn cached_search(
+    query: &MusicQuery,
+    needed: usize,
+    user_id: i64,
+    chat_id: Option<i64>,
+) -> Result<Arc<SearchResults>, BotError> {
+    let key = (query.platform, query.keyword.clone());
+    let cached = lock_unpoisoned(&SEARCH_CACHE)
+        .get(&key)
+        .filter(|(at, _)| at.elapsed() < SEARCH_CACHE_TTL)
+        .map(|(_, results)| results.clone());
+    if let Some(results) = cached
+        && (results.complete || results.tracks.len() >= needed)
+    {
+        return Ok(results);
+    }
+
+    ratelimit::ensure_allowed(ResourceAction::Search, user_id, chat_id, query.platform)?;
+    let limit = if needed <= SEARCH_PAGE_SIZE {
+        SEARCH_PAGE_SIZE
+    } else {
+        SEARCH_RESULT_LIMIT
+    };
+    let mut tracks = search_tracks(query, limit).await?;
+    let complete = tracks.len() < limit || limit >= SEARCH_RESULT_LIMIT;
+    tracks.truncate(SEARCH_RESULT_LIMIT);
+    let results = Arc::new(SearchResults { tracks, complete });
+
+    let mut cache = lock_unpoisoned(&SEARCH_CACHE);
+    cache.retain(|_, (at, _)| at.elapsed() < SEARCH_CACHE_TTL);
+    if cache.len() >= SEARCH_CACHE_CAPACITY
+        && let Some(oldest) = cache
+            .iter()
+            .min_by_key(|(_, (at, _))| *at)
+            .map(|(key, _)| key.clone())
+    {
+        cache.remove(&oldest);
+    }
+    cache.insert(key, (Instant::now(), results.clone()));
+    Ok(results)
+}
+
+fn lock_unpoisoned<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// A link, `platform:id` or a long bare number names one song (or a
+/// playlist) rather than describing it.
+fn is_direct_query(keyword: &str) -> bool {
+    let keyword = keyword.trim();
+    let is_long_number =
+        |value: &str| value.len() >= 7 && value.bytes().all(|b| b.is_ascii_digit());
+    keyword.contains("http://")
+        || keyword.contains("https://")
+        || is_long_number(keyword)
+        || keyword.split_once(':').is_some_and(|(platform, id)| {
+            MusicPlatform::from_alias(platform).is_some() && is_callback_token(id)
+        })
+}
+
+/// `/music 歌名` lists candidates; a link or ID is fetched straight away.
+async fn send_music_search(
+    bot: &Bot,
+    msg: &Message,
+    query: MusicQuery,
+    settings: &UserMusicSettings,
+) -> BotResult {
+    let user_id = user_id_from_message(msg);
+    if !is_direct_query(&query.keyword) {
+        return open_search_page(bot, msg.chat.id, Some(msg.id), query, user_id).await;
+    }
     ratelimit::ensure_allowed(
         ResourceAction::Search,
-        user_id_from_message(msg),
+        user_id,
         Some(msg.chat.id.0),
         query.platform,
     )?;
-    send_search_results(bot, msg.chat.id, Some(msg.id), query).await
+    if let Some(collection) = search_collection(&query, 10).await? {
+        return send_collection_results(bot, msg.chat.id, Some(msg.id), collection, user_id).await;
+    }
+    send_direct_music(bot, msg, query, settings).await
 }
 
-async fn send_search_results(
+async fn send_direct_music(
+    bot: &Bot,
+    msg: &Message,
+    query: MusicQuery,
+    settings: &UserMusicSettings,
+) -> BotResult {
+    let status_msg = bot
+        .send_message(
+            msg.chat.id,
+            format!("⏳ 正在从{}获取音乐…", query.platform.label()),
+        )
+        .reply_parameters(ReplyParameters::new(msg.id))
+        .await?;
+
+    match get_music(bot, query, msg, &status_msg, settings).await {
+        Ok(()) => {
+            bot.delete_message(status_msg.chat.id, status_msg.id)
+                .await?;
+            Ok(())
+        }
+        Err(e) => {
+            bot.edit_message_text(status_msg.chat.id, status_msg.id, format!("{e}"))
+                .await?;
+            Err(e)
+        }
+    }
+}
+
+/// Posts a placeholder answering `reply_to`, then turns it into the first
+/// page of results.
+async fn open_search_page(
     bot: &Bot,
     chat_id: ChatId,
     reply_to: Option<MessageId>,
     query: MusicQuery,
-) -> Result<(), BotError> {
-    if let Some(collection) = search_collection(&query, 10).await? {
-        return send_collection_results(bot, chat_id, reply_to, collection).await;
-    }
-    let tracks = search_tracks(&query, 5).await?;
-    let text = if tracks.is_empty() {
-        "没有找到可下载的音乐".to_string()
-    } else {
-        format!("选择你的音乐（{}）", query.platform.label())
-    };
-
-    let mut request = bot.send_message(chat_id, text);
+    user_id: i64,
+) -> BotResult {
+    let mut request = bot.send_message(
+        chat_id,
+        format!(
+            "⏳ 正在{}搜索「{}」…",
+            query.platform.label(),
+            query.keyword
+        ),
+    );
     if let Some(reply_to) = reply_to {
         request = request.reply_parameters(ReplyParameters::new(reply_to));
     }
-    if !tracks.is_empty() {
-        request = request.reply_markup(search_menu(tracks, Some(&query.keyword)));
+    let page_msg = request.await?;
+    let result = show_search_page(bot, &page_msg, &query, 1, user_id, user_id).await;
+    if result.is_err() {
+        // 命令出错时由命令处理器统一回复错误，这里只收起占位消息
+        let _ = bot.delete_message(page_msg.chat.id, page_msg.id).await;
     }
-    request.await?;
+    result
+}
+
+/// Renders one page of a search into `page_msg`. A failed search still
+/// offers the other platforms; being rate limited leaves the page as it was.
+async fn show_search_page(
+    bot: &Bot,
+    page_msg: &Message,
+    query: &MusicQuery,
+    page: usize,
+    requester_id: i64,
+    user_id: i64,
+) -> BotResult {
+    let needed = page.saturating_mul(SEARCH_PAGE_SIZE);
+    let (text, markup) = match cached_search(query, needed, user_id, Some(page_msg.chat.id.0)).await
+    {
+        Ok(results) => {
+            let page = page.min(results.page_count());
+            (
+                search_page_text(query, &results, page),
+                search_page_menu(query, Some(&results), page, requester_id),
+            )
+        }
+        Err(err @ BotError::Busy(_)) => return Err(err),
+        Err(err) => {
+            log::warn!(
+                "music search failed: platform={} err={err}",
+                query.platform.id()
+            );
+            (
+                search_failure_text(query, &err),
+                search_page_menu(query, None, 1, requester_id),
+            )
+        }
+    };
+    bot.edit_message_text(page_msg.chat.id, page_msg.id, text)
+        .parse_mode(ParseMode::Html)
+        .reply_markup(markup)
+        .await?;
     Ok(())
+}
+
+/// The keyword a search page was made for, from its first line.
+fn search_page_keyword(msg: &Message) -> Option<String> {
+    let keyword = msg
+        .text()?
+        .lines()
+        .next()?
+        .strip_prefix(SEARCH_HEADER_PREFIX)?
+        .trim();
+    (!keyword.is_empty()).then(|| keyword.to_string())
+}
+
+fn search_page_header(query: &MusicQuery) -> String {
+    format!(
+        "{SEARCH_HEADER_PREFIX}<b>{}</b>\n{}",
+        html_escape(&query.keyword),
+        query.platform.label()
+    )
+}
+
+fn search_page_text(query: &MusicQuery, results: &SearchResults, page: usize) -> String {
+    let header = search_page_header(query);
+    if results.tracks.is_empty() {
+        return format!("{header} · 没有找到结果\n\n换个关键词，或者点下面换个平台试试");
+    }
+    let pages = results.page_count();
+    let position = if !results.complete {
+        format!("第 {page} 页")
+    } else if pages > 1 {
+        format!("第 {page}/{pages} 页")
+    } else {
+        format!("共 {} 首", results.tracks.len())
+    };
+    format!(
+        "{header} · {position}\n\n{}\n\n<i>点击下方序号获取歌曲</i>",
+        track_list_text(results.page(page))
+    )
+}
+
+fn search_failure_text(query: &MusicQuery, err: &BotError) -> String {
+    format!(
+        "{} · 搜索失败\n\n{}\n\n可以稍后重试，或者点下面换个平台",
+        search_page_header(query),
+        html_escape(&err.to_string())
+    )
+}
+
+/// Numbered `song — singer` lines, matching the number buttons below them.
+fn track_list_text(tracks: &[MusicSearchItem]) -> String {
+    tracks
+        .iter()
+        .enumerate()
+        .map(|(index, track)| {
+            let song = html_escape(&truncate_chars(track.song.trim(), SEARCH_TEXT_LIMIT));
+            let singer = track.singer.trim();
+            if singer.is_empty() {
+                format!("<b>{}.</b> {song}", index + 1)
+            } else {
+                format!(
+                    "<b>{}.</b> {song} — {}",
+                    index + 1,
+                    html_escape(&truncate_chars(singer, SEARCH_TEXT_LIMIT))
+                )
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Number buttons for `track_list_text`: one row up to five, else two
+/// balanced rows.
+fn track_pick_rows(
+    tracks: &[MusicSearchItem],
+    search_keyword: Option<&str>,
+) -> Vec<Vec<InlineKeyboardButton>> {
+    let buttons = tracks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, track)| {
+            let callback = MusicCallbackAction::Select {
+                platform: track.platform,
+                id: track.id.clone(),
+                search_keyword: search_keyword.map(str::to_string),
+            }
+            .encode()?;
+            Some(InlineKeyboardButton::callback(
+                (index + 1).to_string(),
+                callback,
+            ))
+        })
+        .collect::<Vec<_>>();
+    let per_row = if buttons.len() <= 5 {
+        5
+    } else {
+        buttons.len().div_ceil(2)
+    };
+    buttons.chunks(per_row).map(<[_]>::to_vec).collect()
+}
+
+fn search_page_menu(
+    query: &MusicQuery,
+    results: Option<&SearchResults>,
+    page: usize,
+    requester_id: i64,
+) -> InlineKeyboardMarkup {
+    let page_button = |label: &str, platform: MusicPlatform, page: usize| {
+        MusicCallbackAction::SearchPage {
+            platform,
+            page,
+            requester_id,
+        }
+        .encode()
+        .map(|callback| InlineKeyboardButton::callback(label, callback))
+    };
+    let mut rows = Vec::new();
+    if let Some(results) = results.filter(|results| !results.tracks.is_empty()) {
+        rows.extend(track_pick_rows(results.page(page), Some(&query.keyword)));
+        let mut nav = Vec::new();
+        if page > 1 {
+            nav.extend(page_button("⬅️ 上一页", query.platform, page - 1));
+        }
+        if page < results.page_count() || !results.complete {
+            nav.extend(page_button("下一页 ➡️", query.platform, page + 1));
+        }
+        if !nav.is_empty() {
+            rows.push(nav);
+        }
+    }
+    let platforms = SEARCH_PLATFORMS
+        .iter()
+        .filter_map(|(platform, label)| {
+            page_button(
+                &selected_label(label, *platform == query.platform),
+                *platform,
+                1,
+            )
+        })
+        .collect::<Vec<_>>();
+    rows.extend(platforms.chunks(4).map(<[_]>::to_vec));
+    if let Some(callback) = (MusicCallbackAction::SearchClose { requester_id }).encode() {
+        rows.push(vec![InlineKeyboardButton::callback("❌ 关闭", callback)]);
+    }
+    InlineKeyboardMarkup::new(rows)
+}
+
+async fn handle_search_page_callback(
+    bot: &Bot,
+    callback_id: &str,
+    msg: &Message,
+    user_id: i64,
+    platform: MusicPlatform,
+    page: usize,
+    requester_id: i64,
+) -> BotResult {
+    let Some(keyword) = search_page_keyword(msg) else {
+        bot.answer_callback_query(callback_id.to_string())
+            .text(SEARCH_EXPIRED_NOTICE)
+            .show_alert(true)
+            .await?;
+        return Ok(());
+    };
+    let query = MusicQuery { platform, keyword };
+    match show_search_page(bot, msg, &query, page, requester_id, user_id).await {
+        Ok(()) => {
+            bot.answer_callback_query(callback_id.to_string()).await?;
+            Ok(())
+        }
+        // 点了当前所在的平台或页码，页面没有变化
+        Err(BotError::Send(teloxide::RequestError::Api(
+            teloxide::ApiError::MessageNotModified,
+        ))) => {
+            bot.answer_callback_query(callback_id.to_string())
+                .text(format!("已经是{}的第 {page} 页", platform.label()))
+                .await?;
+            Ok(())
+        }
+        Err(err) => Err(err),
+    }
+}
+
+/// Only whoever searched may page or close it; anyone may pick a song.
+fn is_search_owner(requester_id: i64, user_id: i64) -> bool {
+    requester_id <= 0 || requester_id == user_id
 }
 
 async fn send_collection_results(
@@ -2439,22 +2957,37 @@ async fn send_collection_results(
     chat_id: ChatId,
     reply_to: Option<MessageId>,
     collection: MusicCollection,
+    requester_id: i64,
 ) -> Result<(), BotError> {
+    let header = format!(
+        "💿 <b>{}</b>\n{}",
+        html_escape(&collection.title),
+        collection.platform.label()
+    );
     let text = if collection.items.is_empty() {
-        format!("{} 没有可发送的曲目", collection.title)
+        format!("{header} · 没有可发送的曲目")
     } else {
         format!(
-            "选择你的音乐（{} · {}）",
-            collection.platform.label(),
-            collection.title
+            "{header} · {} {} 首\n\n{}\n\n<i>点击下方序号获取歌曲</i>",
+            if collection.items.len() < 10 {
+                "共"
+            } else {
+                "前"
+            },
+            collection.items.len(),
+            track_list_text(&collection.items)
         )
     };
-    let mut request = bot.send_message(chat_id, text);
+    let mut rows = track_pick_rows(&collection.items, None);
+    if let Some(callback) = (MusicCallbackAction::SearchClose { requester_id }).encode() {
+        rows.push(vec![InlineKeyboardButton::callback("❌ 关闭", callback)]);
+    }
+    let mut request = bot
+        .send_message(chat_id, text)
+        .parse_mode(ParseMode::Html)
+        .reply_markup(InlineKeyboardMarkup::new(rows));
     if let Some(reply_to) = reply_to {
         request = request.reply_parameters(ReplyParameters::new(reply_to));
-    }
-    if !collection.items.is_empty() {
-        request = request.reply_markup(search_menu(collection.items, None));
     }
     request.await?;
     Ok(())
@@ -2477,7 +3010,14 @@ async fn send_music_collection(
             .await?;
         return Ok(());
     };
-    send_collection_results(bot, msg.chat.id, Some(msg.id), collection).await
+    send_collection_results(
+        bot,
+        msg.chat.id,
+        Some(msg.id),
+        collection,
+        user_id_from_message(msg),
+    )
+    .await
 }
 
 async fn get_music_cover(bot: &Bot, msg: &Message, url: &str) -> Result<(), BotError> {
@@ -3104,7 +3644,12 @@ async fn get_callback_music(
     search_keyword: Option<&str>,
     settings: &UserMusicSettings,
 ) -> Result<(), BotError> {
-    edit_callback_status(&bot, &msg, format!("正在从{}获取音乐...", platform.label())).await?;
+    edit_callback_status(
+        &bot,
+        &msg,
+        format!("⏳ 正在从{}获取音乐…", platform.label()),
+    )
+    .await?;
     let query = MusicQuery {
         platform,
         keyword: id.to_string(),
@@ -3187,16 +3732,20 @@ fn make_progress_throttle(
 }
 
 fn format_download_progress(title: &str, progress: DownloadProgress) -> String {
+    const BAR_CELLS: usize = 10;
     let written_mb = bytes_to_mb(progress.written);
     match progress.total {
         Some(total) if total > 0 => {
             let total_mb = bytes_to_mb(total);
             let percent = (progress.written as f64 * 100.0 / total as f64).clamp(0.0, 100.0);
+            let filled = ((percent / 100.0 * BAR_CELLS as f64).round() as usize).min(BAR_CELLS);
             format!(
-                "正在下载：{title}\n进度：{percent:.2}% ({written_mb:.2} MB / {total_mb:.2} MB)"
+                "⬇️ 正在下载「{title}」\n{}{} {percent:.1}%\n{written_mb:.2} MB / {total_mb:.2} MB",
+                "▰".repeat(filled),
+                "▱".repeat(BAR_CELLS - filled)
             )
         }
-        _ => format!("正在下载：{title}\n已下载：{written_mb:.2} MB"),
+        _ => format!("⬇️ 正在下载「{title}」\n已下载 {written_mb:.2} MB"),
     }
 }
 
@@ -3473,9 +4022,21 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
             return Ok(());
         }
         let _guard = Guard::new(&LIMITER, lock_flag);
+        if let MusicCallbackAction::SearchPage { requester_id, .. }
+        | MusicCallbackAction::SearchClose { requester_id } = &action
+            && !is_search_owner(*requester_id, user_id)
+        {
+            bot.answer_callback_query(callback_id)
+                .text(SEARCH_OWNER_NOTICE)
+                .show_alert(true)
+                .await?;
+            return Ok(());
+        }
         let preserve_panel = matches!(
             &action,
-            MusicCallbackAction::Panel { .. } | MusicCallbackAction::Setting(_)
+            MusicCallbackAction::Panel { .. }
+                | MusicCallbackAction::Setting(_)
+                | MusicCallbackAction::SearchPage { .. }
         );
         if !matches!(
             action,
@@ -3484,6 +4045,8 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
                 | MusicCallbackAction::Favorite(_)
                 | MusicCallbackAction::Lyrics(_, _, _)
                 | MusicCallbackAction::InlineLyrics(_, _, _)
+                | MusicCallbackAction::SearchPage { .. }
+                | MusicCallbackAction::SearchClose { .. }
                 | MusicCallbackAction::Close
         ) {
             bot.answer_callback_query(callback_id.clone())
@@ -3493,15 +4056,28 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
 
         let result = match action {
             MusicCallbackAction::SearchMore(query) => {
-                match ratelimit::ensure_allowed(
-                    ResourceAction::Search,
+                open_search_page(&bot, msg.chat.id, Some(msg.id), query, user_id).await
+            }
+            MusicCallbackAction::SearchPage {
+                platform,
+                page,
+                requester_id,
+            } => {
+                handle_search_page_callback(
+                    &bot,
+                    &callback_id,
+                    &msg,
                     user_id,
-                    Some(msg.chat.id.0),
-                    query.platform,
-                ) {
-                    Ok(()) => get_music_gui(bot.clone(), msg.clone(), query).await,
-                    Err(err) => Err(err),
-                }
+                    platform,
+                    page,
+                    requester_id,
+                )
+                .await
+            }
+            MusicCallbackAction::SearchClose { .. } => {
+                let _ = bot.delete_message(msg.chat.id, msg.id).await;
+                bot.answer_callback_query(callback_id.clone()).await?;
+                Ok(())
             }
             MusicCallbackAction::Cover(platform, id) => {
                 let settings = get_user_settings_or_default(user_id).await;
@@ -3715,30 +4291,6 @@ fn track_menu_for_context(
     (!rows.is_empty()).then(|| InlineKeyboardMarkup::new(rows))
 }
 
-fn search_menu(tracks: Vec<MusicSearchItem>, search_keyword: Option<&str>) -> InlineKeyboardMarkup {
-    let keyboard = tracks
-        .into_iter()
-        .filter_map(|track| {
-            let callback = MusicCallbackAction::Select {
-                platform: track.platform,
-                id: track.id,
-                search_keyword: search_keyword.map(str::to_string),
-            }
-            .encode()?;
-            Some(vec![InlineKeyboardButton::callback(
-                format!(
-                    "[{}] {} | {}",
-                    track.platform.label(),
-                    track.song,
-                    track.singer
-                ),
-                callback,
-            )])
-        })
-        .collect::<Vec<_>>();
-    InlineKeyboardMarkup::new(keyboard)
-}
-
 fn is_direct_track_lookup(keyword: &str, track: &MusicTrack) -> bool {
     let keyword = keyword.trim();
     if keyword.is_empty() {
@@ -3763,40 +4315,21 @@ pub async fn music(bot: &Bot, msg: &Message) -> BotResult {
         MusicCmd::parse_i18n_from_bot(getor(msg).unwrap().split_whitespace(), language_tag)?;
     let action = MusicAction::from_cmd(music, &settings)?;
 
-    let query = match action {
+    match action {
         MusicAction::Platforms => {
-            return send_music_panel(bot, msg, &settings, MusicPanelView::Platforms).await;
+            send_music_panel(bot, msg, &settings, MusicPanelView::Platforms).await
         }
         MusicAction::Setting => {
-            return send_music_panel(bot, msg, &settings, MusicPanelView::Settings).await;
+            send_music_panel(bot, msg, &settings, MusicPanelView::Settings).await
         }
-        MusicAction::Queue => return send_queue_status(bot, msg).await,
+        MusicAction::Queue => send_queue_status(bot, msg).await,
         MusicAction::Favorite(scope) => {
-            return send_music_favorites(bot, msg, user_id_from_message(msg), scope).await;
+            send_music_favorites(bot, msg, user_id_from_message(msg), scope).await
         }
-        MusicAction::Collection(query) => return send_music_collection(bot, msg, query).await,
-        MusicAction::Search(query) => return send_music_search(bot, msg, query).await,
-        MusicAction::Get(query) => query,
-    };
-    let msg_bot = bot
-        .send_message(
-            msg.chat.id,
-            format!("正在从{}获取音乐...", query.platform.label()),
-        )
-        .reply_parameters(ReplyParameters::new(msg.id))
-        .await?;
-
-    match get_music(bot, query, msg, &msg_bot, &settings).await {
-        Ok(()) => {
-            bot.delete_message(msg_bot.chat.id, msg_bot.id).await?;
-        }
-        Err(e) => {
-            bot.edit_message_text(msg_bot.chat.id, msg_bot.id, format!("{e}"))
-                .await?;
-            return Err(e);
-        }
+        MusicAction::Collection(query) => send_music_collection(bot, msg, query).await,
+        MusicAction::Search(query) => send_music_search(bot, msg, query, &settings).await,
+        MusicAction::Get(query) => send_direct_music(bot, msg, query, &settings).await,
     }
-    Ok(())
 }
 
 /// 频道歌曲被自动转发进讨论群（评论区）时，Telegram 会剥离原消息的内联按钮；
@@ -3878,7 +4411,7 @@ impl MusicAction {
                 provider::build_query_with_platform(default_platform, &collection.query)?,
             )),
             None if cmd.query.is_empty() => Ok(Self::Platforms),
-            None => Ok(Self::Get(provider::build_query_with_platform(
+            None => Ok(Self::Search(provider::build_query_with_platform(
                 default_platform,
                 &cmd.query,
             )?)),
@@ -3915,10 +4448,10 @@ mod tests {
         for keyword in ["qq", "网易云", "ytm", "#qq"] {
             let cmd =
                 MusicCmd::parse_i18n_from_bot(["/music", keyword, "晴天"], Some("zh-CN")).unwrap();
-            let MusicAction::Get(query) =
+            let MusicAction::Search(query) =
                 MusicAction::from_cmd(cmd, &test_settings("applemusic")).unwrap()
             else {
-                panic!("expected get action");
+                panic!("expected search action");
             };
             assert_eq!(query.platform, MusicPlatform::AppleMusic);
             assert_eq!(query.keyword, format!("{keyword} 晴天"));
@@ -3946,8 +4479,8 @@ mod tests {
             let cmd = MusicCmd::parse_i18n_from_bot(args, Some("zh-CN")).unwrap();
             let action = MusicAction::from_cmd(cmd, &test_settings("netease")).unwrap();
             let query = match (command, action) {
-                (None | Some("get"), MusicAction::Get(query))
-                | (Some("search"), MusicAction::Search(query))
+                (Some("get"), MusicAction::Get(query))
+                | (None | Some("search"), MusicAction::Search(query))
                 | (Some("collection"), MusicAction::Collection(query)) => query,
                 _ => panic!("unexpected music action"),
             };
@@ -4843,7 +5376,7 @@ mod tests {
                     total: None,
                 }
             ),
-            "正在下载：晴天\n已下载：0.50 MB"
+            "⬇️ 正在下载「晴天」\n已下载 0.50 MB"
         );
         assert_eq!(
             format_download_progress(
@@ -4853,7 +5386,212 @@ mod tests {
                     total: Some(4 * 1024 * 1024),
                 }
             ),
-            "正在下载：晴天\n进度：25.00% (1.00 MB / 4.00 MB)"
+            "⬇️ 正在下载「晴天」\n▰▰▰▱▱▱▱▱▱▱ 25.0%\n1.00 MB / 4.00 MB"
+        );
+    }
+
+    fn search_item(index: usize) -> MusicSearchItem {
+        MusicSearchItem {
+            platform: MusicPlatform::Tencent,
+            id: format!("00{index}"),
+            song: format!("歌<{index}>"),
+            singer: "周杰伦".to_string(),
+            cover: String::new(),
+        }
+    }
+
+    fn callbacks(markup: &InlineKeyboardMarkup) -> Vec<Vec<(String, String)>> {
+        markup
+            .inline_keyboard
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|button| {
+                        let InlineKeyboardButtonKind::CallbackData(data) = &button.kind else {
+                            panic!("expected callback button");
+                        };
+                        (button.text.clone(), data.clone())
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn search_page_callbacks_round_trip() {
+        let payload = MusicCallbackAction::SearchPage {
+            platform: MusicPlatform::Netease,
+            page: 3,
+            requester_id: 42,
+        }
+        .encode()
+        .unwrap();
+        let MusicCallbackAction::SearchPage {
+            platform,
+            page,
+            requester_id,
+        } = MusicCallbackAction::decode(&payload).unwrap()
+        else {
+            panic!("expected search page");
+        };
+        assert_eq!(
+            (platform, page, requester_id),
+            (MusicPlatform::Netease, 3, 42)
+        );
+
+        let payload = MusicCallbackAction::SearchClose { requester_id: 42 }
+            .encode()
+            .unwrap();
+        assert!(matches!(
+            MusicCallbackAction::decode(&payload).unwrap(),
+            MusicCallbackAction::SearchClose { requester_id: 42 }
+        ));
+        for invalid in [
+            "music sp n 0 42",
+            "music sp n x 42",
+            "music sp n 1",
+            "music sp zz 1 42",
+        ] {
+            assert!(MusicCallbackAction::decode(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn search_page_lists_numbered_results_with_platform_switch() {
+        let query = MusicQuery {
+            platform: MusicPlatform::Tencent,
+            keyword: "晴天 & 稻香".to_string(),
+        };
+        let results = SearchResults {
+            tracks: (1..=10).map(search_item).collect(),
+            complete: true,
+        };
+        let text = search_page_text(&query, &results, 2);
+        assert!(text.starts_with("🔍 <b>晴天 &amp; 稻香</b>\nQQ音乐 · 第 2/2 页\n\n"));
+        assert!(text.contains("<b>1.</b> 歌&lt;9&gt; — 周杰伦\n<b>2.</b> 歌&lt;10&gt; — 周杰伦"));
+
+        let rows = callbacks(&search_page_menu(&query, Some(&results), 2, 42));
+        assert_eq!(
+            rows[0],
+            [
+                (
+                    "1".to_string(),
+                    "music d t 009 %E6%99%B4%E5%A4%A9%20%26%20%E7%A8%BB%E9%A6%99".to_string()
+                ),
+                (
+                    "2".to_string(),
+                    "music d t 0010 %E6%99%B4%E5%A4%A9%20%26%20%E7%A8%BB%E9%A6%99".to_string()
+                )
+            ]
+        );
+        assert_eq!(
+            rows[1],
+            [("⬅️ 上一页".to_string(), "music sp t 1 42".to_string())]
+        );
+        assert_eq!(
+            rows[2][0],
+            ("✅ QQ音乐".to_string(), "music sp t 1 42".to_string())
+        );
+        assert_eq!(
+            rows[2][1],
+            ("网易云".to_string(), "music sp n 1 42".to_string())
+        );
+        assert_eq!(rows[2].len() + rows[3].len(), SEARCH_PLATFORMS.len());
+        assert_eq!(
+            rows[4],
+            [("❌ 关闭".to_string(), "music sc 42".to_string())]
+        );
+        for row in &rows {
+            for (_, data) in row {
+                assert!(data.len() <= CALLBACK_LIMIT);
+            }
+        }
+    }
+
+    #[test]
+    fn unfinished_search_offers_next_page_without_total() {
+        let query = MusicQuery {
+            platform: MusicPlatform::Tencent,
+            keyword: "晴天".to_string(),
+        };
+        let results = SearchResults {
+            tracks: (1..=SEARCH_PAGE_SIZE).map(search_item).collect(),
+            complete: false,
+        };
+        assert!(search_page_text(&query, &results, 1).contains("QQ音乐 · 第 1 页"));
+        let rows = callbacks(&search_page_menu(&query, Some(&results), 1, 42));
+        assert_eq!(rows[0].len(), 4);
+        assert_eq!(rows[1].len(), 4);
+        assert_eq!(
+            rows[2],
+            [("下一页 ➡️".to_string(), "music sp t 2 42".to_string())]
+        );
+    }
+
+    #[test]
+    fn empty_and_failed_searches_still_offer_platforms() {
+        let query = MusicQuery {
+            platform: MusicPlatform::Kugou,
+            keyword: "晴天".to_string(),
+        };
+        let results = SearchResults {
+            tracks: Vec::new(),
+            complete: true,
+        };
+        assert!(search_page_text(&query, &results, 1).contains("酷狗音乐 · 没有找到结果"));
+        let failure = search_failure_text(&query, &BotError::Custom("超时 <x>".to_string()));
+        assert!(failure.contains("酷狗音乐 · 搜索失败\n\n超时 &lt;x&gt;"));
+        for results in [Some(&results), None] {
+            let rows = callbacks(&search_page_menu(&query, results, 1, 42));
+            assert_eq!(rows.len(), 3);
+            assert!(rows[1].iter().any(|(text, _)| text == "✅ 酷狗"));
+        }
+    }
+
+    #[test]
+    fn number_buttons_split_into_balanced_rows() {
+        let lengths = |count: usize| {
+            track_pick_rows(&(1..=count).map(search_item).collect::<Vec<_>>(), None)
+                .iter()
+                .map(Vec::len)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(lengths(3), [3]);
+        assert_eq!(lengths(5), [5]);
+        assert_eq!(lengths(7), [4, 3]);
+        assert_eq!(lengths(10), [5, 5]);
+    }
+
+    #[test]
+    fn plain_keywords_search_and_links_fetch_directly() {
+        for keyword in ["晴天 周杰伦", "1989", "七里香", "Re:Zero", "qq: 晴天"] {
+            assert!(!is_direct_query(keyword), "{keyword}");
+        }
+        for keyword in [
+            "https://y.qq.com/n/ryqq/songDetail/0039MnYb0qxYhV",
+            "分享周杰伦的单曲《晴天》: https://y.qq.com/x",
+            "1893321422",
+            "netease:1893321422",
+            "applemusic:1624001324",
+        ] {
+            assert!(is_direct_query(keyword), "{keyword}");
+        }
+    }
+
+    #[test]
+    fn inline_platform_switch_keeps_keyword_and_quality() {
+        let search = InlineSearch {
+            keyword: "晴天".to_string(),
+            platform: MusicPlatform::Tencent,
+            quality: Some("high".to_string()),
+        };
+        let query = search.query_on(MusicPlatform::Netease);
+        assert_eq!(query, "晴天 netease high");
+        let (keyword, platform, quality) =
+            parse_inline_music_query(&query, &test_settings("tencent"));
+        assert_eq!(
+            (keyword.as_str(), platform, quality.as_str()),
+            ("晴天", MusicPlatform::Netease, "high")
         );
     }
 }

@@ -3,8 +3,9 @@ A simple framework has been completed
 
 Music commands:
 - `/music`: open the personal default-platform button panel.
-- `/music <song>` or `/music get <song>`: download using the saved default platform.
-- `/music search <song>`: search using the saved default platform.
+- `/music <song>` or `/music search <song>`: list results from the saved default platform, with pages and buttons to switch platform; tapping a number fetches that song. A link, `platform:id` or bare song ID is fetched straight away.
+- `/music get <song>`: fetch the first result directly.
+- Inline mode (`@bot <song> [platform] [quality]`): the button above the results opens a private-chat platform picker that returns to the same search on another platform.
 - `/music setting`: configure the default platform, quality, cover, and lyric script.
 - `/music collection <link-or-id>`: open a collection using the saved default platform.
 
