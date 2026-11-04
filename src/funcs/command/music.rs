@@ -12,7 +12,7 @@ use crate::funcs::pkg::rich::{self, RichPage};
 use ferrous_opencc::{OpenCC, config::BuiltinConfig};
 use futures::future::join_all;
 use lazy_static::lazy_static;
-use lyrics_view::{Cover, LyricSong, LyricView, lyric_cover};
+use lyrics_view::{Cover, LyricSong, LyricView, SongAudio, lyric_cover};
 use provider::{
     DownloadProgress, JobState, MediaRequest, MusicCollection, MusicMedia, MusicPlatform,
     MusicQuery, MusicSearchItem, MusicTrack,
@@ -197,6 +197,8 @@ enum MusicCallbackAction {
     /// 把富文本歌词另存为 LRC 文件发出
     LyricsFile(MusicPlatform, String, MusicLyricScript),
     InlineLyrics(MusicPlatform, String, MusicLyricScript),
+    /// 把展开了歌词的 inline 歌曲收回成音频消息
+    InlineCollapse(MusicPlatform, String),
     InlineSend {
         platform: MusicPlatform,
         id: String,
@@ -471,6 +473,9 @@ impl MusicCallbackAction {
                 platform.callback_code(),
                 script.callback_code()
             ),
+            MusicCallbackAction::InlineCollapse(platform, id) => {
+                format!("{CALLBACK_PREFIX} icol {} {id}", platform.callback_code())
+            }
             MusicCallbackAction::InlineLyrics(platform, id, script) => {
                 format!(
                     "{CALLBACK_PREFIX} ilyric {} {id} {}",
@@ -625,6 +630,10 @@ impl MusicCallbackAction {
                     script,
                 ))
             }
+            "icol" => Ok(MusicCallbackAction::InlineCollapse(
+                platform,
+                value.to_string(),
+            )),
             "ilyric" => {
                 let (id, script) = value
                     .split_once(' ')
@@ -3336,6 +3345,38 @@ async fn handle_lyric_file_callback(
     Ok(())
 }
 
+/// The song an inline message carries, from the shared cache: the user's
+/// quality first, then any other it was cached at.
+async fn inline_song_media(
+    platform: MusicPlatform,
+    id: &str,
+    settings: &UserMusicSettings,
+) -> Option<MusicMedia> {
+    let gateway = provider::gateway().ok()?;
+    let query = MusicQuery {
+        platform,
+        keyword: id.to_string(),
+    };
+    let preferred = music_cache_quality(settings);
+    let qualities = std::iter::once(preferred.as_str()).chain(
+        MUSIC_QUALITY_OPTIONS
+            .iter()
+            .map(|(quality, _)| *quality)
+            .filter(|quality| *quality != preferred),
+    );
+    for quality in qualities {
+        let request = media_request(&query, Some(id), quality, settings);
+        if let Ok(lookup) = gateway.lookup_media(&request).await
+            && let Some(media) = lookup.media
+        {
+            return Some(media);
+        }
+    }
+    None
+}
+
+/// Opens the lyrics of an inline song in place: the message becomes the rich
+/// lyric page with the song's player inside it, and can be folded back.
 #[allow(clippy::too_many_arguments)]
 async fn handle_inline_lyrics_callback(
     bot: &Bot,
@@ -3347,7 +3388,6 @@ async fn handle_inline_lyrics_callback(
     script: MusicLyricScript,
     settings: &UserMusicSettings,
 ) -> BotResult {
-    // inline 消息的回调里拿不到当前键盘，无法可靠地摘除歌词按钮，保持仅弹窗提示
     let Some(lyrics) = fetch_lyrics_limited(platform, id, user_id, None).await? else {
         bot.send(
             AnswerCallbackQuery::new(callback_id.to_string())
@@ -3357,41 +3397,73 @@ async fn handle_inline_lyrics_callback(
         .await?;
         return Ok(());
     };
-    let query = MusicQuery {
-        platform,
-        keyword: id.to_string(),
+    let Some(media) = inline_song_media(platform, id, settings).await else {
+        bot.send(
+            AnswerCallbackQuery::new(callback_id.to_string())
+                .text("这首歌的缓存已失效，请重新发送")
+                .show_alert(true),
+        )
+        .await?;
+        return Ok(());
     };
-    let request = media_request(&query, Some(id), &settings.quality, settings);
-    let cached = match provider::gateway() {
-        Ok(gateway) => gateway
-            .lookup_media(&request)
-            .await
-            .ok()
-            .and_then(|lookup| lookup.media),
-        Err(_) => None,
-    };
-    let track = cached.as_ref().map(|media| media.track.clone());
-    let song = match &track {
-        Some(track) => LyricSong::from_track(track),
-        None => LyricSong::resolve(platform, id, user_id, LyricSong::default()).await,
-    };
-    let caption = LyricView::new(&song, platform, &lyrics, script).caption();
-    let mut request = EditMessageCaption::new()
+    let song = LyricSong::from_track(&media.track);
+    let cover = lyric_cover(bot, &song).await;
+    let audio = SongAudio::from_media(&media);
+    let page = LyricView::new(&song, platform, &lyrics, script).rich_with_audio(&cover, &audio);
+    let edit = EditMessageText::new()
         .inline_message_id(inline_message_id)
-        .caption(caption)
-        .parse_mode(ParseMode::HTML);
-    // 这里编辑的是 inline 音频消息，回退菜单必须走 Lyrics（编辑 caption）路径；
-    // InlineLyrics 会路由到 edit_message_text_inline，在音频消息上必然失败
-    let markup = track
-        .as_ref()
-        .and_then(|track| inline_track_lyric_menu(track, script))
-        .unwrap_or_else(|| lyric_switch_menu(platform, id, script));
-    request = request.reply_markup(markup);
-    bot.send(request).await?;
-    bot.send(
-        AnswerCallbackQuery::new(callback_id.to_string()).text(format!("已切换{}", script.label())),
-    )
-    .await?;
+        .rich_message(page)
+        .reply_markup(inline_open_lyrics_menu(platform, id, script));
+    match bot.send(edit).await.map_err(BotError::from) {
+        Err(err) if !is_not_modified(&err) => return Err(err),
+        _ => {}
+    }
+    bot.send(AnswerCallbackQuery::new(callback_id.to_string()))
+        .await?;
+    Ok(())
+}
+
+/// Under an inline song with its lyrics open: switch script, or fold back.
+fn inline_open_lyrics_menu(
+    platform: MusicPlatform,
+    id: &str,
+    script: MusicLyricScript,
+) -> InlineKeyboardMarkup {
+    let row = [
+        MusicCallbackAction::Lyrics(platform, id.to_string(), Some(script.toggled()))
+            .encode()
+            .map(|callback| callback_button(script.switch_label(), callback)),
+        MusicCallbackAction::InlineCollapse(platform, id.to_string())
+            .encode()
+            .map(|callback| callback_button("收起歌词", callback)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    InlineKeyboardMarkup::new([row])
+}
+
+/// Folds an inline song's lyrics back into the plain audio message.
+async fn handle_inline_collapse_callback(
+    bot: &Bot,
+    callback_id: &str,
+    inline_message_id: &str,
+    platform: MusicPlatform,
+    id: &str,
+    settings: &UserMusicSettings,
+) -> BotResult {
+    let Some(media) = inline_song_media(platform, id, settings).await else {
+        bot.send(
+            AnswerCallbackQuery::new(callback_id.to_string())
+                .text("这首歌的缓存已失效，请重新发送")
+                .show_alert(true),
+        )
+        .await?;
+        return Ok(());
+    };
+    edit_inline_audio(bot, inline_message_id, &media).await?;
+    bot.send(AnswerCallbackQuery::new(callback_id.to_string()))
+        .await?;
     Ok(())
 }
 
@@ -4083,6 +4155,21 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
                 )
                 .await;
             }
+            MusicCallbackAction::InlineCollapse(platform, id) => {
+                let Some(inline_message_id) = q.inline_message_id else {
+                    return Ok(());
+                };
+                let settings = get_user_settings_or_default(user_id).await;
+                return handle_inline_collapse_callback(
+                    &bot,
+                    &callback_id,
+                    &inline_message_id,
+                    platform,
+                    &id,
+                    &settings,
+                )
+                .await;
+            }
             MusicCallbackAction::Setting(action) if q.inline_message_id.is_some() => {
                 let Some(inline_message_id) = q.inline_message_id else {
                     return Ok(());
@@ -4292,6 +4379,7 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
             // 已在前面提前返回，此处不可达
             MusicCallbackAction::QueueStatus => Ok(()),
             MusicCallbackAction::InlineSend { .. } => Ok(()),
+            MusicCallbackAction::InlineCollapse(..) => Ok(()),
         };
         if let Err(e) = result {
             // 限流/排队等瞬时拒绝（Busy）只弹提示，不能抹掉消息里已有的菜单
@@ -4323,13 +4411,6 @@ fn inline_track_menu(track: &MusicTrack) -> Option<InlineKeyboardMarkup> {
     inline_track_menu_with_lyric_label(track, "歌词", None)
 }
 
-fn inline_track_lyric_menu(
-    track: &MusicTrack,
-    script: MusicLyricScript,
-) -> Option<InlineKeyboardMarkup> {
-    inline_track_menu_with_lyric_label(track, script.switch_label(), Some(script.toggled()))
-}
-
 fn inline_track_menu_with_lyric_label(
     track: &MusicTrack,
     lyric_label: &str,
@@ -4350,16 +4431,13 @@ fn inline_track_menu_with_lyric_label(
 
     let mut action_row = Vec::new();
     // Bilibili/酷狗没有歌词接口，不渲染必然弹“没有可用歌词”的死按钮。
-    // inline 消息里只能改音频说明，富文本歌词页放到私聊；做不出私聊链接时
-    // 才退回在音频说明里显示歌词
-    if track.platform.supports_lyrics() && !track.id.trim().is_empty() {
-        if let Some(button) = full_lyrics_button(track.platform, &track.id) {
-            action_row.push(button);
-        } else if let Some(callback) =
+    // 点开后这条 inline 消息原地变成带播放器的富文本歌词页
+    if track.platform.supports_lyrics()
+        && !track.id.trim().is_empty()
+        && let Some(callback) =
             MusicCallbackAction::Lyrics(track.platform, track.id.clone(), lyric_target).encode()
-        {
-            action_row.push(callback_button(lyric_label, callback));
-        }
+    {
+        action_row.push(callback_button(lyric_label, callback));
     }
     if !track.id.trim().is_empty()
         && let Some(callback) = MusicCallbackAction::Favorite(MusicFavoriteAction::Toggle {
@@ -4379,29 +4457,11 @@ fn inline_track_menu_with_lyric_label(
     (!rows.is_empty()).then(|| InlineKeyboardMarkup::new(rows))
 }
 
-/// The `/start` parameter of a song's full lyric page, if its id fits one.
-fn lyric_start_parameter(platform: MusicPlatform, id: &str) -> Option<String> {
-    let parameter = format!("{LYRIC_START_PREFIX}{}-{id}", platform.callback_code());
-    (!id.is_empty()
-        && parameter.len() <= 64
-        && id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'))
-    .then_some(parameter)
-}
-
 fn parse_lyric_start_parameter(parameter: &str) -> Option<(MusicPlatform, &str)> {
     let (code, id) = parameter
         .strip_prefix(LYRIC_START_PREFIX)?
         .split_once('-')?;
     Some((MusicPlatform::from_callback_code(code)?, id)).filter(|(_, id)| !id.is_empty())
-}
-
-fn full_lyrics_button(platform: MusicPlatform, id: &str) -> Option<InlineKeyboardButton> {
-    let username = crate::ME.get()?.username.as_deref()?;
-    let parameter = lyric_start_parameter(platform, id)?;
-    let url = Url::parse(&format!("https://t.me/{username}?start={parameter}")).ok()?;
-    Some(url_button("歌词", url))
 }
 
 /// Answers the deep link of a full lyric page with the page.
@@ -5608,18 +5668,14 @@ mod tests {
 
     #[test]
     fn lyric_deep_links_carry_platform_and_id() {
-        let parameter = lyric_start_parameter(MusicPlatform::Netease, "1893321422").unwrap();
-        assert_eq!(parameter, "lyric-n-1893321422");
         assert_eq!(
-            parse_lyric_start_parameter(&parameter),
+            parse_lyric_start_parameter("lyric-n-1893321422"),
             Some((MusicPlatform::Netease, "1893321422"))
         );
         assert_eq!(
             parse_lyric_start_parameter("lyric-y-dQw4w9-WgXcQ"),
             Some((MusicPlatform::YouTubeMusic, "dQw4w9-WgXcQ"))
         );
-        assert!(lyric_start_parameter(MusicPlatform::Netease, "a b").is_none());
-        assert!(lyric_start_parameter(MusicPlatform::Netease, &"9".repeat(60)).is_none());
         assert!(parse_lyric_start_parameter("lyric-n-").is_none());
     }
 

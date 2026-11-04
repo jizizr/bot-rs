@@ -316,6 +316,25 @@ pub(super) fn cover_banner(cover: &[u8]) -> Result<Vec<u8>, image::ImageError> {
     Ok(jpeg)
 }
 
+/// A song's player for a lyric page: the cached Telegram file and its tags.
+pub(super) struct SongAudio {
+    file_id: String,
+    title: String,
+    performer: String,
+    duration: Option<u32>,
+}
+
+impl SongAudio {
+    pub(super) fn from_media(media: &super::MusicMedia) -> Self {
+        Self {
+            file_id: media.file_id.clone(),
+            title: media.track.song.clone(),
+            performer: media.track.singer.clone(),
+            duration: media.track.duration,
+        }
+    }
+}
+
 /// What every lyric page shows, already in the requested script.
 pub(super) struct LyricView {
     title: String,
@@ -400,12 +419,30 @@ impl LyricView {
     /// The page as a rich message: cover, heading, byline, the lines in a
     /// quote that opens on demand, credits folded away, and the footer.
     pub(super) fn rich(&self, cover: &Cover) -> InputRichMessage {
+        self.rich_page(cover, None)
+    }
+
+    /// The page with the song's player under the byline, for an inline song
+    /// whose lyrics open in place.
+    pub(super) fn rich_with_audio(&self, cover: &Cover, audio: &SongAudio) -> InputRichMessage {
+        self.rich_page(cover, Some(audio))
+    }
+
+    fn rich_page(&self, cover: &Cover, audio: Option<&SongAudio>) -> InputRichMessage {
         let mut page = RichPage::default();
         page = match cover {
             Cover::Uploaded(file_id) => page.uploaded_photo(file_id),
             Cover::None => page,
         };
         page = page.heading(&self.title).paragraph(&self.byline);
+        if let Some(audio) = audio {
+            page = page.uploaded_audio(
+                &audio.file_id,
+                &audio.title,
+                &audio.performer,
+                audio.duration,
+            );
+        }
         let credits = self
             .credits
             .iter()
@@ -599,6 +636,30 @@ mod tests {
         let plain = view.rich(&Cover::None);
         assert!(plain.html.as_deref().unwrap().starts_with("<h3>晴天</h3>"));
         assert!(plain.media.is_none());
+    }
+
+    #[test]
+    fn inline_pages_carry_the_song_player() {
+        let (song, lyrics) = sample();
+        let view = LyricView::new(
+            &song,
+            MusicPlatform::Tencent,
+            &lyrics,
+            MusicLyricScript::Simplified,
+        );
+        let audio = SongAudio {
+            file_id: "CQAC".to_string(),
+            title: "晴天".to_string(),
+            performer: "周杰伦".to_string(),
+            duration: Some(269),
+        };
+        let rich = view.rich_with_audio(&Cover::Uploaded("AgAD".to_string()), &audio);
+        let html = rich.html.as_deref().unwrap();
+        assert!(html.starts_with(
+            "<img src=\"tg://photo?id=media0\"/><h3>晴天</h3><p>周杰伦 &amp; &lt;Band&gt; · QQ音乐 · 叶惠美</p>\
+             <audio src=\"tg://audio?id=media1\"></audio><blockquote expandable>"
+        ));
+        assert_eq!(rich.media.as_ref().map(|media| media.len()), Some(2));
     }
 
     #[test]

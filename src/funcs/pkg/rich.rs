@@ -3,8 +3,8 @@
 //! here, and only `*_html` methods take markup.
 
 use telers::types::{
-    InputFile, InputMediaPhoto, InputRichMessage, InputRichMessageMedia, Message, RichBlock,
-    RichText,
+    InputFile, InputMediaAudio, InputMediaPhoto, InputRichMessage, InputRichMessageMedia, Message,
+    RichBlock, RichText,
 };
 
 pub fn html_escape(text: &str) -> String {
@@ -93,6 +93,27 @@ impl RichPage {
             id,
             InputMediaPhoto::new(InputFile::id(file_id)),
         ));
+        self
+    }
+
+    /// A song already on Telegram, by file id, shown as a player.
+    pub fn uploaded_audio(
+        mut self,
+        file_id: &str,
+        title: &str,
+        performer: &str,
+        duration: Option<u32>,
+    ) -> Self {
+        let id = format!("media{}", self.media.len());
+        self.html
+            .push_str(&format!("<audio src=\"tg://audio?id={id}\"></audio>"));
+        let mut audio = InputMediaAudio::new(InputFile::id(file_id))
+            .title(title)
+            .performer(performer);
+        if let Some(duration) = duration.filter(|duration| *duration > 0) {
+            audio = audio.duration(i64::from(duration));
+        }
+        self.media.push(InputRichMessageMedia::new(id, audio));
         self
     }
 
