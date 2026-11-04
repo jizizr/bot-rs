@@ -1,40 +1,67 @@
 use std::{
     ops::Range,
     path::{Path, PathBuf},
-    time::Duration,
 };
 
 use chrono::{DateTime, FixedOffset};
 use telers::types::{ChatMember, MessageEntity, PhotoSize};
 
 use super::*;
-use crate::funcs::pkg::quote::{self as render, Badge, Quote, Span, SpanStyle, Theme};
+use crate::funcs::pkg::quote::{self as render, Badge, MediaKind, Quote, Span, SpanStyle, Theme};
 
-/// 回复一条消息发 `/q`，把那条消息画成语录贴纸；`/q light` 用浅色气泡
+/// 回复一条消息发 `/q`，把那条消息画成语录贴纸；`/q light` 用浅色气泡。
+/// 支持文字、图片（带不带说明都行）和贴纸，动态/视频贴纸用它的静态缩略图
 pub async fn quote(bot: &Bot, msg: &Message) -> BotResult {
     let target = msg
         .reply_to_message()
         // 话题群里不回复时，reply_to_message 是话题的创建消息
         .filter(|target| !matches!(target, Message::ForumTopicCreated(_)))
         .ok_or_else(|| BotError::Custom("请回复一条消息再使用 /q".to_string()))?;
-    let text = getor(target)
-        .filter(|text| !text.trim().is_empty())
-        .ok_or_else(|| BotError::Custom("暂时只支持文字消息".to_string()))?;
+    let text = getor(target).unwrap_or_default();
+    let media = media_of(target);
+    if text.trim().is_empty() && media.is_none() {
+        return Err(BotError::Custom(
+            "暂时只支持文字、图片和贴纸消息".to_string(),
+        ));
+    }
     let theme = theme(getor(msg).unwrap_or_default());
+    show_typing(bot, msg.chat().id());
 
     let entities = target
         .entities()
         .or(target.caption_entities())
         .unwrap_or_default();
-    let sender = sender(bot, msg.chat(), target).await;
+    let (sender, bytes) = tokio::join!(sender(bot, msg.chat(), target), async {
+        match &media {
+            Some(PendingMedia {
+                file_id: Some(file_id),
+                ..
+            }) => download(bot, file_id).await,
+            _ => None,
+        }
+    });
+    let (text, spans, media) = match (media, bytes) {
+        (Some(media), Some(bytes)) => (
+            text.to_string(),
+            spans(text, entities),
+            Some(render::Media {
+                kind: media.kind,
+                bytes,
+            }),
+        ),
+        // 图没拿到就退回成文字，说明文字优先
+        (Some(media), None) if text.trim().is_empty() => (media.fallback, Vec::new(), None),
+        _ => (text.to_string(), spans(text, entities), None),
+    };
     let quote = Quote {
         name: sender.name,
         color_index: sender.color_index,
         badge: sender.badge,
         avatar: sender.avatar,
-        text: text.to_string(),
-        spans: spans(text, entities),
+        text,
+        spans,
         time: time_label(target),
+        media,
     };
     let sticker = tokio::task::spawn_blocking(move || render::render(&quote, theme)).await??;
     bot.send(
@@ -46,6 +73,48 @@ pub async fn quote(bot: &Bot, msg: &Message) -> BotResult {
     )
     .await?;
     Ok(())
+}
+
+struct PendingMedia {
+    kind: MediaKind,
+    /// 动态贴纸没有缩略图时是 None，直接画成文字
+    file_id: Option<String>,
+    /// 下载失败、又没有说明文字时画成这段字
+    fallback: String,
+}
+
+fn media_of(target: &Message) -> Option<PendingMedia> {
+    if let Some(sizes) = target.photo() {
+        return Some(PendingMedia {
+            kind: MediaKind::Photo,
+            file_id: photo_size(sizes),
+            fallback: "[图片]".to_string(),
+        });
+    }
+    let sticker = target.sticker()?;
+    let fallback = match sticker.emoji() {
+        Some(emoji) => format!("{emoji} [贴纸]"),
+        None => "[贴纸]".to_string(),
+    };
+    // tgs 和 webm 画不了，用缩略图；静态贴纸本身就是 webp
+    let file_id = match sticker.is_animated() || sticker.is_video() {
+        true => sticker.thumbnail().map(|thumb| thumb.file_id.to_string()),
+        false => Some(sticker.file_id().to_string()),
+    };
+    Some(PendingMedia {
+        kind: MediaKind::Sticker,
+        file_id,
+        fallback,
+    })
+}
+
+/// 贴纸里图片最宽三百来逻辑像素、放大后不到 600px，取最长边至少 640 的最小一档
+fn photo_size(sizes: &[PhotoSize]) -> Option<String> {
+    sizes
+        .iter()
+        .find(|size| size.width.max(size.height) >= 640)
+        .or(sizes.last())
+        .map(|size| size.file_id.to_string())
 }
 
 fn theme(command: &str) -> Theme {
@@ -69,7 +138,8 @@ async fn sender(bot: &Bot, chat: &Chat, target: &Message) -> Sender {
     if let Some(sender_chat) = target.sender_chat() {
         let info = bot.send(GetChat::new(sender_chat.id())).await.ok();
         let avatar = match info.as_ref().and_then(|info| info.photo()) {
-            Some(photo) => download(bot, &photo.big_file_id).await,
+            // 160px 的小图就够贴纸用，大图是 640px
+            Some(photo) => download(bot, &photo.small_file_id).await,
             None => None,
         };
         return Sender {
@@ -94,20 +164,23 @@ async fn sender(bot: &Bot, chat: &Chat, target: &Message) -> Sender {
     };
 
     let in_group = !matches!(chat, Chat::Private(_));
-    let (info, photos, member) = tokio::join!(
-        bot.send(GetChat::new(user.id)),
-        bot.send(GetUserProfilePhotos::new(user.id).limit(1u8)),
-        async {
-            match in_group {
-                true => bot.send(GetChatMember::new(chat.id(), user.id)).await.ok(),
-                false => None,
-            }
-        },
-    );
-    let avatar = match photos
-        .ok()
-        .and_then(|photos| photos.photos.first().and_then(|sizes| avatar_size(sizes)))
-    {
+    let (info, member) = tokio::join!(bot.send(GetChat::new(user.id)), async {
+        match in_group {
+            true => bot.send(GetChatMember::new(chat.id(), user.id)).await.ok(),
+            false => None,
+        }
+    });
+    let info = info.ok();
+    // getChat 已经带了 160px 的头像，拿不到时再查头像列表
+    let avatar_id = match info.as_ref().and_then(|info| info.photo()) {
+        Some(photo) => Some(photo.small_file_id.to_string()),
+        None => bot
+            .send(GetUserProfilePhotos::new(user.id).limit(1u8))
+            .await
+            .ok()
+            .and_then(|photos| photos.photos.first().and_then(|sizes| avatar_size(sizes))),
+    };
+    let avatar = match avatar_id {
         Some(file_id) => download(bot, &file_id).await,
         None => None,
     };
@@ -123,7 +196,7 @@ async fn sender(bot: &Bot, chat: &Chat, target: &Message) -> Sender {
     };
     Sender {
         name: get_name(user),
-        color_index: color_index(info.ok().map(|info| info.accent_color_id()), user.id),
+        color_index: color_index(info.map(|info| info.accent_color_id()), user.id),
         badge,
         avatar,
     }
@@ -151,7 +224,7 @@ async fn download(bot: &Bot, file_id: &str) -> Option<Vec<u8>> {
     let file = match bot.send(GetFile::new(file_id)).await {
         Ok(file) => file,
         Err(e) => {
-            log::error!("语录头像 getFile 失败：{e}");
+            log::error!("语录图片 getFile 失败：{e}");
             return None;
         }
     };
@@ -167,31 +240,22 @@ async fn download(bot: &Bot, file_id: &str) -> Option<Vec<u8>> {
             Ok(bytes) => Some(bytes),
             Err(e) => {
                 // 路径里带着 token，不能打出来
-                log::error!("语录头像读取本地文件失败（检查 bot.files_dir）：{e}");
+                log::error!("语录图片读取本地文件失败（检查 bot.files_dir）：{e}");
                 None
             }
         };
     }
-    let api = SETTINGS
-        .bot
-        .api_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|url| !url.is_empty())
-        .unwrap_or("https://api.telegram.org")
-        .trim_end_matches('/');
-    let url = format!("{api}/file/bot{}/{path}", SETTINGS.bot.token);
-    let response = HTTP_CLIENT
-        .get(url)
-        .timeout(Duration::from_secs(10))
-        .send()
-        .await
-        .and_then(reqwest::Response::error_for_status);
-    match response {
-        Ok(response) => response.bytes().await.ok().map(|bytes| bytes.to_vec()),
+    // 走 Bot API 会话自己的连接池（和其他 API 调用同一个 host，连接复用），
+    // telers 的错误里已经去掉了带 token 的 URL
+    let download = match bot.download_file_with_timeout(&path, 10.0).await {
+        Ok(download) => download.bytes().await,
+        Err(e) => Err(e),
+    };
+    match download {
+        // 独占的 Bytes 转 Vec 不会再拷一遍
+        Ok(bytes) => Some(bytes.into()),
         Err(e) => {
-            // reqwest 的错误里带着含 token 的 URL，不能原样打出来
-            log::error!("语录头像下载失败：{}", e.without_url());
+            log::error!("语录图片下载失败：{e}");
             None
         }
     }
