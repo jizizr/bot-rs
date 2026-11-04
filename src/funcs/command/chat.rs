@@ -52,19 +52,15 @@ struct Part {
 }
 
 pub async fn chat(bot: &Bot, msg: &Message) -> BotResult {
-    bot.send_message(
-        msg.chat.id,
-        pkg::escape::markdown::escape_markdown(&get_chat(msg).await?),
+    bot.send(
+        SendMessage::new(
+            msg.chat().id(),
+            pkg::escape::markdown::escape_markdown(&get_chat(msg).await?),
+        )
+        .parse_mode(ParseMode::MarkdownV2)
+        .link_preview_options(no_link_preview())
+        .reply_parameters(reply_to(msg.message_id())),
     )
-    .parse_mode(ParseMode::MarkdownV2)
-    .link_preview_options(LinkPreviewOptions {
-        is_disabled: true,
-        url: None,
-        prefer_small_media: false,
-        prefer_large_media: false,
-        show_above_text: false,
-    })
-    .reply_parameters(ReplyParameters::new(msg.id))
     .await?;
     Ok(())
 }

@@ -4,7 +4,6 @@ use fast_qr::{
     qr::QRBuilder,
 };
 use serde_json::json;
-use teloxide::types::InputFile;
 
 lazy_static! {
     static ref MATCH: Regex = Regex::new(r#"(\s|^|https?://)([^:\./\s]+\.)+[^\d\./:\s\\"]{2,}(:(\d{1,4}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(/\S*)*(\s|$)"#).unwrap();
@@ -97,11 +96,12 @@ fn url2qr(url: &str) -> Vec<u8> {
 }
 
 pub async fn short(bot: &Bot, msg: &Message) -> BotResult {
-    tokio::spawn(bot.send_chat_action(msg.chat.id, ChatAction::Typing).send());
+    show_typing(bot, msg.chat().id());
     let url = get_short(msg).await?;
-    bot.send_photo(msg.chat.id, InputFile::memory(url2qr(&url)))
-        .caption(format!("短链接：{url}"))
-        .send()
-        .await?;
+    bot.send(
+        SendPhoto::new(msg.chat().id(), InputFile::buffered(url2qr(&url)))
+            .caption(format!("短链接：{url}")),
+    )
+    .await?;
     Ok(())
 }

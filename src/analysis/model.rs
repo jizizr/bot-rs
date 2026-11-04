@@ -1,7 +1,7 @@
 use mongodb::bson::DateTime;
 use serde::{Deserialize, Serialize};
 use serde_repr::Serialize_repr;
-use teloxide::types::{CallbackQuery, Message};
+use telers::types::{CallbackQuery, Message};
 
 use crate::getor;
 
@@ -92,8 +92,8 @@ impl BotLogBuilder {
 impl From<&Message> for User {
     fn from(msg: &Message) -> Self {
         Self {
-            user_id: msg.from.as_ref().unwrap().id.0,
-            username: msg.from.as_ref().unwrap().username.clone(),
+            user_id: msg.from().unwrap().id as u64,
+            username: msg.from().unwrap().username.as_deref().map(str::to_string),
         }
     }
 }
@@ -101,9 +101,9 @@ impl From<&Message> for User {
 impl From<&Message> for Group {
     fn from(msg: &Message) -> Self {
         Self {
-            group_id: msg.chat.id.0,
-            group_username: msg.chat.username().map(|s| s.to_string()),
-            group_name: msg.chat.title().map(|s| s.to_string()),
+            group_id: msg.chat().id(),
+            group_username: msg.chat().username().map(|s| s.to_string()),
+            group_name: msg.chat().title().map(|s| s.to_string()),
         }
     }
 }
@@ -111,11 +111,11 @@ impl From<&Message> for Group {
 impl From<&Message> for BotLogBuilder {
     fn from(msg: &Message) -> Self {
         let mut bl = BotLog {
-            group_id: msg.chat.id.0,
-            user_id: msg.from.as_ref().unwrap().id.0,
+            group_id: msg.chat().id(),
+            user_id: msg.from().unwrap().id as u64,
             timestamp: DateTime::now(),
             msg_type: MessageType::Text,
-            msg_ctx: MessageContext::new(msg.id.0),
+            msg_ctx: MessageContext::new(msg.message_id() as i32),
             error: None,
         };
         if getor(msg).unwrap().starts_with("/") {
@@ -128,8 +128,8 @@ impl From<&Message> for BotLogBuilder {
 impl From<&CallbackQuery> for User {
     fn from(callback_query: &CallbackQuery) -> Self {
         Self {
-            user_id: callback_query.from.id.0,
-            username: callback_query.from.username.clone(),
+            user_id: callback_query.from.id as u64,
+            username: callback_query.from.username.as_deref().map(str::to_string),
         }
     }
 }
@@ -138,7 +138,7 @@ impl From<&CallbackQuery> for Group {
     fn from(callback_query: &CallbackQuery) -> Self {
         Self {
             group_id: match &callback_query.message {
-                Some(msg) => msg.chat().id.0,
+                Some(msg) => msg.chat().id(),
                 None => 0,
             },
             group_name: match &callback_query.message {
@@ -158,10 +158,10 @@ impl From<&CallbackQuery> for BotLogBuilder {
     fn from(callback_query: &CallbackQuery) -> Self {
         let bl = BotLog {
             group_id: match &callback_query.message {
-                Some(msg) => msg.chat().id.0,
+                Some(msg) => msg.chat().id(),
                 None => 0,
             },
-            user_id: callback_query.from.id.0,
+            user_id: callback_query.from.id as u64,
             timestamp: DateTime::now(),
             msg_type: MessageType::Callback,
             msg_ctx: MessageContext::new(0),

@@ -20,10 +20,9 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use teloxide::types::{
-    ChatId, ChosenInlineResult, InlineKeyboardButtonKind, InlineQuery, InlineQueryResultsButton,
-    InlineQueryResultsButtonKind, InputMedia, InputMediaAudio, InputMediaDocument,
-    MaybeInaccessibleMessage,
+use telers::types::{
+    InlineQueryResult, InlineQueryResultArticle, InlineQueryResultsButton, InputMedia,
+    InputMediaAudio, InputMediaDocument, InputTextMessageContent,
 };
 use tokio::{sync::mpsc, task::JoinHandle};
 use url::Url;
@@ -829,7 +828,7 @@ fn settings_platform(settings: &UserMusicSettings) -> MusicPlatform {
 }
 
 fn user_id_from_message(msg: &Message) -> i64 {
-    msg.from.as_ref().map(|user| user.id.0 as i64).unwrap_or(0)
+    msg.from().map(|user| user.id).unwrap_or(0)
 }
 
 fn music_settings_text(settings: &UserMusicSettings) -> String {
@@ -873,7 +872,7 @@ fn music_settings_menu_with_owner(
                 .filter_map(|(value, label)| {
                     encode_setting(MusicSettingAction::Platform(value.to_string())).map(
                         |callback| {
-                            InlineKeyboardButton::callback(
+                            callback_button(
                                 selected_label(label, settings.default_platform == *value),
                                 callback,
                             )
@@ -889,17 +888,14 @@ fn music_settings_menu_with_owner(
             .iter()
             .filter_map(|(value, label)| {
                 encode_setting(MusicSettingAction::Quality(value.to_string())).map(|callback| {
-                    InlineKeyboardButton::callback(
-                        selected_label(label, settings.quality == *value),
-                        callback,
-                    )
+                    callback_button(selected_label(label, settings.quality == *value), callback)
                 })
             })
             .collect(),
     );
 
     if let Some(callback) = encode_setting(MusicSettingAction::Cover(!settings.send_cover)) {
-        keyboard.push(vec![InlineKeyboardButton::callback(
+        keyboard.push(vec![callback_button(
             format!("发送封面 {}", if settings.send_cover { "✅" } else { "❌" }),
             callback,
         )]);
@@ -910,7 +906,7 @@ fn music_settings_menu_with_owner(
             .iter()
             .filter_map(|(value, label)| {
                 encode_setting(MusicSettingAction::LyricScript(value.to_string())).map(|callback| {
-                    InlineKeyboardButton::callback(
+                    callback_button(
                         selected_label(label, settings.lyric_script == *value),
                         callback,
                     )
@@ -940,7 +936,7 @@ fn music_panel_menu(settings: &UserMusicSettings, view: MusicPanelView) -> Inlin
             action,
         }
         .encode()
-        .map(|callback| InlineKeyboardButton::callback(label, callback))
+        .map(|callback| callback_button(label, callback))
     };
     let mut keyboard = match view {
         MusicPanelView::Platforms => {
@@ -963,9 +959,10 @@ fn music_panel_menu(settings: &UserMusicSettings, view: MusicPanelView) -> Inlin
             rows.extend(others.chunks(2).map(<[_]>::to_vec));
             rows
         }
-        MusicPanelView::Settings => {
-            music_settings_menu_with_owner(settings, Some(settings.user_id)).inline_keyboard
-        }
+        MusicPanelView::Settings => keyboard_rows(music_settings_menu_with_owner(
+            settings,
+            Some(settings.user_id),
+        )),
     };
     let (label, destination) = match view {
         MusicPanelView::Platforms => ("更多设置", MusicPanelView::Settings),
@@ -989,10 +986,7 @@ fn music_panel_owner(msg: &Message) -> Option<i64> {
         .iter()
         .flatten()
         .find_map(|button| {
-            let InlineKeyboardButtonKind::CallbackData(data) = &button.kind else {
-                return None;
-            };
-            match MusicCallbackAction::decode(data).ok()? {
+            match MusicCallbackAction::decode(button.callback_data.as_deref()?).ok()? {
                 MusicCallbackAction::Panel { requester_id, .. } => Some(requester_id),
                 _ => None,
             }
@@ -1000,9 +994,9 @@ fn music_panel_owner(msg: &Message) -> Option<i64> {
 }
 
 fn inline_music_settings_menu(settings: &UserMusicSettings) -> InlineKeyboardMarkup {
-    let mut keyboard = music_settings_menu(settings).inline_keyboard;
+    let mut keyboard = keyboard_rows(music_settings_menu(settings));
     if let Some(callback) = MusicCallbackAction::Close.encode() {
-        keyboard.push(vec![InlineKeyboardButton::callback("关闭", callback)]);
+        keyboard.push(vec![callback_button("关闭", callback)]);
     }
     InlineKeyboardMarkup::new(keyboard)
 }
@@ -1050,10 +1044,12 @@ async fn send_music_panel(
             "无法识别用户，请使用个人账号打开音乐设置".to_string(),
         ));
     }
-    bot.send_message(msg.chat.id, music_panel_text(settings, view))
-        .reply_parameters(ReplyParameters::new(msg.id))
-        .reply_markup(music_panel_menu(settings, view))
-        .await?;
+    bot.send(
+        SendMessage::new(msg.chat().id(), music_panel_text(settings, view))
+            .reply_parameters(reply_to(msg.message_id()))
+            .reply_markup(music_panel_menu(settings, view)),
+    )
+    .await?;
     Ok(())
 }
 
@@ -1065,12 +1061,15 @@ async fn edit_music_panel(
 ) -> BotResult {
     let text = music_panel_text(settings, view);
     let markup = music_panel_menu(settings, view);
-    if msg.text() == Some(text.as_str()) && msg.reply_markup() == Some(&markup) {
-        return Ok(());
+    let edit = EditMessageText::new()
+        .chat_id(msg.chat().id())
+        .message_id(msg.message_id())
+        .text(text)
+        .reply_markup(markup);
+    match bot.send(edit).await.map_err(BotError::from) {
+        Err(err) if !is_not_modified(&err) => return Err(err),
+        _ => {}
     }
-    bot.edit_message_text(msg.chat.id, msg.id, text)
-        .reply_markup(markup)
-        .await?;
     Ok(())
 }
 
@@ -1079,9 +1078,13 @@ async fn edit_inline_music_settings(
     inline_message_id: &str,
     settings: &UserMusicSettings,
 ) -> BotResult {
-    bot.edit_message_text_inline(inline_message_id, music_settings_text(settings))
-        .reply_markup(inline_music_settings_menu(settings))
-        .await?;
+    bot.send(
+        EditMessageText::new()
+            .inline_message_id(inline_message_id)
+            .text(music_settings_text(settings))
+            .reply_markup(inline_music_settings_menu(settings)),
+    )
+    .await?;
     Ok(())
 }
 
@@ -1090,7 +1093,7 @@ fn favorite_scope_id(scope: FavoriteScope, msg: &Message, user_id: i64) -> Resul
         FavoriteScope::User => Ok(user_id),
         FavoriteScope::Group => {
             if is_group_chat(msg) {
-                Ok(msg.chat.id.0)
+                Ok(msg.chat().id())
             } else {
                 Err(BotError::Custom("群收藏只能在群聊里使用".to_string()))
             }
@@ -1099,13 +1102,13 @@ fn favorite_scope_id(scope: FavoriteScope, msg: &Message, user_id: i64) -> Resul
 }
 
 fn is_group_chat(msg: &Message) -> bool {
-    msg.chat.is_group() || msg.chat.is_supergroup()
+    matches!(msg.chat(), Chat::Group(_) | Chat::Supergroup(_))
 }
 
 fn favorite_from_track(
     scope: FavoriteScope,
     scope_id: i64,
-    user: &teloxide::types::User,
+    user: &User,
     track: &MusicTrack,
 ) -> MusicFavorite {
     MusicFavorite {
@@ -1113,8 +1116,11 @@ fn favorite_from_track(
         scope_id,
         platform: track.platform.id().to_string(),
         track_id: track.id.clone(),
-        added_by_user_id: user.id.0 as i64,
-        added_by_name: user.full_name(),
+        added_by_user_id: user.id,
+        added_by_name: match &user.last_name {
+            Some(last_name) => format!("{} {last_name}", user.first_name),
+            None => user.first_name.to_string(),
+        },
         song: track.song.clone(),
         singer: track.singer.clone(),
         album: track.album.clone(),
@@ -1131,11 +1137,13 @@ async fn send_music_favorites(
 ) -> BotResult {
     let scope_id = favorite_scope_id(scope, msg, user_id)?;
     let favorites = list_favorites(scope.storage_key(), scope_id, 20).await?;
-    bot.send_message(msg.chat.id, favorite_list_text(scope, &favorites))
-        .parse_mode(ParseMode::Html)
-        .reply_parameters(ReplyParameters::new(msg.id))
-        .reply_markup(favorite_list_menu(scope, scope_id, &favorites))
-        .await?;
+    bot.send(
+        SendMessage::new(msg.chat().id(), favorite_list_text(scope, &favorites))
+            .parse_mode(ParseMode::HTML)
+            .reply_parameters(reply_to(msg.message_id()))
+            .reply_markup(favorite_list_menu(scope, scope_id, &favorites)),
+    )
+    .await?;
     Ok(())
 }
 
@@ -1146,10 +1154,15 @@ async fn edit_music_favorites(
     scope_id: i64,
 ) -> BotResult {
     let favorites = list_favorites(scope.storage_key(), scope_id, 20).await?;
-    bot.edit_message_text(msg.chat.id, msg.id, favorite_list_text(scope, &favorites))
-        .parse_mode(ParseMode::Html)
-        .reply_markup(favorite_list_menu(scope, scope_id, &favorites))
-        .await?;
+    bot.send(
+        EditMessageText::new()
+            .chat_id(msg.chat().id())
+            .message_id(msg.message_id())
+            .text(favorite_list_text(scope, &favorites))
+            .parse_mode(ParseMode::HTML)
+            .reply_markup(favorite_list_menu(scope, scope_id, &favorites)),
+    )
+    .await?;
     Ok(())
 }
 
@@ -1201,22 +1214,16 @@ fn favorite_list_menu(
         let remove_callback = MusicCallbackAction::Favorite(remove_action).encode();
         let mut row = Vec::new();
         if let Some(callback) = send_callback {
-            row.push(InlineKeyboardButton::callback(
-                format!("发送 {}", index + 1),
-                callback,
-            ));
+            row.push(callback_button(format!("发送 {}", index + 1), callback));
         }
         if let Some(callback) = remove_callback {
-            row.push(InlineKeyboardButton::callback(
-                format!("取消 {}", index + 1),
-                callback,
-            ));
+            row.push(callback_button(format!("取消 {}", index + 1), callback));
         }
         if !row.is_empty() {
             keyboard.push(row);
         }
     }
-    keyboard.push(vec![InlineKeyboardButton::callback(
+    keyboard.push(vec![callback_button(
         "关闭",
         MusicCallbackAction::Favorite(MusicFavoriteAction::Close)
             .encode()
@@ -1242,10 +1249,10 @@ fn favorite_confirm_menu(
     let back = MusicCallbackAction::Favorite(MusicFavoriteAction::List { scope, chat_id }).encode();
     let mut row = Vec::new();
     if let Some(confirm) = confirm {
-        row.push(InlineKeyboardButton::callback("确认取消", confirm));
+        row.push(callback_button("确认取消", confirm));
     }
     if let Some(back) = back {
-        row.push(InlineKeyboardButton::callback("返回列表", back));
+        row.push(callback_button("返回列表", back));
     }
     InlineKeyboardMarkup::new([row])
 }
@@ -1257,9 +1264,11 @@ async fn save_music_settings(
 ) -> BotResult {
     if let Err(e) = save_user_settings(settings).await {
         let _ = bot
-            .answer_callback_query(callback_id.to_string())
-            .text("保存音乐设置失败")
-            .show_alert(true)
+            .send(
+                AnswerCallbackQuery::new(callback_id.to_string())
+                    .text("保存音乐设置失败")
+                    .show_alert(true),
+            )
             .await;
         return Err(e);
     }
@@ -1278,9 +1287,11 @@ async fn handle_setting_callback(
         Ok(settings) => settings,
         Err(e) => {
             let _ = bot
-                .answer_callback_query(callback_id.to_string())
-                .text("获取音乐设置失败")
-                .show_alert(true)
+                .send(
+                    AnswerCallbackQuery::new(callback_id.to_string())
+                        .text("获取音乐设置失败")
+                        .show_alert(true),
+                )
                 .await;
             return Err(e);
         }
@@ -1289,21 +1300,23 @@ async fn handle_setting_callback(
     let (changed, response_text) = match apply_music_setting(&mut settings, action) {
         Ok(result) => result,
         Err(message) => {
-            bot.answer_callback_query(callback_id.to_string())
-                .text(message)
-                .show_alert(true)
-                .await?;
+            bot.send(
+                AnswerCallbackQuery::new(callback_id.to_string())
+                    .text(message)
+                    .show_alert(true),
+            )
+            .await?;
             return Ok(());
         }
     };
 
     if changed {
         save_music_settings(bot, callback_id, &settings).await?;
-        bot.answer_callback_query(callback_id.to_string())
-            .text(response_text)
+        bot.send(AnswerCallbackQuery::new(callback_id.to_string()).text(response_text))
             .await?;
     } else {
-        bot.answer_callback_query(callback_id.to_string()).await?;
+        bot.send(AnswerCallbackQuery::new(callback_id.to_string()))
+            .await?;
     }
     edit_music_panel(bot, msg, &settings, view).await
 }
@@ -1317,7 +1330,8 @@ async fn handle_music_panel_callback(
 ) -> BotResult {
     match action {
         MusicPanelAction::Show(view) => {
-            bot.answer_callback_query(callback_id.to_string()).await?;
+            bot.send(AnswerCallbackQuery::new(callback_id.to_string()))
+                .await?;
             let settings = get_user_settings(user_id).await?;
             edit_music_panel(bot, msg, &settings, view).await
         }
@@ -1344,8 +1358,10 @@ async fn handle_music_panel_callback(
             .await
         }
         MusicPanelAction::Close => {
-            bot.answer_callback_query(callback_id.to_string()).await?;
-            bot.delete_message(msg.chat.id, msg.id).await?;
+            bot.send(AnswerCallbackQuery::new(callback_id.to_string()))
+                .await?;
+            bot.send(DeleteMessage::new(msg.chat().id(), msg.message_id()))
+                .await?;
             Ok(())
         }
     }
@@ -1362,9 +1378,11 @@ async fn handle_inline_setting_callback(
         Ok(settings) => settings,
         Err(e) => {
             let _ = bot
-                .answer_callback_query(callback_id.to_string())
-                .text("获取音乐设置失败")
-                .show_alert(true)
+                .send(
+                    AnswerCallbackQuery::new(callback_id.to_string())
+                        .text("获取音乐设置失败")
+                        .show_alert(true),
+                )
                 .await;
             return Err(e);
         }
@@ -1373,22 +1391,24 @@ async fn handle_inline_setting_callback(
     let (changed, response_text) = match apply_music_setting(&mut settings, action) {
         Ok(result) => result,
         Err(message) => {
-            bot.answer_callback_query(callback_id.to_string())
-                .text(message)
-                .show_alert(true)
-                .await?;
+            bot.send(
+                AnswerCallbackQuery::new(callback_id.to_string())
+                    .text(message)
+                    .show_alert(true),
+            )
+            .await?;
             return Ok(());
         }
     };
 
     if changed {
         save_music_settings(bot, callback_id, &settings).await?;
-        bot.answer_callback_query(callback_id.to_string())
-            .text(response_text)
+        bot.send(AnswerCallbackQuery::new(callback_id.to_string()).text(response_text))
             .await?;
         edit_inline_music_settings(bot, inline_message_id, &settings).await?;
     } else {
-        bot.answer_callback_query(callback_id.to_string()).await?;
+        bot.send(AnswerCallbackQuery::new(callback_id.to_string()))
+            .await?;
     }
     Ok(())
 }
@@ -1458,7 +1478,7 @@ async fn send_media(
     bot: &Bot,
     msg: &Message,
     status_msg: Option<&Message>,
-    reply_to: Option<MessageId>,
+    reply_to: Option<i64>,
     query: &MusicQuery,
     media: &MusicMedia,
 ) -> Result<Message, BotError> {
@@ -1470,18 +1490,22 @@ async fn send_media(
             "📤 获取成功，正在发送…"
         };
         let _ = bot
-            .edit_message_text(status_msg.chat.id, status_msg.id, text)
+            .send(
+                EditMessageText::new()
+                    .chat_id(status_msg.chat().id())
+                    .message_id(status_msg.message_id())
+                    .text(text),
+            )
             .await;
     }
 
-    let mut request = bot
-        .send_audio(msg.chat.id, InputFile::file_id(media.file_id.clone()))
+    let mut request = SendAudio::new(msg.chat().id(), InputFile::id(media.file_id.clone()))
         .caption(build_music_caption(media))
-        .parse_mode(ParseMode::Html)
+        .parse_mode(ParseMode::HTML)
         .title(track.song.clone())
         .performer(track.singer.clone());
     if let Some(reply_to) = reply_to {
-        request = request.reply_parameters(ReplyParameters::new(reply_to));
+        request = request.reply_parameters(crate::reply_to(reply_to));
     }
     if let Some(duration) = track.duration.filter(|duration| *duration > 0) {
         request = request.duration(duration);
@@ -1495,9 +1519,9 @@ async fn send_media(
         .map(str::trim)
         .filter(|file_id| !file_id.is_empty())
     {
-        request = request.thumbnail(InputFile::file_id(file_id.to_string()));
+        request = request.thumbnail(InputFile::id(file_id.to_string()));
     }
-    Ok(request.send().await?)
+    Ok(bot.send(request).await?)
 }
 
 fn build_music_caption(media: &MusicMedia) -> String {
@@ -1650,11 +1674,13 @@ impl StatusTarget {
                 .await
                 .is_ok(),
             StatusTarget::Inline(id) => {
-                let mut request = bot.edit_message_text_inline(id, text);
+                let mut request = EditMessageText::new()
+                    .inline_message_id(id.as_str())
+                    .text(text);
                 if let Some(markup) = markup {
                     request = request.reply_markup(markup);
                 }
-                request.await.is_ok()
+                bot.send(request).await.is_ok()
             }
         }
     }
@@ -1683,7 +1709,7 @@ enum Destination<'a> {
     Chat {
         msg: &'a Message,
         status_msg: Option<&'a Message>,
-        reply_to: Option<MessageId>,
+        reply_to: Option<i64>,
         query: &'a MusicQuery,
     },
     Inline(&'a str),
@@ -1859,12 +1885,12 @@ async fn get_music(
         bot,
         request,
         user_id_from_message(msg),
-        Some(msg.chat.id.0),
+        Some(msg.chat().id()),
         &StatusTarget::Message(Box::new(status_msg.clone())),
         Destination::Chat {
             msg,
             status_msg: Some(status_msg),
-            reply_to: Some(msg.id),
+            reply_to: Some(msg.message_id()),
             query: &query,
         },
     )
@@ -1873,7 +1899,7 @@ async fn get_music(
 }
 
 pub async fn music_inline_query_handler(bot: Bot, q: InlineQuery) -> BotResult {
-    let user_id = q.from.id.0 as i64;
+    let user_id = q.from.id;
     let settings = get_user_settings_or_default(user_id).await;
     let text = q.query.trim();
     if text.is_empty() || text.eq_ignore_ascii_case("help") {
@@ -1943,7 +1969,7 @@ pub async fn music_inline_query_handler(bot: Bot, q: InlineQuery) -> BotResult {
             InlineQueryResultArticle::new(
                 inline_result_id(result_key, platform, &keyword, &quality),
                 title,
-                InputMessageContent::Text(InputMessageContentText::new(text)),
+                InputTextMessageContent::new(text),
             )
             .description(format!(
                 "{} · {}",
@@ -1954,19 +1980,20 @@ pub async fn music_inline_query_handler(bot: Bot, q: InlineQuery) -> BotResult {
     }
     results.push(inline_settings_result(&settings, user_id));
 
-    bot.answer_inline_query(&q.id, results)
-        .button(InlineQueryResultsButton {
-            text: format!(
-                "🎵 {} · {}  ｜  切换平台",
-                platform.label(),
-                quality_label(&quality)
-            ),
-            kind: InlineQueryResultsButtonKind::StartParameter(INLINE_PLATFORM_START.to_string()),
-        })
-        .is_personal(true)
-        .cache_time(1)
-        .send()
-        .await?;
+    bot.send(
+        AnswerInlineQuery::new(q.id.clone(), results)
+            .button(
+                InlineQueryResultsButton::new(format!(
+                    "🎵 {} · {}  ｜  切换平台",
+                    platform.label(),
+                    quality_label(&quality)
+                ))
+                .start_parameter(INLINE_PLATFORM_START),
+            )
+            .is_personal(true)
+            .cache_time(1),
+    )
+    .await?;
     Ok(())
 }
 
@@ -2010,34 +2037,36 @@ pub async fn inline_platform_picker(bot: &Bot, msg: &Message) -> BotResult {
         .filter(|(at, _)| at.elapsed() < INLINE_KEYWORD_TTL)
         .map(|(_, search)| search.clone());
     let Some(search) = search else {
-        bot.send_message(
-            msg.chat.id,
+        bot.send(SendMessage::new(
+            msg.chat().id(),
             "请先在聊天里输入「@机器人 歌名」，再点结果上方的「切换平台」",
-        )
+        ))
         .await?;
         return Ok(());
     };
     let buttons = SEARCH_PLATFORMS
         .iter()
         .map(|(platform, label)| {
-            InlineKeyboardButton::switch_inline_query(
+            switch_inline_button(
                 selected_label(label, *platform == search.platform),
                 search.query_on(*platform),
             )
         })
         .collect::<Vec<_>>();
-    bot.send_message(
-        msg.chat.id,
-        format!(
-            "{SEARCH_HEADER_PREFIX}<b>{}</b>\n当前：{}\n\n选择平台后会回到原来的聊天继续搜索",
-            html_escape(&search.keyword),
-            search.platform.label()
-        ),
+    bot.send(
+        SendMessage::new(
+            msg.chat().id(),
+            format!(
+                "{SEARCH_HEADER_PREFIX}<b>{}</b>\n当前：{}\n\n选择平台后会回到原来的聊天继续搜索",
+                html_escape(&search.keyword),
+                search.platform.label()
+            ),
+        )
+        .parse_mode(ParseMode::HTML)
+        .reply_markup(InlineKeyboardMarkup::new(
+            buttons.chunks(4).map(<[_]>::to_vec).collect::<Vec<_>>(),
+        )),
     )
-    .parse_mode(ParseMode::Html)
-    .reply_markup(InlineKeyboardMarkup::new(
-        buttons.chunks(4).map(<[_]>::to_vec).collect::<Vec<_>>(),
-    ))
     .await?;
     Ok(())
 }
@@ -2053,14 +2082,15 @@ async fn answer_inline_throttled(
     let result = InlineQueryResultArticle::new(
         inline_result_id("throttled", platform, keyword, quality),
         THROTTLED_TEXT,
-        InputMessageContent::Text(InputMessageContentText::new(THROTTLED_TEXT)),
+        InputTextMessageContent::new(THROTTLED_TEXT),
     )
     .description(platform.label());
-    bot.answer_inline_query(&q.id, [InlineQueryResult::Article(result)])
-        .is_personal(true)
-        .cache_time(1)
-        .send()
-        .await?;
+    bot.send(
+        AnswerInlineQuery::new(q.id.clone(), [InlineQueryResult::Article(result)])
+            .is_personal(true)
+            .cache_time(1),
+    )
+    .await?;
     Ok(())
 }
 
@@ -2075,8 +2105,7 @@ async fn answer_inline_lyric_query(
         return answer_inline_music_help(bot, q, settings).await;
     }
     // 歌词批量搜索整体按一次歌词额度计费；单曲抓取走原始歌词缓存
-    if ratelimit::ensure_allowed(ResourceAction::Lyric, q.from.id.0 as i64, None, platform).is_err()
-    {
+    if ratelimit::ensure_allowed(ResourceAction::Lyric, q.from.id, None, platform).is_err() {
         return answer_inline_throttled(bot, q, platform, &keyword, &quality).await;
     }
     let query = MusicQuery {
@@ -2128,16 +2157,17 @@ async fn answer_inline_lyric_query(
             InlineQueryResultArticle::new(
                 inline_result_id(result_key, platform, &keyword, &quality),
                 title,
-                InputMessageContent::Text(InputMessageContentText::new(text)),
+                InputTextMessageContent::new(text),
             )
             .description(platform.label()),
         ));
     }
-    bot.answer_inline_query(&q.id, results)
-        .is_personal(true)
-        .cache_time(1)
-        .send()
-        .await?;
+    bot.send(
+        AnswerInlineQuery::new(q.id.clone(), results)
+            .is_personal(true)
+            .cache_time(1),
+    )
+    .await?;
     Ok(())
 }
 
@@ -2182,25 +2212,26 @@ async fn answer_inline_music_help(
         quality_label(&quality)
     );
     let result = InlineQueryResultArticle::new(
-        inline_result_id("help", platform, &q.from.id.0.to_string(), &quality),
+        inline_result_id("help", platform, &q.from.id.to_string(), &quality),
         "搜索音乐",
-        InputMessageContent::Text(InputMessageContentText::new(text)),
+        InputTextMessageContent::new(text),
     )
     .description(format!(
         "{} · {}",
         platform.label(),
         quality_label(&quality)
     ));
-    bot.answer_inline_query(
-        &q.id,
-        [
-            InlineQueryResult::Article(result),
-            inline_settings_result(settings, q.from.id.0 as i64),
-        ],
+    bot.send(
+        AnswerInlineQuery::new(
+            q.id.clone(),
+            [
+                InlineQueryResult::Article(result),
+                inline_settings_result(settings, q.from.id),
+            ],
+        )
+        .is_personal(true)
+        .cache_time(5),
     )
-    .is_personal(true)
-    .cache_time(5)
-    .send()
     .await?;
     Ok(())
 }
@@ -2216,7 +2247,7 @@ fn inline_settings_result(settings: &UserMusicSettings, user_id: i64) -> InlineQ
                 platform.label(),
                 quality_label(&quality)
             ),
-            InputMessageContent::Text(InputMessageContentText::new(music_settings_text(settings))),
+            InputTextMessageContent::new(music_settings_text(settings)),
         )
         .description("点击修改设置，可在关键词后临时追加参数")
         .reply_markup(inline_music_settings_menu(settings)),
@@ -2284,19 +2315,20 @@ fn inline_pending_audio_result(
     let mut result = InlineQueryResultArticle::new(
         result_id,
         title.clone(),
-        InputMessageContent::Text(InputMessageContentText::new(format!("正在准备：{title}"))),
+        InputTextMessageContent::new(format!("正在准备：{title}")),
     )
     .description(format!(
         "{} · {}",
         track.platform.label(),
         quality_label(quality)
     ))
-    .reply_markup(InlineKeyboardMarkup::new([[
-        InlineKeyboardButton::callback("没反应？点此刷新", callback),
-    ]]));
+    .reply_markup(InlineKeyboardMarkup::new([[callback_button(
+        "没反应？点此刷新",
+        callback,
+    )]]));
     if let Some(url) = cover.and_then(|url| Url::parse(url).ok()) {
         result = result
-            .thumbnail_url(url)
+            .thumbnail_url(String::from(url))
             .thumbnail_width(150)
             .thumbnail_height(150);
     }
@@ -2314,15 +2346,13 @@ fn inline_lyric_result(
     let mut result = InlineQueryResultArticle::new(
         inline_result_id("lyric", track.platform, &track.id, script.callback_code()),
         title,
-        InputMessageContent::Text(
-            InputMessageContentText::new(message).parse_mode(ParseMode::Html),
-        ),
+        InputTextMessageContent::new(message).parse_mode(ParseMode::HTML),
     )
     .description(format!("{} · {}", track.platform.label(), script.label()))
     .reply_markup(inline_lyric_switch_menu(track.platform, &track.id, script));
     if let Some(url) = cover.and_then(|url| Url::parse(url).ok()) {
         result = result
-            .thumbnail_url(url)
+            .thumbnail_url(String::from(url))
             .thumbnail_width(150)
             .thumbnail_height(150);
     }
@@ -2405,22 +2435,23 @@ async fn handle_inline_send_callback(
     bot: &Bot,
     callback_id: &str,
     inline_message_id: &str,
-    from: &teloxide::types::User,
+    from: &User,
     platform: MusicPlatform,
     id: &str,
     quality: &str,
     requester_id: i64,
 ) -> BotResult {
-    if requester_id != 0 && requester_id != from.id.0 as i64 {
-        bot.answer_callback_query(callback_id.to_string())
-            .text("只能由发起者操作")
-            .show_alert(true)
-            .await?;
+    if requester_id != 0 && requester_id != from.id {
+        bot.send(
+            AnswerCallbackQuery::new(callback_id.to_string())
+                .text("只能由发起者操作")
+                .show_alert(true),
+        )
+        .await?;
         return Ok(());
     }
 
-    bot.answer_callback_query(callback_id.to_string())
-        .text("正在处理...")
+    bot.send(AnswerCallbackQuery::new(callback_id.to_string()).text("正在处理..."))
         .await?;
 
     run_inline_send_flow(bot, inline_message_id, from, platform, id, quality).await
@@ -2429,7 +2460,7 @@ async fn handle_inline_send_callback(
 async fn run_inline_send_flow(
     bot: &Bot,
     inline_message_id: &str,
-    from: &teloxide::types::User,
+    from: &User,
     platform: MusicPlatform,
     id: &str,
     quality: &str,
@@ -2444,11 +2475,13 @@ async fn run_inline_send_flow(
         run_inline_send_flow_inner(bot, inline_message_id, from, platform, id, quality).await;
     if let Err(err) = &result {
         // 失败时把错误写回 inline 消息并恢复重试按钮，否则消息会永远停在状态文本上
-        let mut request = bot.edit_message_text_inline(inline_message_id, format!("{err}"));
-        if let Some(markup) = inline_send_retry_menu(platform, id, quality, from.id.0 as i64) {
+        let mut request = EditMessageText::new()
+            .inline_message_id(inline_message_id)
+            .text(format!("{err}"));
+        if let Some(markup) = inline_send_retry_menu(platform, id, quality, from.id) {
             request = request.reply_markup(markup);
         }
-        let _ = request.await;
+        let _ = bot.send(request).await;
     }
     result
 }
@@ -2466,20 +2499,20 @@ fn inline_send_retry_menu(
         requester_id,
     }
     .encode()?;
-    Some(InlineKeyboardMarkup::new([[
-        InlineKeyboardButton::callback("重试", callback),
-    ]]))
+    Some(InlineKeyboardMarkup::new([[callback_button(
+        "重试", callback,
+    )]]))
 }
 
 async fn run_inline_send_flow_inner(
     bot: &Bot,
     inline_message_id: &str,
-    from: &teloxide::types::User,
+    from: &User,
     platform: MusicPlatform,
     id: &str,
     quality: &str,
 ) -> BotResult {
-    let settings = get_user_settings_or_default(from.id.0 as i64).await;
+    let settings = get_user_settings_or_default(from.id).await;
     let query = MusicQuery {
         platform,
         keyword: id.to_string(),
@@ -2494,7 +2527,7 @@ async fn run_inline_send_flow_inner(
     deliver(
         bot,
         media_request(&query, Some(id), quality, &settings),
-        from.id.0 as i64,
+        from.id,
         None,
         &StatusTarget::Inline(inline_message_id.to_string()),
         Destination::Inline(inline_message_id),
@@ -2505,25 +2538,30 @@ async fn run_inline_send_flow_inner(
 
 async fn edit_inline_audio(bot: &Bot, inline_message_id: &str, media: &MusicMedia) -> BotResult {
     let track = &media.track;
-    let mut audio = InputMediaAudio::new(InputFile::file_id(media.file_id.clone()))
+    let mut audio = InputMediaAudio::new(InputFile::id(media.file_id.clone()))
         .caption(build_music_caption(media))
-        .parse_mode(ParseMode::Html)
+        .parse_mode(ParseMode::HTML)
         .title(track.song.clone())
         .performer(track.singer.clone());
     if let Some(duration) = track.duration.filter(|duration| *duration > 0) {
         audio = audio.duration(duration.min(u16::MAX as u32) as u16);
     }
-    let mut request = bot.edit_message_media_inline(inline_message_id, InputMedia::Audio(audio));
+    let mut request =
+        EditMessageMedia::new(InputMedia::Audio(audio)).inline_message_id(inline_message_id);
     if let Some(markup) = inline_track_menu(track) {
         request = request.reply_markup(markup);
     }
-    request.await?;
+    bot.send(request).await?;
     Ok(())
 }
 
 async fn edit_inline_status(bot: &Bot, inline_message_id: &str, text: impl Into<String>) {
     let _ = bot
-        .edit_message_text_inline(inline_message_id, text.into())
+        .send(
+            EditMessageText::new()
+                .inline_message_id(inline_message_id)
+                .text(text.into()),
+        )
         .await;
 }
 
@@ -2658,16 +2696,24 @@ async fn send_music_search(
 ) -> BotResult {
     let user_id = user_id_from_message(msg);
     if !is_direct_query(&query.keyword) {
-        return open_search_page(bot, msg.chat.id, Some(msg.id), query, user_id).await;
+        return open_search_page(bot, msg.chat().id(), Some(msg.message_id()), query, user_id)
+            .await;
     }
     ratelimit::ensure_allowed(
         ResourceAction::Search,
         user_id,
-        Some(msg.chat.id.0),
+        Some(msg.chat().id()),
         query.platform,
     )?;
     if let Some(collection) = search_collection(&query, 10).await? {
-        return send_collection_results(bot, msg.chat.id, Some(msg.id), collection, user_id).await;
+        return send_collection_results(
+            bot,
+            msg.chat().id(),
+            Some(msg.message_id()),
+            collection,
+            user_id,
+        )
+        .await;
     }
     send_direct_music(bot, msg, query, settings).await
 }
@@ -2679,22 +2725,32 @@ async fn send_direct_music(
     settings: &UserMusicSettings,
 ) -> BotResult {
     let status_msg = bot
-        .send_message(
-            msg.chat.id,
-            format!("⏳ 正在从{}获取音乐…", query.platform.label()),
+        .send(
+            SendMessage::new(
+                msg.chat().id(),
+                format!("⏳ 正在从{}获取音乐…", query.platform.label()),
+            )
+            .reply_parameters(reply_to(msg.message_id())),
         )
-        .reply_parameters(ReplyParameters::new(msg.id))
         .await?;
 
     match get_music(bot, query, msg, &status_msg, settings).await {
         Ok(()) => {
-            bot.delete_message(status_msg.chat.id, status_msg.id)
-                .await?;
+            bot.send(DeleteMessage::new(
+                status_msg.chat().id(),
+                status_msg.message_id(),
+            ))
+            .await?;
             Ok(())
         }
         Err(e) => {
-            bot.edit_message_text(status_msg.chat.id, status_msg.id, format!("{e}"))
-                .await?;
+            bot.send(
+                EditMessageText::new()
+                    .chat_id(status_msg.chat().id())
+                    .message_id(status_msg.message_id())
+                    .text(format!("{e}")),
+            )
+            .await?;
             Err(e)
         }
     }
@@ -2704,12 +2760,12 @@ async fn send_direct_music(
 /// page of results.
 async fn open_search_page(
     bot: &Bot,
-    chat_id: ChatId,
-    reply_to: Option<MessageId>,
+    chat_id: i64,
+    reply_to: Option<i64>,
     query: MusicQuery,
     user_id: i64,
 ) -> BotResult {
-    let mut request = bot.send_message(
+    let mut request = SendMessage::new(
         chat_id,
         format!(
             "⏳ 正在{}搜索「{}」…",
@@ -2718,13 +2774,18 @@ async fn open_search_page(
         ),
     );
     if let Some(reply_to) = reply_to {
-        request = request.reply_parameters(ReplyParameters::new(reply_to));
+        request = request.reply_parameters(crate::reply_to(reply_to));
     }
-    let page_msg = request.await?;
+    let page_msg = bot.send(request).await?;
     let result = show_search_page(bot, &page_msg, &query, 1, user_id, user_id).await;
     if result.is_err() {
         // 命令出错时由命令处理器统一回复错误，这里只收起占位消息
-        let _ = bot.delete_message(page_msg.chat.id, page_msg.id).await;
+        let _ = bot
+            .send(DeleteMessage::new(
+                page_msg.chat().id(),
+                page_msg.message_id(),
+            ))
+            .await;
     }
     result
 }
@@ -2740,31 +2801,36 @@ async fn show_search_page(
     user_id: i64,
 ) -> BotResult {
     let needed = page.saturating_mul(SEARCH_PAGE_SIZE);
-    let (text, markup) = match cached_search(query, needed, user_id, Some(page_msg.chat.id.0)).await
-    {
-        Ok(results) => {
-            let page = page.min(results.page_count());
-            (
-                search_page_text(query, &results, page),
-                search_page_menu(query, Some(&results), page, requester_id),
-            )
-        }
-        Err(err @ BotError::Busy(_)) => return Err(err),
-        Err(err) => {
-            log::warn!(
-                "music search failed: platform={} err={err}",
-                query.platform.id()
-            );
-            (
-                search_failure_text(query, &err),
-                search_page_menu(query, None, 1, requester_id),
-            )
-        }
-    };
-    bot.edit_message_text(page_msg.chat.id, page_msg.id, text)
-        .parse_mode(ParseMode::Html)
-        .reply_markup(markup)
-        .await?;
+    let (text, markup) =
+        match cached_search(query, needed, user_id, Some(page_msg.chat().id())).await {
+            Ok(results) => {
+                let page = page.min(results.page_count());
+                (
+                    search_page_text(query, &results, page),
+                    search_page_menu(query, Some(&results), page, requester_id),
+                )
+            }
+            Err(err @ BotError::Busy(_)) => return Err(err),
+            Err(err) => {
+                log::warn!(
+                    "music search failed: platform={} err={err}",
+                    query.platform.id()
+                );
+                (
+                    search_failure_text(query, &err),
+                    search_page_menu(query, None, 1, requester_id),
+                )
+            }
+        };
+    bot.send(
+        EditMessageText::new()
+            .chat_id(page_msg.chat().id())
+            .message_id(page_msg.message_id())
+            .text(text)
+            .parse_mode(ParseMode::HTML)
+            .reply_markup(markup),
+    )
+    .await?;
     Ok(())
 }
 
@@ -2852,10 +2918,7 @@ fn track_pick_rows(
                 search_keyword: search_keyword.map(str::to_string),
             }
             .encode()?;
-            Some(InlineKeyboardButton::callback(
-                (index + 1).to_string(),
-                callback,
-            ))
+            Some(callback_button((index + 1).to_string(), callback))
         })
         .collect::<Vec<_>>();
     let per_row = if buttons.len() <= 5 {
@@ -2879,7 +2942,7 @@ fn search_page_menu(
             requester_id,
         }
         .encode()
-        .map(|callback| InlineKeyboardButton::callback(label, callback))
+        .map(|callback| callback_button(label, callback))
     };
     let mut rows = Vec::new();
     if let Some(results) = results.filter(|results| !results.tracks.is_empty()) {
@@ -2907,7 +2970,7 @@ fn search_page_menu(
         .collect::<Vec<_>>();
     rows.extend(platforms.chunks(4).map(<[_]>::to_vec));
     if let Some(callback) = (MusicCallbackAction::SearchClose { requester_id }).encode() {
-        rows.push(vec![InlineKeyboardButton::callback("❌ 关闭", callback)]);
+        rows.push(vec![callback_button("❌ 关闭", callback)]);
     }
     InlineKeyboardMarkup::new(rows)
 }
@@ -2922,25 +2985,28 @@ async fn handle_search_page_callback(
     requester_id: i64,
 ) -> BotResult {
     let Some(keyword) = search_page_keyword(msg) else {
-        bot.answer_callback_query(callback_id.to_string())
-            .text(SEARCH_EXPIRED_NOTICE)
-            .show_alert(true)
-            .await?;
+        bot.send(
+            AnswerCallbackQuery::new(callback_id.to_string())
+                .text(SEARCH_EXPIRED_NOTICE)
+                .show_alert(true),
+        )
+        .await?;
         return Ok(());
     };
     let query = MusicQuery { platform, keyword };
     match show_search_page(bot, msg, &query, page, requester_id, user_id).await {
         Ok(()) => {
-            bot.answer_callback_query(callback_id.to_string()).await?;
+            bot.send(AnswerCallbackQuery::new(callback_id.to_string()))
+                .await?;
             Ok(())
         }
         // 点了当前所在的平台或页码，页面没有变化
-        Err(BotError::Send(teloxide::RequestError::Api(
-            teloxide::ApiError::MessageNotModified,
-        ))) => {
-            bot.answer_callback_query(callback_id.to_string())
-                .text(format!("已经是{}的第 {page} 页", platform.label()))
-                .await?;
+        Err(err) if is_not_modified(&err) => {
+            bot.send(
+                AnswerCallbackQuery::new(callback_id.to_string())
+                    .text(format!("已经是{}的第 {page} 页", platform.label())),
+            )
+            .await?;
             Ok(())
         }
         Err(err) => Err(err),
@@ -2954,8 +3020,8 @@ fn is_search_owner(requester_id: i64, user_id: i64) -> bool {
 
 async fn send_collection_results(
     bot: &Bot,
-    chat_id: ChatId,
-    reply_to: Option<MessageId>,
+    chat_id: i64,
+    reply_to: Option<i64>,
     collection: MusicCollection,
     requester_id: i64,
 ) -> Result<(), BotError> {
@@ -2980,16 +3046,15 @@ async fn send_collection_results(
     };
     let mut rows = track_pick_rows(&collection.items, None);
     if let Some(callback) = (MusicCallbackAction::SearchClose { requester_id }).encode() {
-        rows.push(vec![InlineKeyboardButton::callback("❌ 关闭", callback)]);
+        rows.push(vec![callback_button("❌ 关闭", callback)]);
     }
-    let mut request = bot
-        .send_message(chat_id, text)
-        .parse_mode(ParseMode::Html)
+    let mut request = SendMessage::new(chat_id, text)
+        .parse_mode(ParseMode::HTML)
         .reply_markup(InlineKeyboardMarkup::new(rows));
     if let Some(reply_to) = reply_to {
-        request = request.reply_parameters(ReplyParameters::new(reply_to));
+        request = request.reply_parameters(crate::reply_to(reply_to));
     }
-    request.await?;
+    bot.send(request).await?;
     Ok(())
 }
 
@@ -3001,19 +3066,21 @@ async fn send_music_collection(
     ratelimit::ensure_allowed(
         ResourceAction::Collection,
         user_id_from_message(msg),
-        Some(msg.chat.id.0),
+        Some(msg.chat().id()),
         query.platform,
     )?;
     let Some(collection) = search_collection(&query, 10).await? else {
-        bot.send_message(msg.chat.id, "没有识别到支持的歌单或专辑")
-            .reply_parameters(ReplyParameters::new(msg.id))
-            .await?;
+        bot.send(
+            SendMessage::new(msg.chat().id(), "没有识别到支持的歌单或专辑")
+                .reply_parameters(reply_to(msg.message_id())),
+        )
+        .await?;
         return Ok(());
     };
     send_collection_results(
         bot,
-        msg.chat.id,
-        Some(msg.id),
+        msg.chat().id(),
+        Some(msg.message_id()),
         collection,
         user_id_from_message(msg),
     )
@@ -3021,10 +3088,11 @@ async fn send_music_collection(
 }
 
 async fn get_music_cover(bot: &Bot, msg: &Message, url: &str) -> Result<(), BotError> {
-    bot.send_photo(msg.chat.id, InputFile::url(Url::parse(url)?))
-        .reply_parameters(ReplyParameters::new(msg.id))
-        .send()
-        .await?;
+    bot.send(
+        SendPhoto::new(msg.chat().id(), InputFile::url(Url::parse(url)?))
+            .reply_parameters(reply_to(msg.message_id())),
+    )
+    .await?;
     Ok(())
 }
 
@@ -3082,13 +3150,12 @@ async fn fetch_and_cache_lyrics(
 }
 
 fn is_lyric_button(button: &InlineKeyboardButton) -> bool {
-    match &button.kind {
-        CallbackData(data) => matches!(
+    button.callback_data.as_deref().is_some_and(|data| {
+        matches!(
             MusicCallbackAction::decode(data),
             Ok(MusicCallbackAction::Lyrics(..)) | Ok(MusicCallbackAction::InlineLyrics(..))
-        ),
-        _ => false,
-    }
+        )
+    })
 }
 
 /// 过滤掉键盘里的歌词按钮（按回调数据解码判定，非按钮文字）；
@@ -3126,16 +3193,18 @@ async fn handle_lyrics_callback(
     id: &str,
     script: MusicLyricScript,
 ) -> BotResult {
-    let lyrics = match fetch_lyrics_limited(platform, id, user_id, Some(msg.chat.id.0)).await {
+    let lyrics = match fetch_lyrics_limited(platform, id, user_id, Some(msg.chat().id())).await {
         Ok(lyrics) => lyrics,
         Err(e) => {
             // 歌词获取失败（含限流）只弹提示：歌词按钮可能挂在搜索菜单或
             // 评论区补发消息上，走通用错误路径编辑正文会毁掉整组按钮
             log::warn!("歌词获取失败 {}:{id}: {e}", platform.id());
             let _ = bot
-                .answer_callback_query(callback_id.to_string())
-                .text(format!("{e}"))
-                .show_alert(true)
+                .send(
+                    AnswerCallbackQuery::new(callback_id.to_string())
+                        .text(format!("{e}"))
+                        .show_alert(true),
+                )
                 .await;
             return Ok(());
         }
@@ -3144,14 +3213,20 @@ async fn handle_lyrics_callback(
         // 歌词确认不可用：顺手撤掉被点消息上的歌词按钮，避免留下死按钮（尽力而为）
         if let Some(filtered) = msg.reply_markup().and_then(remove_lyric_buttons) {
             let _ = bot
-                .edit_message_reply_markup(msg.chat.id, msg.id)
-                .reply_markup(filtered)
+                .send(
+                    EditMessageReplyMarkup::new()
+                        .chat_id(msg.chat().id())
+                        .message_id(msg.message_id())
+                        .reply_markup(filtered),
+                )
                 .await;
         }
-        bot.answer_callback_query(callback_id.to_string())
-            .text(format!("{} 没有可用歌词", platform.label()))
-            .show_alert(true)
-            .await?;
+        bot.send(
+            AnswerCallbackQuery::new(callback_id.to_string())
+                .text(format!("{} 没有可用歌词", platform.label()))
+                .show_alert(true),
+        )
+        .await?;
         return Ok(());
     };
     let document = render_lyric_document(
@@ -3163,34 +3238,39 @@ async fn handle_lyrics_callback(
         script,
     );
     if message_has_document(msg) {
-        let media = InputMediaDocument::new(
-            InputFile::memory(document.content.into_bytes()).file_name(document.file_name),
-        )
+        let media = InputMediaDocument::new(InputFile::buffered_with_name(
+            document.content.into_bytes(),
+            document.file_name,
+        ))
         .caption(document.caption)
-        .parse_mode(ParseMode::Html);
-        bot.edit_message_media(msg.chat.id, msg.id, InputMedia::Document(media))
-            .reply_markup(lyric_switch_menu(platform, id, script))
-            .await?;
-        bot.answer_callback_query(callback_id.to_string())
-            .text(format!("已切换{}", script.label()))
-            .await?;
+        .parse_mode(ParseMode::HTML);
+        bot.send(
+            EditMessageMedia::new(InputMedia::Document(media))
+                .chat_id(msg.chat().id())
+                .message_id(msg.message_id())
+                .reply_markup(lyric_switch_menu(platform, id, script)),
+        )
+        .await?;
+        bot.send(
+            AnswerCallbackQuery::new(callback_id.to_string())
+                .text(format!("已切换{}", script.label())),
+        )
+        .await?;
         return Ok(());
     }
-    let mut request = bot
-        .send_document(
-            msg.chat.id,
-            InputFile::memory(document.content.into_bytes()).file_name(document.file_name),
-        )
-        .reply_parameters(ReplyParameters::new(msg.id))
-        .reply_markup(lyric_switch_menu(platform, id, script));
+    let mut request = SendDocument::new(
+        msg.chat().id(),
+        InputFile::buffered_with_name(document.content.into_bytes(), document.file_name),
+    )
+    .reply_parameters(reply_to(msg.message_id()))
+    .reply_markup(lyric_switch_menu(platform, id, script));
     if !document.caption.is_empty() {
         request = request
             .caption(document.caption)
-            .parse_mode(ParseMode::Html);
+            .parse_mode(ParseMode::HTML);
     }
-    request.await?;
-    bot.answer_callback_query(callback_id.to_string())
-        .text("已发送歌词")
+    bot.send(request).await?;
+    bot.send(AnswerCallbackQuery::new(callback_id.to_string()).text("已发送歌词"))
         .await?;
     Ok(())
 }
@@ -3208,10 +3288,12 @@ async fn handle_inline_lyrics_callback(
 ) -> BotResult {
     // inline 消息的回调里拿不到当前键盘，无法可靠地摘除歌词按钮，保持仅弹窗提示
     let Some(lyrics) = fetch_lyrics_limited(platform, id, user_id, None).await? else {
-        bot.answer_callback_query(callback_id.to_string())
-            .text(format!("{} 没有可用歌词", platform.label()))
-            .show_alert(true)
-            .await?;
+        bot.send(
+            AnswerCallbackQuery::new(callback_id.to_string())
+                .text(format!("{} 没有可用歌词", platform.label()))
+                .show_alert(true),
+        )
+        .await?;
         return Ok(());
     };
     let query = MusicQuery {
@@ -3233,10 +3315,10 @@ async fn handle_inline_lyrics_callback(
     } else {
         inline_lyric_text("歌词", platform.label(), &lyrics, script)
     };
-    let mut request = bot
-        .edit_message_caption_inline(inline_message_id)
+    let mut request = EditMessageCaption::new()
+        .inline_message_id(inline_message_id)
         .caption(caption)
-        .parse_mode(ParseMode::Html);
+        .parse_mode(ParseMode::HTML);
     // 这里编辑的是 inline 音频消息，回退菜单必须走 Lyrics（编辑 caption）路径；
     // InlineLyrics 会路由到 edit_message_text_inline，在音频消息上必然失败
     let markup = track
@@ -3244,10 +3326,11 @@ async fn handle_inline_lyrics_callback(
         .and_then(|track| inline_track_lyric_menu(track, script))
         .unwrap_or_else(|| lyric_switch_menu(platform, id, script));
     request = request.reply_markup(markup);
-    request.await?;
-    bot.answer_callback_query(callback_id.to_string())
-        .text(format!("已切换{}", script.label()))
-        .await?;
+    bot.send(request).await?;
+    bot.send(
+        AnswerCallbackQuery::new(callback_id.to_string()).text(format!("已切换{}", script.label())),
+    )
+    .await?;
     Ok(())
 }
 
@@ -3262,22 +3345,26 @@ async fn handle_inline_lyric_text_callback(
 ) -> BotResult {
     // inline 消息的回调里拿不到当前键盘，无法可靠地摘除歌词按钮，保持仅弹窗提示
     let Some(lyrics) = fetch_lyrics_limited(platform, id, user_id, None).await? else {
-        bot.answer_callback_query(callback_id.to_string())
-            .text(format!("{} 没有可用歌词", platform.label()))
-            .show_alert(true)
-            .await?;
+        bot.send(
+            AnswerCallbackQuery::new(callback_id.to_string())
+                .text(format!("{} 没有可用歌词", platform.label()))
+                .show_alert(true),
+        )
+        .await?;
         return Ok(());
     };
-    bot.edit_message_text_inline(
-        inline_message_id,
-        inline_lyric_text("歌词", platform.label(), &lyrics, script),
+    bot.send(
+        EditMessageText::new()
+            .inline_message_id(inline_message_id)
+            .text(inline_lyric_text("歌词", platform.label(), &lyrics, script))
+            .parse_mode(ParseMode::HTML)
+            .reply_markup(inline_lyric_switch_menu(platform, id, script)),
     )
-    .parse_mode(ParseMode::Html)
-    .reply_markup(inline_lyric_switch_menu(platform, id, script))
     .await?;
-    bot.answer_callback_query(callback_id.to_string())
-        .text(format!("已切换{}", script.label()))
-        .await?;
+    bot.send(
+        AnswerCallbackQuery::new(callback_id.to_string()).text(format!("已切换{}", script.label())),
+    )
+    .await?;
     Ok(())
 }
 
@@ -3360,12 +3447,7 @@ fn lyric_switch_menu(
     let target = script.toggled();
     let keyboard = MusicCallbackAction::Lyrics(platform, id.to_string(), Some(target))
         .encode()
-        .map(|callback| {
-            vec![vec![InlineKeyboardButton::callback(
-                script.switch_label(),
-                callback,
-            )]]
-        })
+        .map(|callback| vec![vec![callback_button(script.switch_label(), callback)]])
         .unwrap_or_default();
     InlineKeyboardMarkup::new(keyboard)
 }
@@ -3378,12 +3460,7 @@ fn inline_lyric_switch_menu(
     let target = script.toggled();
     let keyboard = MusicCallbackAction::InlineLyrics(platform, id.to_string(), target)
         .encode()
-        .map(|callback| {
-            vec![vec![InlineKeyboardButton::callback(
-                script.switch_label(),
-                callback,
-            )]]
-        })
+        .map(|callback| vec![vec![callback_button(script.switch_label(), callback)]])
         .unwrap_or_default();
     InlineKeyboardMarkup::new(keyboard)
 }
@@ -3432,13 +3509,7 @@ fn build_lyric_file_name(msg: &Message, platform: MusicPlatform, id: &str) -> St
 }
 
 fn audio_lyric_base_name(msg: &Message) -> Option<String> {
-    let audio = match &msg.kind {
-        MessageKind::Common(common) => match &common.media_kind {
-            MediaKind::Audio(audio) => &audio.audio,
-            _ => return None,
-        },
-        _ => return None,
-    };
+    let audio = msg.audio()?;
     let title = audio.title.as_deref().map(str::trim).unwrap_or_default();
     let performer = audio
         .performer
@@ -3496,7 +3567,7 @@ async fn handle_favorite_callback(
     bot: &Bot,
     callback_id: &str,
     msg: &Message,
-    from: &teloxide::types::User,
+    from: &User,
     action: MusicFavoriteAction,
     settings: &UserMusicSettings,
 ) -> BotResult {
@@ -3508,20 +3579,24 @@ async fn handle_favorite_callback(
             chat_id,
         } => {
             let scope_id = match scope {
-                FavoriteScope::User => from.id.0 as i64,
-                FavoriteScope::Group => chat_id.unwrap_or(msg.chat.id.0),
+                FavoriteScope::User => from.id,
+                FavoriteScope::Group => chat_id.unwrap_or(msg.chat().id()),
             };
             if scope == FavoriteScope::Group && !is_group_chat(msg) {
-                bot.answer_callback_query(callback_id.to_string())
-                    .text("群收藏只能在群聊消息中使用")
-                    .show_alert(true)
-                    .await?;
+                bot.send(
+                    AnswerCallbackQuery::new(callback_id.to_string())
+                        .text("群收藏只能在群聊消息中使用")
+                        .show_alert(true),
+                )
+                .await?;
                 return Ok(());
             }
             if is_favorited(scope.storage_key(), scope_id, platform.id(), &id).await? {
-                bot.answer_callback_query(callback_id.to_string())
-                    .text("已收藏，可在收藏列表中取消")
-                    .await?;
+                bot.send(
+                    AnswerCallbackQuery::new(callback_id.to_string())
+                        .text("已收藏，可在收藏列表中取消"),
+                )
+                .await?;
                 return Ok(());
             }
             let query = MusicQuery {
@@ -3530,9 +3605,11 @@ async fn handle_favorite_callback(
             };
             let track = resolve_track(&query, Some(&id), settings).await?;
             upsert_favorite(favorite_from_track(scope, scope_id, from, &track)).await?;
-            bot.answer_callback_query(callback_id.to_string())
-                .text(format!("已加入{}", scope.label()))
-                .await?;
+            bot.send(
+                AnswerCallbackQuery::new(callback_id.to_string())
+                    .text(format!("已加入{}", scope.label())),
+            )
+            .await?;
         }
         MusicFavoriteAction::AskRemove {
             scope,
@@ -3541,13 +3618,18 @@ async fn handle_favorite_callback(
             chat_id,
         } => {
             let scope_id = match scope {
-                FavoriteScope::User => from.id.0 as i64,
-                FavoriteScope::Group => chat_id.unwrap_or(msg.chat.id.0),
+                FavoriteScope::User => from.id,
+                FavoriteScope::Group => chat_id.unwrap_or(msg.chat().id()),
             };
-            bot.answer_callback_query(callback_id.to_string()).await?;
-            bot.edit_message_reply_markup(msg.chat.id, msg.id)
-                .reply_markup(favorite_confirm_menu(scope, scope_id, platform, &id))
+            bot.send(AnswerCallbackQuery::new(callback_id.to_string()))
                 .await?;
+            bot.send(
+                EditMessageReplyMarkup::new()
+                    .chat_id(msg.chat().id())
+                    .message_id(msg.message_id())
+                    .reply_markup(favorite_confirm_menu(scope, scope_id, platform, &id)),
+            )
+            .await?;
         }
         MusicFavoriteAction::Remove {
             scope,
@@ -3556,31 +3638,36 @@ async fn handle_favorite_callback(
             chat_id,
         } => {
             let scope_id = match scope {
-                FavoriteScope::User => from.id.0 as i64,
-                FavoriteScope::Group => chat_id.unwrap_or(msg.chat.id.0),
+                FavoriteScope::User => from.id,
+                FavoriteScope::Group => chat_id.unwrap_or(msg.chat().id()),
             };
             let removed =
                 remove_favorite(scope.storage_key(), scope_id, platform.id(), &id).await?;
-            bot.answer_callback_query(callback_id.to_string())
-                .text(if removed {
+            bot.send(
+                AnswerCallbackQuery::new(callback_id.to_string()).text(if removed {
                     "已取消收藏"
                 } else {
                     "收藏不存在"
-                })
-                .await?;
+                }),
+            )
+            .await?;
             edit_music_favorites(bot, msg, scope, scope_id).await?;
         }
         MusicFavoriteAction::List { scope, chat_id } => {
             let scope_id = match scope {
-                FavoriteScope::User => from.id.0 as i64,
-                FavoriteScope::Group => chat_id.unwrap_or(msg.chat.id.0),
+                FavoriteScope::User => from.id,
+                FavoriteScope::Group => chat_id.unwrap_or(msg.chat().id()),
             };
-            bot.answer_callback_query(callback_id.to_string()).await?;
+            bot.send(AnswerCallbackQuery::new(callback_id.to_string()))
+                .await?;
             edit_music_favorites(bot, msg, scope, scope_id).await?;
         }
         MusicFavoriteAction::Close => {
-            bot.answer_callback_query(callback_id.to_string()).await?;
-            let _ = bot.delete_message(msg.chat.id, msg.id).await;
+            bot.send(AnswerCallbackQuery::new(callback_id.to_string()))
+                .await?;
+            let _ = bot
+                .send(DeleteMessage::new(msg.chat().id(), msg.message_id()))
+                .await;
         }
     }
     Ok(())
@@ -3589,7 +3676,7 @@ async fn handle_favorite_callback(
 async fn handle_inline_favorite_callback(
     bot: &Bot,
     callback_id: &str,
-    from: &teloxide::types::User,
+    from: &User,
     action: MusicFavoriteAction,
     settings: &UserMusicSettings,
 ) -> BotResult {
@@ -3600,18 +3687,19 @@ async fn handle_inline_favorite_callback(
         ..
     } = action
     else {
-        bot.answer_callback_query(callback_id.to_string())
-            .text("inline 模式只支持个人收藏")
-            .show_alert(true)
-            .await?;
+        bot.send(
+            AnswerCallbackQuery::new(callback_id.to_string())
+                .text("inline 模式只支持个人收藏")
+                .show_alert(true),
+        )
+        .await?;
         return Ok(());
     };
 
-    let scope_id = from.id.0 as i64;
+    let scope_id = from.id;
     if is_favorited(FAVORITE_SCOPE_USER, scope_id, platform.id(), &id).await? {
         remove_favorite(FAVORITE_SCOPE_USER, scope_id, platform.id(), &id).await?;
-        bot.answer_callback_query(callback_id.to_string())
-            .text("已取消收藏")
+        bot.send(AnswerCallbackQuery::new(callback_id.to_string()).text("已取消收藏"))
             .await?;
         return Ok(());
     }
@@ -3628,8 +3716,7 @@ async fn handle_inline_favorite_callback(
         &track,
     ))
     .await?;
-    bot.answer_callback_query(callback_id.to_string())
-        .text("已加入个人收藏")
+    bot.send(AnswerCallbackQuery::new(callback_id.to_string()).text("已加入个人收藏"))
         .await?;
     Ok(())
 }
@@ -3667,7 +3754,7 @@ async fn get_callback_music(
         &bot,
         media_request(&query, Some(id), &settings.quality, settings),
         user_id,
-        Some(msg.chat.id.0),
+        Some(msg.chat().id()),
         &StatusTarget::Message(Box::new(msg.clone())),
         Destination::Chat {
             msg: &msg,
@@ -3754,24 +3841,18 @@ fn bytes_to_mb(bytes: u64) -> f64 {
 }
 
 fn message_has_text(msg: &Message) -> bool {
-    matches!(
-        &msg.kind,
-        MessageKind::Common(common) if matches!(common.media_kind, MediaKind::Text(_))
-    )
+    matches!(msg, Message::Text(_))
 }
 
 fn message_has_document(msg: &Message) -> bool {
-    matches!(
-        &msg.kind,
-        MessageKind::Common(common) if matches!(common.media_kind, MediaKind::Document(_))
-    )
+    matches!(msg, Message::Document(_))
 }
 
-fn callback_reply_target(msg: &Message) -> Option<MessageId> {
+fn callback_reply_target(msg: &Message) -> Option<i64> {
     if message_has_text(msg) {
-        msg.reply_to_message().map(|msg| msg.id)
+        msg.reply_to_message().map(|msg| msg.message_id())
     } else {
-        Some(msg.id)
+        Some(msg.message_id())
     }
 }
 
@@ -3795,19 +3876,25 @@ async fn edit_callback_status_with_markup(
 ) -> Result<(), BotError> {
     let text = text.into();
     if message_has_text(msg) {
-        let mut request = bot.edit_message_text(msg.chat.id, msg.id, text);
+        let mut request = EditMessageText::new()
+            .chat_id(msg.chat().id())
+            .message_id(msg.message_id())
+            .text(text);
         request = match markup {
             Some(markup) => request.reply_markup(markup),
             None => request.reply_markup(empty_keyboard()),
         };
-        request.await?;
+        bot.send(request).await?;
     } else {
-        let mut request = bot.edit_message_caption(msg.chat.id, msg.id).caption(text);
+        let mut request = EditMessageCaption::new()
+            .chat_id(msg.chat().id())
+            .message_id(msg.message_id())
+            .caption(text);
         request = match markup {
             Some(markup) => request.reply_markup(markup),
             None => request.reply_markup(empty_keyboard()),
         };
-        request.await?;
+        bot.send(request).await?;
     }
     Ok(())
 }
@@ -3818,7 +3905,9 @@ async fn delete_callback_status(
     fallback_text: String,
 ) -> Result<(), BotError> {
     if message_has_text(msg) {
-        let _ = bot.delete_message(msg.chat.id, msg.id).await;
+        let _ = bot
+            .send(DeleteMessage::new(msg.chat().id(), msg.message_id()))
+            .await;
     } else {
         let _ = edit_callback_status(bot, msg, fallback_text).await;
     }
@@ -3850,30 +3939,37 @@ fn queue_status_text(snapshot: &queue::QueueSnapshot) -> String {
 fn queue_status_menu() -> InlineKeyboardMarkup {
     let keyboard = MusicCallbackAction::QueueStatus
         .encode()
-        .map(|callback| vec![vec![InlineKeyboardButton::callback("查看队列", callback)]])
+        .map(|callback| vec![vec![callback_button("查看队列", callback)]])
         .unwrap_or_default();
     InlineKeyboardMarkup::new(keyboard)
 }
 
 async fn send_queue_status(bot: &Bot, msg: &Message) -> BotResult {
-    bot.send_message(msg.chat.id, queue_status_text(&queue::GOVERNOR.snapshot()))
-        .reply_parameters(ReplyParameters::new(msg.id))
-        .await?;
+    bot.send(
+        SendMessage::new(
+            msg.chat().id(),
+            queue_status_text(&queue::GOVERNOR.snapshot()),
+        )
+        .reply_parameters(reply_to(msg.message_id())),
+    )
+    .await?;
     Ok(())
 }
 
 pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> {
     if let Some(data) = q.data {
         let callback_id = q.id.clone();
-        let user_id = q.from.id.0 as i64;
+        let user_id = q.from.id;
         let from = q.from.clone();
         let action = match MusicCallbackAction::decode(&data) {
             Ok(action) => action,
             Err(e) => {
                 let _ = bot
-                    .answer_callback_query(callback_id)
-                    .text(format!("{e}"))
-                    .show_alert(true)
+                    .send(
+                        AnswerCallbackQuery::new(callback_id)
+                            .text(format!("{e}"))
+                            .show_alert(true),
+                    )
                     .await;
                 return Err(e);
             }
@@ -3881,19 +3977,23 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
         if let MusicCallbackAction::Panel { requester_id, .. } = &action
             && *requester_id != user_id
         {
-            bot.answer_callback_query(callback_id)
-                .text(MUSIC_PANEL_OWNER_NOTICE)
-                .show_alert(true)
-                .await?;
+            bot.send(
+                AnswerCallbackQuery::new(callback_id)
+                    .text(MUSIC_PANEL_OWNER_NOTICE)
+                    .show_alert(true),
+            )
+            .await?;
             return Ok(());
         }
         let action = match action {
             // 队列状态与消息上下文无关（inline 与普通消息都可点），直接弹窗返回
             MusicCallbackAction::QueueStatus => {
-                bot.answer_callback_query(callback_id)
-                    .text(queue_status_text(&queue::GOVERNOR.snapshot()))
-                    .show_alert(true)
-                    .await?;
+                bot.send(
+                    AnswerCallbackQuery::new(callback_id)
+                        .text(queue_status_text(&queue::GOVERNOR.snapshot()))
+                        .show_alert(true),
+                )
+                .await?;
                 return Ok(());
             }
             MusicCallbackAction::InlineSend {
@@ -3970,10 +4070,15 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
                 let Some(inline_message_id) = q.inline_message_id else {
                     return Ok(());
                 };
-                bot.edit_message_text_inline(inline_message_id, "已关闭")
-                    .reply_markup(empty_keyboard())
+                bot.send(
+                    EditMessageText::new()
+                        .inline_message_id(inline_message_id)
+                        .text("已关闭")
+                        .reply_markup(empty_keyboard()),
+                )
+                .await?;
+                bot.send(AnswerCallbackQuery::new(callback_id.clone()))
                     .await?;
-                bot.answer_callback_query(callback_id.clone()).await?;
                 return Ok(());
             }
             MusicCallbackAction::Favorite(action)
@@ -4000,24 +4105,25 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
         };
         let msg = match q.message {
             None => return Ok(()),
-            Some(mbi_msg) => match mbi_msg {
-                MaybeInaccessibleMessage::Inaccessible(_) => return Ok(()),
-                MaybeInaccessibleMessage::Regular(msg) => msg,
+            Some(mbi_msg) => match *mbi_msg {
+                MaybeInaccessibleMessage::InaccessibleMessage(_) => return Ok(()),
+                MaybeInaccessibleMessage::Message(msg) => msg,
             },
         };
         // A client can forge callback data, so also check the bot-generated
         // keyboard rather than trusting the owner encoded in the click alone.
         if music_panel_owner(&msg).is_some_and(|owner| owner != user_id) {
-            bot.answer_callback_query(callback_id)
-                .text(MUSIC_PANEL_OWNER_NOTICE)
-                .show_alert(true)
-                .await?;
+            bot.send(
+                AnswerCallbackQuery::new(callback_id)
+                    .text(MUSIC_PANEL_OWNER_NOTICE)
+                    .show_alert(true),
+            )
+            .await?;
             return Ok(());
         }
-        let lock_flag = hashing((msg.chat.id, msg.id));
+        let lock_flag = hashing((msg.chat().id(), msg.message_id()));
         if LIMITER.is_running(lock_flag) {
-            bot.answer_callback_query(callback_id)
-                .text("正在处理上一次请求...")
+            bot.send(AnswerCallbackQuery::new(callback_id).text("正在处理上一次请求..."))
                 .await?;
             return Ok(());
         }
@@ -4026,10 +4132,12 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
         | MusicCallbackAction::SearchClose { requester_id } = &action
             && !is_search_owner(*requester_id, user_id)
         {
-            bot.answer_callback_query(callback_id)
-                .text(SEARCH_OWNER_NOTICE)
-                .show_alert(true)
-                .await?;
+            bot.send(
+                AnswerCallbackQuery::new(callback_id)
+                    .text(SEARCH_OWNER_NOTICE)
+                    .show_alert(true),
+            )
+            .await?;
             return Ok(());
         }
         let preserve_panel = matches!(
@@ -4049,14 +4157,20 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
                 | MusicCallbackAction::SearchClose { .. }
                 | MusicCallbackAction::Close
         ) {
-            bot.answer_callback_query(callback_id.clone())
-                .text("正在处理...")
+            bot.send(AnswerCallbackQuery::new(callback_id.clone()).text("正在处理..."))
                 .await?;
         }
 
         let result = match action {
             MusicCallbackAction::SearchMore(query) => {
-                open_search_page(&bot, msg.chat.id, Some(msg.id), query, user_id).await
+                open_search_page(
+                    &bot,
+                    msg.chat().id(),
+                    Some(msg.message_id()),
+                    query,
+                    user_id,
+                )
+                .await
             }
             MusicCallbackAction::SearchPage {
                 platform,
@@ -4075,8 +4189,11 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
                 .await
             }
             MusicCallbackAction::SearchClose { .. } => {
-                let _ = bot.delete_message(msg.chat.id, msg.id).await;
-                bot.answer_callback_query(callback_id.clone()).await?;
+                let _ = bot
+                    .send(DeleteMessage::new(msg.chat().id(), msg.message_id()))
+                    .await;
+                bot.send(AnswerCallbackQuery::new(callback_id.clone()))
+                    .await?;
                 Ok(())
             }
             MusicCallbackAction::Cover(platform, id) => {
@@ -4130,8 +4247,11 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
                 handle_music_panel_callback(&bot, &callback_id, &msg, user_id, action).await
             }
             MusicCallbackAction::Close => {
-                let _ = bot.delete_message(msg.chat.id, msg.id).await;
-                bot.answer_callback_query(callback_id.clone()).await?;
+                let _ = bot
+                    .send(DeleteMessage::new(msg.chat().id(), msg.message_id()))
+                    .await;
+                bot.send(AnswerCallbackQuery::new(callback_id.clone()))
+                    .await?;
                 Ok(())
             }
             // 已在前面提前返回，此处不可达
@@ -4144,9 +4264,11 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
                 let _ = edit_callback_status(&bot, &msg, format!("{e}")).await;
             }
             let _ = bot
-                .answer_callback_query(callback_id)
-                .text(format!("{e}"))
-                .show_alert(true)
+                .send(
+                    AnswerCallbackQuery::new(callback_id)
+                        .text(format!("{e}"))
+                        .show_alert(true),
+                )
                 .await;
             return Err(e);
         }
@@ -4159,7 +4281,7 @@ fn track_menu(
     fallback_query: Option<&MusicQuery>,
     msg: &Message,
 ) -> Option<InlineKeyboardMarkup> {
-    track_menu_for_context(track, fallback_query, is_group_chat(msg), msg.chat.id.0)
+    track_menu_for_context(track, fallback_query, is_group_chat(msg), msg.chat().id())
 }
 
 fn inline_track_menu(track: &MusicTrack) -> Option<InlineKeyboardMarkup> {
@@ -4182,10 +4304,10 @@ fn inline_track_menu_with_lyric_label(
     if let Ok(url) = Url::parse(track.cover.trim())
         && !track.cover.trim().is_empty()
     {
-        utility_row.push(InlineKeyboardButton::url("获取封面", url));
+        utility_row.push(url_button("获取封面", url));
     }
     if !track.song.trim().is_empty() {
-        utility_row.push(InlineKeyboardButton::switch_inline_query_current_chat(
+        utility_row.push(switch_inline_current_chat_button(
             "搜索更多",
             format!("{} {}", track.song, track.platform.id()),
         ));
@@ -4198,7 +4320,7 @@ fn inline_track_menu_with_lyric_label(
         && let Some(callback) =
             MusicCallbackAction::Lyrics(track.platform, track.id.clone(), lyric_target).encode()
     {
-        action_row.push(InlineKeyboardButton::callback(lyric_label, callback));
+        action_row.push(callback_button(lyric_label, callback));
     }
     if !track.id.trim().is_empty()
         && let Some(callback) = MusicCallbackAction::Favorite(MusicFavoriteAction::Toggle {
@@ -4209,7 +4331,7 @@ fn inline_track_menu_with_lyric_label(
         })
         .encode()
     {
-        action_row.push(InlineKeyboardButton::callback("收藏", callback));
+        action_row.push(callback_button("收藏", callback));
     }
 
     let rows = [utility_row, action_row]
@@ -4231,7 +4353,7 @@ fn track_menu_for_context(
         && let Some(callback) =
             MusicCallbackAction::Cover(track.platform, track.id.clone()).encode()
     {
-        utility_row.push(InlineKeyboardButton::callback("获取封面", callback));
+        utility_row.push(callback_button("获取封面", callback));
     }
 
     let preferred_query = fallback_query
@@ -4249,7 +4371,7 @@ fn track_menu_for_context(
         .encode()
         .or_else(|| MusicCallbackAction::SearchMore(fallback_song_query).encode());
     if let Some(callback) = search_callback {
-        utility_row.push(InlineKeyboardButton::callback("搜索更多", callback));
+        utility_row.push(callback_button("搜索更多", callback));
     }
 
     let mut action_row = Vec::new();
@@ -4259,7 +4381,7 @@ fn track_menu_for_context(
             && let Some(callback) =
                 MusicCallbackAction::Lyrics(track.platform, track.id.clone(), None).encode()
         {
-            action_row.push(InlineKeyboardButton::callback("歌词", callback));
+            action_row.push(callback_button("歌词", callback));
         }
         if let Some(callback) = MusicCallbackAction::Favorite(MusicFavoriteAction::Toggle {
             scope: FavoriteScope::User,
@@ -4269,7 +4391,7 @@ fn track_menu_for_context(
         })
         .encode()
         {
-            action_row.push(InlineKeyboardButton::callback("收藏", callback));
+            action_row.push(callback_button("收藏", callback));
         }
         if is_group
             && let Some(callback) = MusicCallbackAction::Favorite(MusicFavoriteAction::Toggle {
@@ -4280,7 +4402,7 @@ fn track_menu_for_context(
             })
             .encode()
         {
-            action_row.push(InlineKeyboardButton::callback("群收藏", callback));
+            action_row.push(callback_button("群收藏", callback));
         }
     }
 
@@ -4307,7 +4429,7 @@ fn is_direct_track_lookup(keyword: &str, track: &MusicTrack) -> bool {
 }
 
 pub async fn music(bot: &Bot, msg: &Message) -> BotResult {
-    tokio::spawn(bot.send_chat_action(msg.chat.id, ChatAction::Typing).send());
+    show_typing(bot, msg.chat().id());
 
     let settings = get_user_settings_or_default(user_id_from_message(msg)).await;
     let language_tag = Some("zh-CN");
@@ -4338,7 +4460,7 @@ pub async fn music(bot: &Bot, msg: &Message) -> BotResult {
 /// 注意：Telegram 只对 file_unique_id 承诺稳定，file_id 理论上可能变化；上游同样按
 /// file_id 匹配且实践可靠，若出现漏配可再给 music_cache 增加 file_unique_id 列。
 pub async fn comment_buttons(bot: &Bot, msg: &Message) -> BotResult {
-    if !msg.is_automatic_forward() || !is_group_chat(msg) {
+    if msg.is_automatic_forward() != Some(true) || !is_group_chat(msg) {
         return Ok(());
     }
     // 频道帖被编辑时讨论组副本会以 edited_message 再次进入本管线，
@@ -4351,7 +4473,7 @@ pub async fn comment_buttons(bot: &Bot, msg: &Message) -> BotResult {
     };
     let lookup = match provider::gateway() {
         Ok(gateway) => gateway
-            .lookup_cache(&audio.file.id)
+            .lookup_cache(&audio.file_id)
             .await
             .map_err(BotError::from),
         Err(err) => Err(err),
@@ -4369,13 +4491,15 @@ pub async fn comment_buttons(bot: &Bot, msg: &Message) -> BotResult {
     }
     let track = cached.track;
     // 缓存行不带封面，获取封面按钮会被 track_menu_for_context 自然省略
-    let Some(keyboard) = track_menu_for_context(&track, None, true, msg.chat.id.0) else {
+    let Some(keyboard) = track_menu_for_context(&track, None, true, msg.chat().id()) else {
         return Ok(());
     };
     if let Err(err) = bot
-        .send_message(msg.chat.id, "🎵 这首歌的操作")
-        .reply_parameters(ReplyParameters::new(msg.id))
-        .reply_markup(keyboard)
+        .send(
+            SendMessage::new(msg.chat().id(), "🎵 这首歌的操作")
+                .reply_parameters(reply_to(msg.message_id()))
+                .reply_markup(keyboard),
+        )
         .await
     {
         log::warn!("failed to repost song buttons in comment thread: {err}");
@@ -4542,7 +4666,7 @@ mod tests {
         for view in [MusicPanelView::Platforms, MusicPanelView::Settings] {
             let menu = music_panel_menu(&settings, view);
             for button in menu.inline_keyboard.iter().flatten() {
-                let InlineKeyboardButtonKind::CallbackData(payload) = &button.kind else {
+                let Some(payload) = button.callback_data.as_deref() else {
                     panic!("expected callback button");
                 };
                 assert!(payload.len() <= CALLBACK_LIMIT);
@@ -4551,15 +4675,15 @@ mod tests {
                     panic!("all panel buttons must carry their owner");
                 };
                 assert_eq!(*requester_id, settings.user_id);
-                assert_eq!(decoded.encode().as_ref(), Some(payload));
+                assert_eq!(decoded.encode().as_deref(), Some(payload));
             }
             let footer = menu.inline_keyboard.last().unwrap();
             assert_eq!(footer.len(), 2);
-            assert_eq!(footer[1].text, "关闭");
+            assert_eq!(&*footer[1].text, "关闭");
         }
         let home = music_panel_menu(&settings, MusicPanelView::Platforms);
         assert_eq!(
-            home.inline_keyboard[0][0].text,
+            &*home.inline_keyboard[0][0].text,
             selected_label("Apple Music", true)
         );
         assert_eq!(
@@ -4590,7 +4714,7 @@ mod tests {
         assert!(changed);
         assert_eq!(settings, expected);
         assert_eq!(
-            music_panel_menu(&settings, MusicPanelView::Platforms).inline_keyboard[0][0].text,
+            &*music_panel_menu(&settings, MusicPanelView::Platforms).inline_keyboard[0][0].text,
             selected_label("网易云音乐", true),
         );
     }
@@ -4675,9 +4799,16 @@ mod tests {
                 }
                 let mut body = vec![0; size.unwrap()];
                 reader.read_exact(&mut body).await.unwrap();
-                let data: serde_json::Value = serde_json::from_slice(&body).unwrap();
-                assert_eq!(data["show_alert"], true);
-                assert!(data["text"].as_str().unwrap().contains("其他用户"));
+                // telers posts every request as a multipart form
+                let body = String::from_utf8(body).unwrap();
+                let field = |name: &str| {
+                    let start = body.find(&format!("name=\"{name}\"")).unwrap();
+                    let value = &body[start..];
+                    let value = &value[value.find("\r\n\r\n").unwrap() + 4..];
+                    value[..value.find("\r\n").unwrap()].to_string()
+                };
+                assert_eq!(field("show_alert"), "true");
+                assert!(field("text").contains("其他用户"));
                 let response = r#"{"ok":true,"result":true}"#;
                 reader.get_mut().write_all(format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
@@ -4685,11 +4816,22 @@ mod tests {
                 ).as_bytes()).await.unwrap();
             }
         });
+        let api = telers::client::telegram::APIServer::new(
+            &format!("http://{addr}/bot{{token}}/{{method_name}}"),
+            &format!("http://{addr}/file/bot{{token}}/{{path}}"),
+            false,
+            telers::client::telegram::BareFilesPathWrapper,
+        );
         let bot = Bot::with_client(
             "1:test",
-            reqwest::Client::builder().no_proxy().build().unwrap(),
-        )
-        .set_api_url(Url::parse(&format!("http://{addr}")).unwrap());
+            telers::client::Reqwest::new(
+                telers_reqwest::Client::builder()
+                    .no_proxy()
+                    .build()
+                    .unwrap(),
+            )
+            .with_api_server(std::borrow::Cow::Owned(api)),
+        );
         for payload in payloads {
             let callback: CallbackQuery = serde_json::from_value(serde_json::json!({
                 "id": "panel-click",
@@ -4918,15 +5060,17 @@ mod tests {
             panic!("expected article result");
         };
         let keyboard = article.reply_markup.unwrap().inline_keyboard;
-        assert_eq!(keyboard[0][0].text, "切换繁体");
-        let CallbackData(callback) = &keyboard[0][0].kind else {
+        assert_eq!(&*keyboard[0][0].text, "切换繁体");
+        let Some(callback) = keyboard[0][0].callback_data.as_deref() else {
             panic!("expected callback button");
         };
         assert_eq!(callback, "music ilyric a 1624001324 t");
-        let InputMessageContent::Text(content) = article.input_message_content else {
+        let telers::types::InputMessageContent::InputTextMessageContent(content) =
+            article.input_message_content
+        else {
             panic!("expected text content");
         };
-        assert_eq!(content.parse_mode, Some(ParseMode::Html));
+        assert_eq!(content.parse_mode.as_deref(), Some("HTML"));
         assert!(content.message_text.contains("<blockquote expandable>"));
     }
 
@@ -5039,13 +5183,10 @@ mod tests {
         let markup = track_menu_for_context(&track, Some(&query), false, 0).unwrap();
         let callback = markup.inline_keyboard[0]
             .iter()
-            .find_map(|button| match &button.kind {
-                teloxide::types::InlineKeyboardButtonKind::CallbackData(data)
-                    if button.text == "搜索更多" =>
-                {
-                    Some(data.as_str())
-                }
-                _ => None,
+            .find_map(|button| {
+                (&*button.text == "搜索更多")
+                    .then_some(button.callback_data.as_deref())
+                    .flatten()
             })
             .unwrap();
         let MusicCallbackAction::SearchMore(query) = MusicCallbackAction::decode(callback).unwrap()
@@ -5071,11 +5212,11 @@ mod tests {
         };
         let markup = track_menu_for_context(&track, None, true, -100123).unwrap();
         assert_eq!(markup.inline_keyboard.len(), 2);
-        assert_eq!(markup.inline_keyboard[0][0].text, "获取封面");
-        assert_eq!(markup.inline_keyboard[0][1].text, "搜索更多");
+        assert_eq!(&*markup.inline_keyboard[0][0].text, "获取封面");
+        assert_eq!(&*markup.inline_keyboard[0][1].text, "搜索更多");
         let action_labels = markup.inline_keyboard[1]
             .iter()
-            .map(|button| button.text.as_str())
+            .map(|button| &*button.text)
             .collect::<Vec<_>>();
         assert_eq!(action_labels, vec!["歌词", "收藏", "群收藏"]);
     }
@@ -5085,7 +5226,7 @@ mod tests {
             .inline_keyboard
             .iter()
             .flatten()
-            .map(|button| button.text.as_str())
+            .map(|button| &*button.text)
             .collect()
     }
 
@@ -5123,13 +5264,13 @@ mod tests {
 
     #[test]
     fn remove_lyric_buttons_strips_only_lyric_buttons() {
-        let lyric = InlineKeyboardButton::callback(
+        let lyric = callback_button(
             "歌词",
             MusicCallbackAction::Lyrics(MusicPlatform::Tencent, "12345".to_string(), None)
                 .encode()
                 .unwrap(),
         );
-        let inline_lyric = InlineKeyboardButton::callback(
+        let inline_lyric = callback_button(
             "切换繁体",
             MusicCallbackAction::InlineLyrics(
                 MusicPlatform::Tencent,
@@ -5139,7 +5280,7 @@ mod tests {
             .encode()
             .unwrap(),
         );
-        let favorite = InlineKeyboardButton::callback(
+        let favorite = callback_button(
             "收藏",
             MusicCallbackAction::Favorite(MusicFavoriteAction::Toggle {
                 scope: FavoriteScope::User,
@@ -5155,7 +5296,7 @@ mod tests {
         // 歌词按钮所在行剩收藏，纯歌词行整行消失
         assert_eq!(filtered.inline_keyboard.len(), 1);
         assert_eq!(filtered.inline_keyboard[0].len(), 1);
-        assert_eq!(filtered.inline_keyboard[0][0].text, "收藏");
+        assert_eq!(&*filtered.inline_keyboard[0][0].text, "收藏");
 
         // 没有歌词按钮时返回 None，表示无需编辑
         let markup = InlineKeyboardMarkup::new([vec![favorite]]);
@@ -5302,13 +5443,13 @@ mod tests {
         let InlineQueryResult::Article(article) = result else {
             panic!("expected article result");
         };
-        assert_eq!(article.title, "稻香 - 周杰伦");
+        assert_eq!(&*article.title, "稻香 - 周杰伦");
         assert_eq!(
-            article.thumbnail_url.unwrap().as_str(),
+            &*article.thumbnail_url.unwrap(),
             "https://example.com/cover.jpg"
         );
         let keyboard = article.reply_markup.unwrap().inline_keyboard;
-        assert_eq!(keyboard[0][0].text, "没反应？点此刷新");
+        assert_eq!(&*keyboard[0][0].text, "没反应？点此刷新");
     }
 
     #[test]
@@ -5356,14 +5497,14 @@ mod tests {
         };
         let markup = inline_track_menu(&track).unwrap();
         assert_eq!(markup.inline_keyboard.len(), 2);
-        assert_eq!(markup.inline_keyboard[0][0].text, "获取封面");
-        assert_eq!(markup.inline_keyboard[0][1].text, "搜索更多");
-        assert_eq!(markup.inline_keyboard[1][0].text, "歌词");
-        let CallbackData(callback) = &markup.inline_keyboard[1][0].kind else {
+        assert_eq!(&*markup.inline_keyboard[0][0].text, "获取封面");
+        assert_eq!(&*markup.inline_keyboard[0][1].text, "搜索更多");
+        assert_eq!(&*markup.inline_keyboard[1][0].text, "歌词");
+        let Some(callback) = markup.inline_keyboard[1][0].callback_data.as_deref() else {
             panic!("expected lyric callback");
         };
         assert_eq!(callback, "music lyric a 1624001324");
-        assert_eq!(markup.inline_keyboard[1][1].text, "收藏");
+        assert_eq!(&*markup.inline_keyboard[1][1].text, "收藏");
     }
 
     #[test]
@@ -5407,10 +5548,10 @@ mod tests {
             .map(|row| {
                 row.iter()
                     .map(|button| {
-                        let InlineKeyboardButtonKind::CallbackData(data) = &button.kind else {
+                        let Some(data) = button.callback_data.as_deref() else {
                             panic!("expected callback button");
                         };
-                        (button.text.clone(), data.clone())
+                        (button.text.to_string(), data.to_string())
                     })
                     .collect()
             })

@@ -1,11 +1,6 @@
-use super::*;
 use crate::dao::mysql::wordcloud;
+use crate::{funcs::pkg::escape::markdown, *};
 use std::collections::HashMap;
-use teloxide::{
-    prelude::*,
-    types::{ChatId, InputFile, ParseMode},
-    utils::markdown,
-};
 
 pub async fn wcloud(bot: &Bot, group: i64) -> Result<(), BotError> {
     //转换为wordcloud需要的HashMap
@@ -15,9 +10,8 @@ pub async fn wcloud(bot: &Bot, group: i64) -> Result<(), BotError> {
         .map(|w| (w.word.as_str(), w.frequency))
         .collect();
     //处理没有记录的情况
-    let group = ChatId(group);
     if words.is_empty() {
-        bot.send_message(group, "群里太冷清了，热闹一点吧！")
+        bot.send(SendMessage::new(group, "群里太冷清了，热闹一点吧！"))
             .await?;
         return Ok(());
     }
@@ -26,8 +20,7 @@ pub async fn wcloud(bot: &Bot, group: i64) -> Result<(), BotError> {
     //生成词云到内存
     super::builder::build(&mut png, words)?;
 
-    bot.send_photo(group, InputFile::memory(png))
-        .disable_notification(true)
+    bot.send(SendPhoto::new(group, InputFile::buffered(png)).disable_notification(true))
         .await?;
     Ok(())
 }
@@ -43,15 +36,17 @@ pub async fn user_freq(bot: &Bot, group: i64) -> Result<(), BotError> {
         .map(|u| format!("*{}* 发言: `{}` 句", markdown::escape(&u.name), u.frequency))
         .collect::<Vec<String>>()
         .join("\n");
-    bot.send_message(
-        ChatId(group),
-        format!(
-            "*📝发言统计*\n🕙`{}`\n\n*群里的活跃用户：*\n{}",
-            markdown::escape(&time),
-            users_str
-        ),
+    bot.send(
+        SendMessage::new(
+            group,
+            format!(
+                "*📝发言统计*\n🕙`{}`\n\n*群里的活跃用户：*\n{}",
+                markdown::escape(&time),
+                users_str
+            ),
+        )
+        .parse_mode(ParseMode::MarkdownV2),
     )
-    .parse_mode(ParseMode::MarkdownV2)
     .await?;
     Ok(())
 }

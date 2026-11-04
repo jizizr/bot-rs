@@ -50,8 +50,10 @@ pub async fn vv(bot: &Bot, msg: &Message) -> BotResult {
         language_tag,
     )?)
     .await?;
-    bot.send_photo(msg.chat.id, InputFile::url(pic_url))
-        .reply_parameters(ReplyParameters::new(msg.id))
-        .await?;
+    bot.send(
+        SendPhoto::new(msg.chat().id(), InputFile::url(pic_url))
+            .reply_parameters(reply_to(msg.message_id())),
+    )
+    .await?;
     Ok(())
 }

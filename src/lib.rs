@@ -4,11 +4,16 @@ use funcs::{command::command_handler, text::text_handler};
 use lazy_static::lazy_static;
 use myclap::clap::MyErrorFormatter;
 use serde::de::DeserializeOwned;
+use std::sync::OnceLock;
 use std::{collections::VecDeque, fs::File, io::Read, time::Duration};
-use teloxide::{
+pub use telers::{
     Bot,
-    prelude::*,
-    types::{Chat, Me, MessageKind},
+    enums::ParseMode,
+    methods::*,
+    types::{
+        CallbackQuery, Chat, ChosenInlineResult, InlineKeyboardButton, InlineKeyboardMarkup,
+        InlineQuery, InputFile, MaybeInaccessibleMessage, Message, ReplyParameters, User,
+    },
 };
 use tokio::{
     io::{self, AsyncWriteExt},
@@ -50,7 +55,7 @@ pub enum BotError {
     #[error("{}", .0)]
     Busy(String),
     #[error("{}", .0)]
-    Send(#[from] teloxide::RequestError),
+    Send(#[from] telers::errors::SessionErrorKind),
     #[error("{}", .0)]
     IOError(#[from] std::io::Error),
     #[error("{}", .0)]
@@ -74,8 +79,6 @@ pub enum BotError {
     #[error("{}", .0)]
     SslError(#[from] x509_parser::nom::Err<x509_parser::error::X509Error>),
     #[error("{}", .0)]
-    BotCommandParseError(#[from] teloxide::utils::command::ParseError),
-    #[error("{}", .0)]
     MongoError(#[from] mongodb::error::Error),
     #[error("{}", .0)]
     PaintError(#[from] charts_rs::CanvasError),
@@ -83,14 +86,14 @@ pub enum BotError {
 
 lazy_static! {
     pub static ref BOT: Bot = {
-        let client = reqwest::Client::builder()
+        let client = telers_reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(300))
             .tcp_nodelay(true)
             .build()
             .expect("telegram client creation failed");
-        let bot = Bot::with_client(&SETTINGS.bot.token, client);
-        match SETTINGS
+        let session = telers::client::Reqwest::new(client);
+        let session = match SETTINGS
             .bot
             .api_url
             .as_deref()
@@ -99,11 +102,19 @@ lazy_static! {
         {
             Some(api_url) => {
                 let api_url = api_url.trim_end_matches('/');
-                let api_url = reqwest::Url::parse(api_url).expect("invalid telegram bot api_url");
-                bot.set_api_url(api_url)
+                reqwest::Url::parse(api_url).expect("invalid telegram bot api_url");
+                session.with_api_server(std::borrow::Cow::Owned(
+                    telers::client::telegram::APIServer::new(
+                        &format!("{api_url}/bot{{token}}/{{method_name}}"),
+                        &format!("{api_url}/file/bot{{token}}/{{path}}"),
+                        false,
+                        telers::client::telegram::BareFilesPathWrapper,
+                    ),
+                ))
             }
-            None => bot,
-        }
+            None => session,
+        };
+        Bot::with_client(&SETTINGS.bot.token, session)
     };
     pub static ref HTTP_CLIENT: reqwest::Client = reqwest::Client::new();
 }
@@ -221,6 +232,69 @@ where
     }
 }
 
+/// Shows "typing…" in the chat while a slow command works; best effort.
+pub fn show_typing(bot: &Bot, chat_id: i64) {
+    let bot = bot.clone();
+    tokio::spawn(async move { bot.send(SendChatAction::new(chat_id, "typing")).await });
+}
+
+pub fn callback_button(
+    text: impl Into<Box<str>>,
+    data: impl Into<Box<str>>,
+) -> InlineKeyboardButton {
+    InlineKeyboardButton::new(text).callback_data(data)
+}
+
+pub fn url_button(text: impl Into<Box<str>>, url: url::Url) -> InlineKeyboardButton {
+    InlineKeyboardButton::new(text).url(String::from(url))
+}
+
+/// Lets the user pick a chat and starts an inline query there.
+pub fn switch_inline_button(
+    text: impl Into<Box<str>>,
+    query: impl Into<Box<str>>,
+) -> InlineKeyboardButton {
+    InlineKeyboardButton::new(text).switch_inline_query(query)
+}
+
+/// Starts an inline query in the current chat.
+pub fn switch_inline_current_chat_button(
+    text: impl Into<Box<str>>,
+    query: impl Into<Box<str>>,
+) -> InlineKeyboardButton {
+    InlineKeyboardButton::new(text).switch_inline_query_current_chat(query)
+}
+
+/// The rows of a keyboard, to add more.
+pub fn keyboard_rows(markup: InlineKeyboardMarkup) -> Vec<Vec<InlineKeyboardButton>> {
+    markup
+        .inline_keyboard
+        .into_vec()
+        .into_iter()
+        .map(Vec::from)
+        .collect()
+}
+
+/// Telegram refuses an edit that would change nothing.
+pub fn is_not_modified(err: &BotError) -> bool {
+    matches!(
+        err,
+        BotError::Send(telers::errors::SessionErrorKind::Telegram(
+            telers::errors::TelegramErrorKind::BadRequest { message },
+        )) if message.contains("message is not modified")
+    )
+}
+
+/// Sends a message without a link preview.
+pub fn no_link_preview() -> telers::types::LinkPreviewOptions {
+    telers::types::LinkPreviewOptions::new().is_disabled(true)
+}
+
+/// Replies to `message_id` in the same chat.
+pub fn reply_to(message_id: i64) -> ReplyParameters {
+    ReplyParameters::new().message_id(message_id)
+}
+
 pub fn getor(msg: &Message) -> Option<&str> {
     msg.text().or(msg.caption())
 }
@@ -240,40 +314,49 @@ pub async fn get<T: DeserializeOwned>(url: &str) -> Result<T, reqwest::Error> {
     Ok(model)
 }
 
+/// The bot's own account, fetched once at startup.
+pub static ME: OnceLock<User> = OnceLock::new();
+
+pub fn me() -> &'static User {
+    ME.get()
+        .expect("bot identity is fetched before handling updates")
+}
+
 fn chat_info(chat: &Chat) -> String {
     format!(
         "群组ID：{}\n群组名称：@{}\n群组标题：{}",
-        chat.id,
+        chat.id(),
         chat.username().unwrap_or_default(),
         chat.title().unwrap_or_default()
     )
 }
 
-pub async fn msg_handler(bot: Bot, msg: Message, me: Me) -> BotResult {
-    match &msg.kind {
-        MessageKind::LeftChatMember(user_info) => {
-            if me.user.id != user_info.left_chat_member.id {
+pub async fn msg_handler(bot: Bot, msg: Message) -> BotResult {
+    let me = me();
+    match &msg {
+        Message::LeftChatMember(left) => {
+            if me.id != left.left_chat_member.id {
                 return Ok(());
             }
-            bot.send_message(
-                ChatId(SETTINGS.bot.owner),
-                format!("被群组移出：\n{}", chat_info(&msg.chat)),
-            )
+            bot.send(SendMessage::new(
+                SETTINGS.bot.owner,
+                format!("被群组移出：\n{}", chat_info(msg.chat())),
+            ))
             .await?;
         }
-        MessageKind::NewChatMembers(users) => {
-            if !users.new_chat_members.iter().any(|u| u.id == me.user.id) {
+        Message::NewChatMembers(joined) => {
+            if !joined.new_chat_members.iter().any(|u| u.id == me.id) {
                 return Ok(());
             }
-            bot.send_message(
-                ChatId(SETTINGS.bot.owner),
-                format!("被群组邀请：\n{}", chat_info(&msg.chat)),
-            )
+            bot.send(SendMessage::new(
+                SETTINGS.bot.owner,
+                format!("被群组邀请：\n{}", chat_info(msg.chat())),
+            ))
             .await?;
         }
         _ => {}
     };
-    if command_handler(&bot, &msg, &me).await.is_ok() {
+    if command_handler(&bot, &msg, me).await.is_ok() {
         return Ok(());
     }
     text_handler(&bot, &msg).await

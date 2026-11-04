@@ -19,18 +19,18 @@ pub async fn count(bot: &Bot, msg: &Message) -> BotResult {
     let command =
         CountCmd::parse_i18n_from_bot(getor(msg).unwrap().split_whitespace(), language_tag)?;
     let datas = query_data(
-        msg.chat.id.0,
-        msg.from
-            .as_ref()
+        msg.chat().id(),
+        msg.from()
             .ok_or(BotError::Custom("failed to get uid".to_string()))?
-            .id
-            .0,
+            .id as u64,
         command.duration,
     )
     .await?;
 
-    bot.send_photo(msg.chat.id, InputFile::memory(paint(datas)?))
-        .reply_parameters(ReplyParameters::new(msg.id))
-        .await?;
+    bot.send(
+        SendPhoto::new(msg.chat().id(), InputFile::buffered(paint(datas)?))
+            .reply_parameters(reply_to(msg.message_id())),
+    )
+    .await?;
     Ok(())
 }

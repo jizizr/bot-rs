@@ -41,17 +41,13 @@ async fn get_today(msg: &Message) -> Result<String, BotError> {
 }
 
 pub async fn today(bot: &Bot, msg: &Message) -> BotResult {
-    bot.send_message(msg.chat.id, get_today(msg).await?)
-        .parse_mode(ParseMode::MarkdownV2)
-        .link_preview_options(LinkPreviewOptions {
-            is_disabled: true,
-            url: None,
-            prefer_small_media: false,
-            prefer_large_media: false,
-            show_above_text: false,
-        })
-        .reply_parameters(ReplyParameters::new(msg.id))
-        .await?;
+    bot.send(
+        SendMessage::new(msg.chat().id(), get_today(msg).await?)
+            .parse_mode(ParseMode::MarkdownV2)
+            .link_preview_options(no_link_preview())
+            .reply_parameters(reply_to(msg.message_id())),
+    )
+    .await?;
     Ok(())
 }
 

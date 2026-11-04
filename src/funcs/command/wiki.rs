@@ -66,9 +66,11 @@ async fn get_wiki(msg: &Message) -> Result<String, BotError> {
 }
 
 pub async fn wiki(bot: &Bot, msg: &Message) -> BotResult {
-    bot.send_message(msg.chat.id, &get_wiki(msg).await?)
-        .parse_mode(ParseMode::MarkdownV2)
-        .reply_parameters(ReplyParameters::new(msg.id))
-        .await?;
+    bot.send(
+        SendMessage::new(msg.chat().id(), get_wiki(msg).await?)
+            .parse_mode(ParseMode::MarkdownV2)
+            .reply_parameters(reply_to(msg.message_id())),
+    )
+    .await?;
     Ok(())
 }

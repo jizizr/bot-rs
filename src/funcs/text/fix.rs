@@ -70,9 +70,7 @@ pub async fn fix(bot: &Bot, msg: &Message) -> BotResult {
     }
     let t: String = buffer.chars().filter(|&c| c != '\0').collect();
     if !t.trim_end().is_empty() {
-        bot.send_message(msg.chat.id, t)
-            .reply_parameters(ReplyParameters::new(msg.id))
-            .send()
+        bot.send(SendMessage::new(msg.chat().id(), t).reply_parameters(reply_to(msg.message_id())))
             .await?;
     }
     Ok(())

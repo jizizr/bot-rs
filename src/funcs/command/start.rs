@@ -7,9 +7,8 @@ pub async fn start(bot: &Bot, msg: &Message) -> BotResult {
     {
         return music::inline_platform_picker(bot, msg).await;
     }
-    bot.send_message(msg.chat.id,
-        "你好！我是Allen，使用 [teloxide](https://github.com/teloxide/teloxide) Telegram Bot API 包装器和 \
+    bot.send(SendMessage::new(msg.chat().id(), "你好！我是Allen，使用 [telers](https://github.com/Desiders/telers) Telegram Bot API 框架和 \
     [Rust](https://www.rust\\-lang\\.org/) 编程语言书写。开源地址：https://github\\.com/jizizr/bot\\-rs 。\n发送 */help* 了解我的指令！")
-    .parse_mode(ParseMode::MarkdownV2).reply_parameters(ReplyParameters::new(msg.id)).await?;
+    .parse_mode(ParseMode::MarkdownV2).reply_parameters(reply_to(msg.message_id()))).await?;
     Ok(())
 }

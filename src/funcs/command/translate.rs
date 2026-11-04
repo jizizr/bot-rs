@@ -1,7 +1,6 @@
 use super::*;
 use lingua::{Language, LanguageDetector, LanguageDetectorBuilder};
 use serde_json::Value;
-use teloxide::types::MaybeInaccessibleMessage;
 lazy_static! {
     static ref CLIENT: ClientWithMiddleware =
         retry_client(reqwest::Client::builder().build().unwrap(), 2);
@@ -71,11 +70,12 @@ async fn translate_req(tl: &str, text: &str, is_compare: bool) -> Result<String,
 }
 
 fn compare_info(msg: &Message) -> Result<bool, BotError> {
-    if let CallbackData(data) = &msg
+    if let Some(data) = msg
         .reply_markup()
         .ok_or(BotError::Custom("No reply_markup".to_string()))?
         .inline_keyboard[0][0]
-        .kind
+        .callback_data
+        .as_deref()
     {
         if data == "trans one" {
             Ok(true)
@@ -90,11 +90,12 @@ fn compare_info(msg: &Message) -> Result<bool, BotError> {
 }
 
 fn tl_info(msg: &Message) -> Result<&str, BotError> {
-    if let CallbackData(data) = &msg
+    if let Some(data) = msg
         .reply_markup()
         .ok_or(BotError::Custom("No reply_markup".to_string()))?
         .inline_keyboard[0][1]
-        .kind
+        .callback_data
+        .as_deref()
     {
         Ok(data.splitn(2, ' ').last().ok_or(BotError::Custom(
             "Unknown Error in [Translate tl_info]".to_string(),
@@ -108,17 +109,17 @@ fn tl_info(msg: &Message) -> Result<&str, BotError> {
 
 pub async fn translate_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> {
     if let Some(translate) = q.data {
-        bot.answer_callback_query(q.id).await?;
+        bot.send(AnswerCallbackQuery::new(q.id)).await?;
         let mut translate = translate.splitn(2, ' ');
         let mbi_msg = match q.message {
             None => return Ok(()),
             Some(msg) => msg,
         };
-        let msg = match mbi_msg {
-            MaybeInaccessibleMessage::Inaccessible(_) => return Ok(()),
-            MaybeInaccessibleMessage::Regular(msg) => msg,
+        let msg = match *mbi_msg {
+            MaybeInaccessibleMessage::InaccessibleMessage(_) => return Ok(()),
+            MaybeInaccessibleMessage::Message(msg) => msg,
         };
-        let _guard = lock!((msg.chat.id, msg.id));
+        let _guard = lock!((msg.chat().id(), msg.message_id()));
         let is_compare;
         let tl;
         match translate.next() {
@@ -146,17 +147,23 @@ pub async fn translate_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotErr
         }
         match &msg.reply_to_message() {
             Some(m) => {
-                bot.edit_message_text(
-                    msg.chat.id,
-                    msg.id,
-                    get_translate(m, Some(tl), is_compare, true).await?.0,
+                bot.send(
+                    EditMessageText::new()
+                        .chat_id(msg.chat().id())
+                        .message_id(msg.message_id())
+                        .text(get_translate(m, Some(tl), is_compare, true).await?.0)
+                        .reply_markup(translate_menu(is_compare, tl)),
                 )
-                .reply_markup(translate_menu(is_compare, tl))
                 .await?;
             }
             None => {
-                bot.edit_message_text(msg.chat.id, msg.id, "待翻译文本已被删除")
-                    .await?;
+                bot.send(
+                    EditMessageText::new()
+                        .chat_id(msg.chat().id())
+                        .message_id(msg.message_id())
+                        .text("待翻译文本已被删除"),
+                )
+                .await?;
             }
         }
     }
@@ -164,12 +171,10 @@ pub async fn translate_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotErr
 }
 
 fn extract_text(message: &Message) -> Option<&str> {
-    if let MessageKind::Common(common) = &message.kind
-        && let MediaKind::Text(media_text) = &common.media_kind
-    {
-        return Some(&media_text.text);
+    match message {
+        Message::Text(text) => Some(&text.text),
+        _ => None,
     }
-    None
 }
 
 async fn get_translate<'a>(
@@ -177,13 +182,13 @@ async fn get_translate<'a>(
     tl: Option<&'a str>,
     is_compare: bool,
     is_callback: bool,
-) -> Result<(String, MessageId, &'a str), BotError> {
+) -> Result<(String, i64, &'a str), BotError> {
     let language_tag = Some("zh-CN");
     let (translate, mid) = match TranslateCmd::parse_i18n_from_bot(
         getor(msg).unwrap().split_whitespace(),
         language_tag,
     ) {
-        Ok(translate) => (translate, msg.id),
+        Ok(translate) => (translate, msg.message_id()),
         Err(e) => (
             TranslateCmd::parse_i18n_from_bot(
                 [
@@ -198,8 +203,8 @@ async fn get_translate<'a>(
                 language_tag,
             )?,
             match msg.reply_to_message() {
-                Some(m) => m.id,
-                None => msg.id,
+                Some(m) => m.message_id(),
+                None => msg.message_id(),
             },
         ),
     };
@@ -215,20 +220,22 @@ async fn get_translate<'a>(
 fn translate_menu(is_compare: bool, tl: &str) -> InlineKeyboardMarkup {
     let mut buttom = Vec::new();
     buttom.push(if is_compare {
-        InlineKeyboardButton::callback("对照翻译模式", "trans one")
+        callback_button("对照翻译模式", "trans one")
     } else {
-        InlineKeyboardButton::callback("普通翻译模式", "trans two")
+        callback_button("普通翻译模式", "trans two")
     });
-    buttom.push(InlineKeyboardButton::callback(tl, format!("trans {tl}")));
+    buttom.push(callback_button(tl, format!("trans {tl}")));
     InlineKeyboardMarkup::new(vec![buttom])
 }
 
 pub async fn translate(bot: &Bot, msg: &Message) -> BotResult {
     let is_compare = false;
     let (text, mid, tl) = get_translate(msg, None, is_compare, false).await?;
-    bot.send_message(msg.chat.id, text)
-        .reply_markup(translate_menu(is_compare, tl))
-        .reply_parameters(ReplyParameters::new(mid))
-        .await?;
+    bot.send(
+        SendMessage::new(msg.chat().id(), text)
+            .reply_markup(translate_menu(is_compare, tl))
+            .reply_parameters(reply_to(mid)),
+    )
+    .await?;
     Ok(())
 }

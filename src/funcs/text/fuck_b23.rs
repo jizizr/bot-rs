@@ -74,7 +74,8 @@ pub async fn fuck_b23(bot: &Bot, msg: &Message) -> BotResult {
         flag = true;
     }
     if flag {
-        bot.send_message(msg.chat.id, replaced).send().await?;
+        bot.send(SendMessage::new(msg.chat().id(), replaced))
+            .await?;
     }
     Ok(())
 }

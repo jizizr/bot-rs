@@ -60,7 +60,7 @@ impl_tuple!(0 A);
 macro_rules! with_switch {
     ($func:expr,$bot:expr, $msg:expr) => {
         async {
-            if SWITCH.get_status($msg.chat.id.0, stringify!($func).to_string()) {
+            if SWITCH.get_status($msg.chat().id(), stringify!($func).to_string()) {
                 $func($bot, $msg).await
             } else {
                 Ok(())

@@ -53,9 +53,7 @@ fn popular_coins_menu() -> InlineKeyboardMarkup {
         .map(|coins| {
             coins
                 .iter()
-                .map(|&coin_type| {
-                    InlineKeyboardButton::callback(coin_type, format!("coin {coin_type}"))
-                })
+                .map(|&coin_type| callback_button(coin_type, format!("coin {coin_type}")))
                 .collect()
         })
         .collect();
@@ -64,45 +62,65 @@ fn popular_coins_menu() -> InlineKeyboardMarkup {
 
 fn function_menu(coin_type: &str) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new([[
-        InlineKeyboardButton::callback("返回🔙", "coin back".to_string()),
-        InlineKeyboardButton::callback("刷新🔁", format!("coin {coin_type}")),
+        callback_button("返回🔙", "coin back".to_string()),
+        callback_button("刷新🔁", format!("coin {coin_type}")),
     ]])
 }
 
 pub async fn coin(bot: &Bot, msg: &Message) -> BotResult {
-    bot.send_message(msg.chat.id, "选择您要查询的虚拟货币")
-        .reply_markup(popular_coins_menu())
-        .await?;
+    bot.send(
+        SendMessage::new(msg.chat().id(), "选择您要查询的虚拟货币")
+            .reply_markup(popular_coins_menu()),
+    )
+    .await?;
     Ok(())
 }
 
 pub async fn coin_callback(bot: Bot, q: CallbackQuery) -> BotResult {
     if let Some(coin_type) = q.data {
-        bot.answer_callback_query(q.id).await?;
+        bot.send(AnswerCallbackQuery::new(q.id)).await?;
         if let Some(msg) = q.message {
-            let _guard = lock!((msg.chat().id, msg.id()));
-            if coin_type == "back" {
-                bot.edit_message_text(msg.chat().id, msg.id(), "选择您要查询的虚拟货币")
-                    .reply_markup(popular_coins_menu())
-                    .await?;
+            let _guard = lock!((msg.chat().id(), msg.message_id()));
+            if &*coin_type == "back" {
+                bot.send(
+                    EditMessageText::new()
+                        .chat_id(msg.chat().id())
+                        .message_id(msg.message_id())
+                        .text("选择您要查询的虚拟货币")
+                        .reply_markup(popular_coins_menu()),
+                )
+                .await?;
                 return Ok(());
             }
             let text = coin_handle(&coin_type.to_lowercase()).await;
-            bot.edit_message_text(msg.chat().id, msg.id(), text)
-                .reply_markup(function_menu(&coin_type))
-                .await?;
+            bot.send(
+                EditMessageText::new()
+                    .chat_id(msg.chat().id())
+                    .message_id(msg.message_id())
+                    .text(text)
+                    .reply_markup(function_menu(&coin_type)),
+            )
+            .await?;
         } else if let Some(id) = q.inline_message_id {
             let _guard = lock!(&id);
-            if coin_type == "back" {
-                bot.edit_message_text_inline(&id, "选择您要查询的虚拟货币")
-                    .reply_markup(popular_coins_menu())
-                    .await?;
+            if &*coin_type == "back" {
+                bot.send(
+                    EditMessageText::new()
+                        .inline_message_id(id.clone())
+                        .text("选择您要查询的虚拟货币")
+                        .reply_markup(popular_coins_menu()),
+                )
+                .await?;
                 return Ok(());
             }
             let text = coin_handle(&coin_type.to_lowercase()).await;
-            bot.edit_message_text_inline(&id, text)
-                .reply_markup(function_menu(&coin_type))
-                .await?;
+            bot.send(
+                EditMessageText::new()
+                    .inline_message_id(id.clone())
+                    .text(text)
+                    .reply_markup(function_menu(&coin_type)),
+            )
+            .await?;
         }
     }
 

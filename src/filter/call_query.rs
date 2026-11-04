@@ -25,8 +25,8 @@ pub async fn call_query_handler(bot: Bot, mut q: CallbackQuery) -> BotResult {
     let Some(binding) = q.data.clone() else {
         return Ok(());
     };
-    let (command, payload) = binding.split_once(' ').unwrap_or((binding.as_str(), ""));
-    q.data = Some(payload.to_string());
+    let (command, payload) = binding.split_once(' ').unwrap_or((&binding, ""));
+    q.data = Some(payload.into());
 
     let mut blog = BotLogBuilder::from(&q);
     let user = User::from(&q);
@@ -44,7 +44,7 @@ pub async fn call_query_handler(bot: Bot, mut q: CallbackQuery) -> BotResult {
         blog.set_error(e.to_string());
         blog.set_status(MessageStatus::RunError);
     });
-    blog.set_command(binding);
+    blog.set_command(binding.into());
     let _ = insert_log((&blog.into(), &user, &group)).await;
     Ok(())
 }

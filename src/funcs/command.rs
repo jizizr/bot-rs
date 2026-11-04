@@ -12,12 +12,7 @@ use std::{
     hash::{Hash, Hasher},
     ops::Deref,
 };
-use teloxide::types::{
-    ChatKind, ChosenInlineResult, InlineKeyboardButton, InlineKeyboardButtonKind::CallbackData,
-    InlineKeyboardMarkup, InlineQuery, InlineQueryResult, InlineQueryResultArticle, InputFile,
-    InputMessageContent, InputMessageContentText, LinkPreviewOptions, MediaKind, Message,
-    MessageId, MessageKind, ParseMode,
-};
+use telers::types::{BotCommand, ChatMember};
 
 pub mod chat;
 pub mod coin;
@@ -93,14 +88,17 @@ macro_rules! cmd {
     };
 }
 
-async fn auth(bot: &Bot, msg: &Message, user_id: UserId) -> Result<bool, BotError> {
-    match msg.chat.kind {
-        ChatKind::Private { .. } => Ok(true),
-        _ => {
-            let mconfig = bot.get_chat_member(msg.chat.id, user_id).await?;
-            Ok(mconfig.is_administrator() || mconfig.is_privileged())
-        }
+async fn auth(bot: &Bot, msg: &Message, user_id: i64) -> Result<bool, BotError> {
+    if matches!(msg.chat(), Chat::Private(_)) {
+        return Ok(true);
     }
+    let member = bot
+        .send(GetChatMember::new(msg.chat().id(), user_id))
+        .await?;
+    Ok(matches!(
+        member,
+        ChatMember::Creator(_) | ChatMember::Administrator(_)
+    ))
 }
 
 fn hashing<T: Hash>(s: T) -> u64 {
@@ -159,7 +157,7 @@ macro_rules! cmd_match {
     ($cmd:expr, $bot:expr, $msg:expr,$($stat:ident => $func:expr),+ $(,)?) => {
         match $cmd {
             Cmd::Help => {
-                $bot.send_message($msg.chat.id, Cmd::descriptions().to_string())
+                $bot.send(SendMessage::new($msg.chat().id(), Cmd::descriptions()))
                     .await
                     .map(|_| ())
                     .map_err(|e| e.into())
@@ -171,57 +169,101 @@ macro_rules! cmd_match {
     };
 }
 
-#[derive(BotCommands)]
-#[command(
-    rename_rule = "lowercase",
-    description = "These commands are supported:"
-)]
-pub enum Cmd {
-    #[command(description = "获取帮助信息")]
-    Help,
-    #[command(description = "发送这个了解我")]
-    Start,
-    #[command(description = "名人名言")]
-    My,
-    #[command(description = "获取实时虚拟货币价格")]
-    Coin,
-    #[command(description = "获取自己的id")]
-    Id,
-    #[command(description = "历史上的今天")]
-    Today,
-    #[command(description = "维基一下")]
-    Wiki,
-    #[command(description = "生成短链接")]
-    Short,
-    #[command(description = "查询实时汇率")]
-    Rate,
-    #[command(description = "生成词云")]
-    Wcloud,
-    #[command(description = "用户发言统计")]
-    UserFreq,
-    #[command(description = "curl")]
-    Curl,
-    #[command(description = "音乐")]
-    Music,
-    #[command(description = "功能开关")]
-    Config,
-    #[command(description = "Ai聊天")]
-    Chat,
-    #[command(description = "翻译", aliases = ["t"])]
-    Translate,
-    #[command(description = "Ping")]
-    Ping,
-    #[command(description = "小米刷机包链接")]
-    Rom,
-    #[command(description = "vv不削能玩？")]
-    Vv,
-    #[command(description = "发言趋势")]
-    Count,
-    #[command(hide)]
-    Test,
+/// A bot command: its name, other names, description, and whether it is
+/// left out of the command menu and /help.
+macro_rules! commands {
+    ($($variant:ident => $name:literal $([$($alias:literal),+])? $($hidden:ident)? : $description:literal,)+) => {
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub enum Cmd {
+            $($variant,)+
+        }
+
+        impl Cmd {
+            const ALL: &'static [(Cmd, &'static str, &'static [&'static str], &'static str, bool)] = &[
+                $((Cmd::$variant, $name, &[$($($alias),+)?], $description, commands!(@hidden $($hidden)?)),)+
+            ];
+        }
+    };
+    (@hidden hidden) => { true };
+    (@hidden) => { false };
 }
 
-pub async fn command_handler(bot: &Bot, msg: &Message, me: &Me) -> BotResult {
+commands! {
+    Help => "help": "获取帮助信息",
+    Start => "start": "发送这个了解我",
+    My => "my": "名人名言",
+    Coin => "coin": "获取实时虚拟货币价格",
+    Id => "id": "获取自己的id",
+    Today => "today": "历史上的今天",
+    Wiki => "wiki": "维基一下",
+    Short => "short": "生成短链接",
+    Rate => "rate": "查询实时汇率",
+    Wcloud => "wcloud": "生成词云",
+    UserFreq => "userfreq": "用户发言统计",
+    Curl => "curl": "curl",
+    Music => "music": "音乐",
+    Config => "config": "功能开关",
+    Chat => "chat": "Ai聊天",
+    Translate => "translate" ["t"]: "翻译",
+    Ping => "ping": "Ping",
+    Rom => "rom": "小米刷机包链接",
+    Vv => "vv": "vv不削能玩？",
+    Count => "count": "发言趋势",
+    Test => "test" hidden: "",
+}
+
+impl Cmd {
+    /// The command a message starts with, like Telegram clients address it:
+    /// `/name` or `/name@bot`, the latter only for this bot.
+    pub fn parse(text: &str, bot_username: &str) -> Option<Self> {
+        let word = text.split_whitespace().next()?.strip_prefix('/')?;
+        let name = match word.split_once('@') {
+            Some((name, username)) if username.eq_ignore_ascii_case(bot_username) => name,
+            Some(_) => return None,
+            None => word,
+        };
+        Self::ALL
+            .iter()
+            .find(|(_, command, aliases, _, _)| *command == name || aliases.contains(&name))
+            .map(|(cmd, ..)| *cmd)
+    }
+
+    fn visible() -> impl Iterator<
+        Item = &'static (
+            Cmd,
+            &'static str,
+            &'static [&'static str],
+            &'static str,
+            bool,
+        ),
+    > {
+        Self::ALL.iter().filter(|(.., hidden)| !hidden)
+    }
+
+    pub fn descriptions() -> String {
+        let lines = Self::visible().map(|(_, name, aliases, description, _)| {
+            let names = std::iter::once(name)
+                .chain(aliases.iter())
+                .map(|name| format!("/{name}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{names} — {description}")
+        });
+        std::iter::once("These commands are supported:".to_string())
+            .chain(std::iter::once(String::new()))
+            .chain(lines)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    pub fn bot_commands() -> Vec<BotCommand> {
+        Self::visible()
+            .map(|(_, name, _, description, _)| BotCommand::new(*name, *description))
+            .collect()
+    }
+}
+
+pub async fn command_handler(bot: &Bot, msg: &Message, me: &User) -> BotResult {
     // 安全地获取消息文本，没有文本则返回 Err，
     // 让 msg_handler 落入 text_handler（贴纸等非文本消息也需要被处理）
     let text = match getor(msg) {
@@ -229,7 +271,8 @@ pub async fn command_handler(bot: &Bot, msg: &Message, me: &Me) -> BotResult {
         None => return Err(BotError::Custom("不是命令：消息没有文本内容".to_string())),
     };
 
-    let cmd = BotCommands::parse(text, me.username())?;
+    let cmd = Cmd::parse(text, me.username.as_deref().unwrap_or_default())
+        .ok_or_else(|| BotError::Custom("不是命令".to_string()))?;
     let mut log = BotLogBuilder::from(msg);
     let cmd_result: Result<(), BotError> = cmd_match!(
         cmd,
@@ -258,11 +301,10 @@ pub async fn command_handler(bot: &Bot, msg: &Message, me: &Me) -> BotResult {
     );
     if let Err(e) = cmd_result {
         let err_msg = format!("{e}");
-        tokio::spawn(
-            bot.send_message(msg.chat.id, err_msg.clone())
-                .reply_parameters(ReplyParameters::new(msg.id))
-                .send(),
-        );
+        let request = SendMessage::new(msg.chat().id(), err_msg.clone())
+            .reply_parameters(reply_to(msg.message_id()));
+        let bot = bot.clone();
+        tokio::spawn(async move { bot.send(request).await });
         match e {
             BotError::Clap(_, _) | BotError::Clap2(_, _) => {
                 log.set_status(MessageStatus::CmdError);
@@ -278,4 +320,33 @@ pub async fn command_handler(bot: &Bot, msg: &Message, me: &Me) -> BotResult {
     let group = model::Group::from(msg);
     let _ = insert_log((&log.into(), &user, &group)).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_commands_like_telegram_addresses_them() {
+        assert_eq!(Cmd::parse("/music 晴天", "allen_bot"), Some(Cmd::Music));
+        assert_eq!(
+            Cmd::parse("/music@Allen_Bot 晴天", "allen_bot"),
+            Some(Cmd::Music)
+        );
+        assert_eq!(Cmd::parse("/t hello", "allen_bot"), Some(Cmd::Translate));
+        assert_eq!(Cmd::parse("/userfreq", "allen_bot"), Some(Cmd::UserFreq));
+        assert_eq!(Cmd::parse("/music@other_bot 晴天", "allen_bot"), None);
+        assert_eq!(Cmd::parse("/unknown", "allen_bot"), None);
+        assert_eq!(Cmd::parse("music", "allen_bot"), None);
+    }
+
+    #[test]
+    fn hidden_commands_stay_out_of_menus() {
+        let commands = Cmd::bot_commands();
+        assert!(commands.iter().all(|command| &*command.command != "test"));
+        assert_eq!(commands.len(), Cmd::ALL.len() - 1);
+        let help = Cmd::descriptions();
+        assert!(help.contains("/translate, /t — 翻译"));
+        assert!(!help.contains("/test"));
+    }
 }

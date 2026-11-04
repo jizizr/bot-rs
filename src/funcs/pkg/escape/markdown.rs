@@ -34,3 +34,51 @@ fn escape_special_chars(text: &str) -> String {
         })
         .collect()
 }
+
+/// Escapes text for MarkdownV2 outside code and links.
+pub fn escape(text: &str) -> String {
+    escape_with(text, |c| {
+        matches!(
+            c,
+            '\\' | '_'
+                | '*'
+                | '['
+                | ']'
+                | '('
+                | ')'
+                | '~'
+                | '`'
+                | '>'
+                | '#'
+                | '+'
+                | '-'
+                | '='
+                | '|'
+                | '{'
+                | '}'
+                | '.'
+                | '!'
+        )
+    })
+}
+
+/// Escapes the URL part of an inline MarkdownV2 link.
+pub fn escape_link_url(text: &str) -> String {
+    escape_with(text, |c| matches!(c, '\\' | ')'))
+}
+
+/// Escapes text inside MarkdownV2 inline code or code blocks.
+pub fn escape_code(text: &str) -> String {
+    escape_with(text, |c| matches!(c, '\\' | '`'))
+}
+
+fn escape_with(text: &str, special: impl Fn(char) -> bool) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for c in text.chars() {
+        if special(c) {
+            escaped.push('\\');
+        }
+        escaped.push(c);
+    }
+    escaped
+}

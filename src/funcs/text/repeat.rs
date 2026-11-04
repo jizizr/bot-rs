@@ -84,13 +84,13 @@ pub async fn repeat(bot: &Bot, msg: &Message) -> BotResult {
     let m: String = match getor(msg) {
         Some(m) => m.to_string(),
         None => match msg.sticker() {
-            Some(sticker) => &sticker.file.unique_id,
+            Some(sticker) => sticker.file_unique_id(),
             None => return Ok(()),
         }
         .to_string(),
     };
-    let m = MessageConfig::new(m, msg.from.as_ref().unwrap().id.0);
-    let should_forward = match MESSAGE_MAP.get_mut(&msg.chat.id.0) {
+    let m = MessageConfig::new(m, msg.from().unwrap().id as u64);
+    let should_forward = match MESSAGE_MAP.get_mut(&msg.chat().id()) {
         Some(mut mc) => {
             let result = search(mc.value_mut(), &m);
             if !result {
@@ -101,14 +101,17 @@ pub async fn repeat(bot: &Bot, msg: &Message) -> BotResult {
         None => {
             let mut vd: FixedQueue<MessageConfig> = FixedQueue::new(5);
             vd.push(m);
-            MESSAGE_MAP.insert(msg.chat.id.0, vd);
+            MESSAGE_MAP.insert(msg.chat().id(), vd);
             false
         }
     };
     if should_forward {
-        bot.forward_message(msg.chat.id, msg.chat.id, msg.id)
-            .send()
-            .await?;
+        bot.send(ForwardMessage::new(
+            msg.chat().id(),
+            msg.chat().id(),
+            msg.message_id(),
+        ))
+        .await?;
     }
     Ok(())
 }

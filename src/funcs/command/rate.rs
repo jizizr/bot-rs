@@ -88,10 +88,11 @@ fn parse(raw: &str) -> Result<(f64, &str), BotError> {
 }
 
 pub async fn rate(bot: &Bot, msg: &Message) -> BotResult {
-    bot.send_message(msg.chat.id, get_rate(msg).await?)
-        .reply_parameters(ReplyParameters::new(msg.id))
-        .parse_mode(ParseMode::MarkdownV2)
-        .send()
-        .await?;
+    bot.send(
+        SendMessage::new(msg.chat().id(), get_rate(msg).await?)
+            .reply_parameters(reply_to(msg.message_id()))
+            .parse_mode(ParseMode::MarkdownV2),
+    )
+    .await?;
     Ok(())
 }

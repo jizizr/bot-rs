@@ -1,2 +1,2 @@
-use teloxide::prelude::*;
+use crate::*;
 pub mod call_query;

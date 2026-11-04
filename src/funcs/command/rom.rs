@@ -440,24 +440,19 @@ async fn get_rom(msg: &Message) -> Result<Vec<String>, BotError> {
 }
 
 pub async fn rom(bot: &Bot, msg: &Message) -> BotResult {
-    tokio::spawn(bot.send_chat_action(msg.chat.id, ChatAction::Typing).send());
-    let mut reply_to = msg.id;
+    show_typing(bot, msg.chat().id());
+    let mut reply_target = msg.message_id();
     for (index, message) in get_rom(msg).await?.into_iter().enumerate() {
         let sent = bot
-            .send_message(msg.chat.id, message)
-            .parse_mode(ParseMode::Html)
-            .reply_parameters(ReplyParameters::new(reply_to))
-            .link_preview_options(LinkPreviewOptions {
-                is_disabled: true,
-                url: None,
-                prefer_small_media: false,
-                prefer_large_media: false,
-                show_above_text: false,
-            })
-            .send()
+            .send(
+                SendMessage::new(msg.chat().id(), message)
+                    .parse_mode(ParseMode::HTML)
+                    .reply_parameters(reply_to(reply_target))
+                    .link_preview_options(no_link_preview()),
+            )
             .await?;
-        if index == 0 || sent.id != reply_to {
-            reply_to = sent.id;
+        if index == 0 || sent.message_id() != reply_target {
+            reply_target = sent.message_id();
         }
     }
     Ok(())

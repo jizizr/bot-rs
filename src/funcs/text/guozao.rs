@@ -1,5 +1,3 @@
-use teloxide::types::ParseMode;
-
 use super::*;
 
 fn contains_chinese(text: &str) -> bool {
@@ -14,15 +12,15 @@ pub async fn guozao(bot: &Bot, msg: &Message) -> BotResult {
         return Ok(());
     }
     let me = {
-        let u = msg.from.as_ref().unwrap();
-        fmt_at(&get_name(u), u.id.0)
+        let u = msg.from().unwrap();
+        fmt_at(&get_name(u), u.id)
     };
     let play_with = match msg.reply_to_message() {
         Some(m) => {
-            let u = m.from.as_ref().unwrap();
-            fmt_at(&get_name(u), u.id.0)
+            let u = m.from().unwrap();
+            fmt_at(&get_name(u), u.id)
         }
-        None => format!("[自己](tg://user?id={})", msg.from.as_ref().unwrap().id),
+        None => format!("[自己](tg://user?id={})", msg.from().unwrap().id),
     };
     let text = if args.len() == 1 {
         format!("{} {}了 {}", me, &args[0][1..], play_with)
@@ -36,9 +34,11 @@ pub async fn guozao(bot: &Bot, msg: &Message) -> BotResult {
         )
     };
     let text = text.replace("$from", &me).replace("$to", &play_with);
-    bot.send_message(msg.chat.id, text)
-        .reply_parameters(ReplyParameters::new(msg.id))
-        .parse_mode(ParseMode::MarkdownV2)
-        .await?;
+    bot.send(
+        SendMessage::new(msg.chat().id(), text)
+            .reply_parameters(reply_to(msg.message_id()))
+            .parse_mode(ParseMode::MarkdownV2),
+    )
+    .await?;
     Ok(())
 }

@@ -270,7 +270,7 @@ pub async fn ping(bot: &Bot, msg: &Message) -> Result<(), BotError> {
             });
             acc
         });
-    bot.send_message(msg.chat.id, text).await?;
+    bot.send(SendMessage::new(msg.chat().id(), text)).await?;
     Ok(())
 }
 
