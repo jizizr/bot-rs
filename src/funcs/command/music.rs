@@ -3243,7 +3243,7 @@ async fn send_lyric_page(
     match bot.send(send(&cover)).await {
         Ok(_) => Ok(()),
         Err(err) if cover != Cover::None => {
-            log::warn!("lyric page with cover failed, sending without: {err}");
+            log::error!("lyric page with cover failed, sending without: {err}");
             bot.send(send(&Cover::None)).await?;
             Ok(())
         }
@@ -3273,7 +3273,7 @@ async fn edit_lyric_page(
     };
     let result = match bot.send(edit(&cover)).await.map_err(BotError::from) {
         Err(err) if cover != Cover::None && !is_not_modified(&err) => {
-            log::warn!("lyric page with cover failed, editing without: {err}");
+            log::error!("lyric page with cover failed, editing without: {err}");
             bot.send(edit(&Cover::None)).await.map_err(BotError::from)
         }
         result => result,

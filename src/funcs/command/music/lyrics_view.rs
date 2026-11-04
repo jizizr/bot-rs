@@ -227,11 +227,11 @@ pub(super) async fn lyric_cover(bot: &Bot, song: &LyricSong) -> Cover {
     match tokio::time::timeout(COVER_UPLOAD_TIMEOUT, uploaded_banner(bot, url)).await {
         Ok(Ok(file_id)) => Cover::Uploaded(file_id),
         Ok(Err(err)) => {
-            log::warn!("lyric cover banner failed: {err}");
+            log::error!("lyric cover banner failed: {err}");
             Cover::None
         }
         Err(_) => {
-            log::warn!("lyric cover banner timed out");
+            log::error!("lyric cover banner timed out");
             Cover::None
         }
     }
