@@ -35,7 +35,7 @@ const ALLOWED_UPDATES: [UpdateType; 5] = [
 /// logged, and the update always counts as handled.
 fn handled(result: BotResult, kind: &str) -> HandlerResult {
     if let Err(err) = result {
-        log::warn!("{kind} handler failed: {err}");
+        log::error!("{kind} handler failed: {err}");
     }
     Ok(EventReturn::Finish)
 }
@@ -126,9 +126,49 @@ async fn serve_webhook(dispatcher: Dispatcher) -> Result<(), BotError> {
     Ok(())
 }
 
+/// 和 `pretty_env_logger::init` 一样按 RUST_LOG 过滤，另外丢掉扫描器探测 webhook
+/// 时 telers 打的 "Invalid secret token"：请求本身已经被 401 拒掉，日志只是噪音
+fn init_logger() {
+    let mut builder = pretty_env_logger::formatted_builder();
+    if let Ok(filters) = std::env::var("RUST_LOG") {
+        builder.parse_filters(&filters);
+    }
+    let logger = builder.build();
+    log::set_max_level(logger.filter());
+    log::set_boxed_logger(Box::new(QuietScanners(logger))).expect("logger is set once");
+}
+
+struct QuietScanners(pretty_env_logger::env_logger::Logger);
+
+impl QuietScanners {
+    fn is_scanner_probe(record: &log::Record) -> bool {
+        record.target().starts_with("telers::webhooks")
+            && record
+                .args()
+                .to_string()
+                .starts_with("Invalid secret token")
+    }
+}
+
+impl log::Log for QuietScanners {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        self.0.enabled(metadata)
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.0.matches(record) && !Self::is_scanner_probe(record) {
+            self.0.log(record);
+        }
+    }
+
+    fn flush(&self) {
+        self.0.flush();
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    pretty_env_logger::init();
+    init_logger();
     log::info!("Starting buttons bot...");
     init();
     let me = loop {
@@ -165,4 +205,30 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::QuietScanners;
+
+    fn is_probe(target: &str, message: std::fmt::Arguments) -> bool {
+        QuietScanners::is_scanner_probe(
+            &log::Record::builder()
+                .target(target)
+                .level(log::Level::Error)
+                .args(message)
+                .build(),
+        )
+    }
+
+    #[test]
+    fn only_secret_token_rejections_are_dropped() {
+        let handler = "telers::webhooks::axum::handler";
+        assert!(is_probe(
+            handler,
+            format_args!("Invalid secret token secret_token=XTelegramBotApiSecretToken(None)")
+        ));
+        assert!(!is_probe(handler, format_args!("Failed to parse update")));
+        assert!(!is_probe("bot_rs", format_args!("Invalid secret token")));
+    }
 }
