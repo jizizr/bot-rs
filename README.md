@@ -1,11 +1,12 @@
 # bot-rs
-A simple framework has been completed
+A simple framework has been completed, built on [telers](https://github.com/Desiders/telers).
 
 Music commands:
 - `/music`: open the personal default-platform button panel.
 - `/music <song>` or `/music search <song>`: list results from the saved default platform, with pages and buttons to switch platform; tapping a number fetches that song. A link, `platform:id` or bare song ID is fetched straight away.
 - `/music get <song>`: fetch the first result directly.
 - Inline mode (`@bot <song> [platform] [quality]`): the button above the results opens a private-chat platform picker that returns to the same search on another platform.
+- The lyrics button on a song sends a rich message (Bot API rich messages): the song, each line with its translation under it in a quote that opens on demand, folded credits, and buttons to switch simplified/traditional script or get the lyrics as an LRC file.
 - `/music setting`: configure the default platform, quality, cover, and lyric script.
 - `/music collection <link-or-id>`: open a collection using the saved default platform.
 
