@@ -1,9 +1,11 @@
 use super::*;
 use crate::analysis::freq::{Activity, Bucket, Point};
+use cached::proc_macro::cached;
 use chrono::{Datelike, Days, Duration as ChronoDuration, Months, NaiveDate, Utc};
 use chrono_tz::Tz;
 use futures::stream::TryStreamExt;
 use serde::Deserialize;
+use std::{collections::HashMap, time::Duration as StdDuration};
 
 #[derive(Debug, PartialEq, Clone, clap::ValueEnum)]
 pub enum Duration {
@@ -33,8 +35,6 @@ impl<T: Into<String>> From<T> for Duration {
         }
     }
 }
-
-const KEY_FORMAT: &str = "%Y-%m-%d";
 
 impl Duration {
     /// How far back the period reaches; `None` is every record.
@@ -105,41 +105,52 @@ impl Bucket {
     }
 }
 
+/// Messages counted in one local hour of the day, within one trend bucket
+/// when the period has a trend.
 #[derive(Deserialize)]
-struct HourCount {
+struct Row {
     #[serde(rename = "_id")]
-    hour: i32,
+    slot: Slot,
     n: i64,
 }
 
 #[derive(Deserialize)]
-struct BucketCount {
-    /// The bucket's first day, `%Y-%m-%d` in Beijing time.
-    #[serde(rename = "_id")]
-    key: String,
-    user: i64,
-    group: i64,
-}
-
-#[derive(Deserialize)]
-struct Facets {
-    user_hours: Vec<HourCount>,
-    group_hours: Vec<HourCount>,
+struct Slot {
+    /// Hour of the day on the chat's clock, 0 to 23.
+    h: i32,
+    /// The instant the trend bucket starts on the chat's clock.
     #[serde(default)]
-    trend: Vec<BucketCount>,
+    b: Option<bson::DateTime>,
 }
 
-fn hours(counts: &[HourCount]) -> [u32; 24] {
-    let mut hours = [0; 24];
-    for count in counts {
-        if let Some(slot) = usize::try_from(count.hour)
-            .ok()
-            .and_then(|h| hours.get_mut(h))
-        {
-            *slot = count.n.max(0) as u32;
+/// Messages per hour of the day and per trend bucket, for one member or for
+/// the whole group.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Counts {
+    hours: [u32; 24],
+    /// Keyed by the bucket's first day on the chat's clock.
+    trend: HashMap<NaiveDate, u32>,
+}
+
+impl Counts {
+    fn from_rows(rows: &[Row], tz: Tz) -> Self {
+        let mut counts = Counts::default();
+        for row in rows {
+            let n = u32::try_from(row.n.max(0)).unwrap_or(u32::MAX);
+            if let Some(slot) = usize::try_from(row.slot.h)
+                .ok()
+                .and_then(|h| counts.hours.get_mut(h))
+            {
+                *slot = slot.saturating_add(n);
+            }
+            if let Some(start) = row.slot.b {
+                let day = start.to_chrono().with_timezone(&tz).date_naive();
+                let total = counts.trend.entry(day).or_default();
+                *total = total.saturating_add(n);
+            }
         }
+        counts
     }
-    hours
 }
 
 /// Every bucket from the one holding `from` to the one holding `to`, with
@@ -148,17 +159,16 @@ fn fill_trend(
     bucket: Bucket,
     from: NaiveDate,
     to: NaiveDate,
-    counts: &[BucketCount],
+    user: &Counts,
+    group: &Counts,
 ) -> Vec<Point> {
     let mut points = Vec::new();
     let mut start = bucket.start_of(from);
     while start <= to {
-        let key = start.format(KEY_FORMAT).to_string();
-        let found = counts.iter().find(|c| c.key == key);
         points.push(Point {
             label: bucket.label(start),
-            user: found.map_or(0, |c| c.user.max(0) as u32),
-            group: found.map_or(0, |c| c.group.max(0) as u32),
+            user: user.trend.get(&start).copied().unwrap_or(0),
+            group: group.trend.get(&start).copied().unwrap_or(0),
         });
         match bucket.next(start) {
             Some(next) => start = next,
@@ -166,6 +176,101 @@ fn fill_trend(
         }
     }
     points
+}
+
+/// A query that runs longer than this is cut off: a slow /count must not
+/// hold the handler, or the database, for minutes.
+const QUERY_LIMIT: StdDuration = StdDuration::from_secs(10);
+/// MongoDB's code for a query cut off by `maxTimeMS`.
+const MAX_TIME_EXPIRED: i32 = 50;
+
+/// Counts messages in `gid` since `since` (every record when `None`), only
+/// `uid`'s when given, by local hour and by trend bucket on the clock of `tz`.
+///
+/// The pipeline reads nothing but the `(group_id, user_id, timestamp)` index
+/// (MongoDB bounds the timestamp per member even with `user_id` unset). It
+/// first groups by local hour, one time zone conversion per message, and
+/// only then folds the hours into hours of the day and buckets.
+async fn count(
+    gid: i64,
+    uid: Option<i64>,
+    since: Option<chrono::DateTime<Utc>>,
+    bucket: Option<Bucket>,
+    tz: Tz,
+) -> Result<Counts, BotError> {
+    if is_mongo_disabled() {
+        return Err(BotError::Custom("统计服务暂时不可用，稍后再试".to_string()));
+    }
+    let zone = tz.name();
+    let mut filter = doc! { "group_id": gid };
+    if let Some(uid) = uid {
+        filter.insert("user_id", uid);
+    }
+    if let Some(since) = since {
+        filter.insert(
+            "timestamp",
+            doc! { "$gte": bson::DateTime::from_chrono(since) },
+        );
+    }
+    let mut slot = doc! { "h": { "$hour": { "date": "$_id", "timezone": zone } } };
+    if let Some(bucket) = bucket {
+        slot.insert(
+            "b",
+            doc! {
+                "$dateTrunc": {
+                    "date": "$_id",
+                    "unit": bucket.unit(),
+                    "timezone": zone,
+                    "startOfWeek": "monday"
+                }
+            },
+        );
+    }
+    let pipeline = vec![
+        doc! { "$match": filter },
+        doc! { "$project": { "_id": 0, "timestamp": 1 } },
+        doc! {
+            "$group": {
+                "_id": { "$dateTrunc": { "date": "$timestamp", "unit": "hour", "timezone": zone } },
+                "n": { "$sum": 1 }
+            }
+        },
+        doc! { "$group": { "_id": slot, "n": { "$sum": "$n" } } },
+    ];
+    let rows: Vec<Row> = async {
+        botlog()
+            .await
+            .aggregate(pipeline)
+            .max_time(QUERY_LIMIT)
+            .await?
+            .try_collect::<Vec<_>>()
+            .await
+    }
+    .await
+    .map_err(|e| match *e.kind {
+        mongodb::error::ErrorKind::Command(ref c) if c.code == MAX_TIME_EXPIRED => {
+            BotError::Custom("统计超时了，换个短一点的时间范围试试".to_string())
+        }
+        _ => BotError::from(e),
+    })?
+    .into_iter()
+    .map(|doc| bson::deserialize_from_document(doc).map_err(mongodb::error::Error::from))
+    .collect::<Result<_, _>>()?;
+    Ok(Counts::from_rows(&rows, tz))
+}
+
+/// The whole group's counts, which every member's /count in the group shares:
+/// kept for a minute, and members asking at once wait for one query.
+#[cached(
+    ttl_secs = 60,
+    max_size = 256,
+    sync_writes = "by_key",
+    key = "String",
+    convert = r#"{ format!("{gid}:{duration:?}:{}", tz.name()) }"#
+)]
+async fn group_counts(gid: i64, duration: Duration, tz: Tz) -> Result<Counts, BotError> {
+    let since = duration.span().map(|span| Utc::now() - span);
+    count(gid, None, since, duration.bucket(), tz).await
 }
 
 /// How one member's messages in a group spread over the period and over the
@@ -179,82 +284,22 @@ pub async fn query_activity(
     group_name: String,
 ) -> Result<Activity, BotError> {
     let duration = duration.unwrap_or(Duration::Invalid);
-    let zone = tz.name();
     let now = Utc::now();
-    let mut match_condition = doc! { "group_id": gid };
-    if let Some(span) = duration.span() {
-        match_condition.insert(
-            "timestamp",
-            doc! { "$gte": bson::DateTime::from_chrono(now - span) },
-        );
-    }
-    let by_hour = doc! { "$hour": { "date": "$timestamp", "timezone": zone } };
-    let mut facets = doc! {
-        "user_hours": [
-            { "$match": { "user_id": uid } },
-            { "$group": { "_id": by_hour.clone(), "n": { "$sum": 1 } } }
-        ],
-        "group_hours": [
-            { "$group": { "_id": by_hour, "n": { "$sum": 1 } } }
-        ],
-    };
     let bucket = duration.bucket();
-    if let Some(bucket) = bucket {
-        facets.insert(
-            "trend",
-            vec![doc! {
-                "$group": {
-                    "_id": {
-                        "$dateToString": {
-                            "format": KEY_FORMAT,
-                            "timezone": zone,
-                            "date": {
-                                "$dateTrunc": {
-                                    "date": "$timestamp",
-                                    "unit": bucket.unit(),
-                                    "timezone": zone,
-                                    "startOfWeek": "monday"
-                                }
-                            }
-                        }
-                    },
-                    "user": { "$sum": { "$cond": [{ "$eq": ["$user_id", uid] }, 1, 0] } },
-                    "group": { "$sum": 1 }
-                }
-            }],
-        );
-    }
-    let pipeline = vec![
-        doc! { "$match": match_condition },
-        doc! { "$facet": facets },
-    ];
-    let facets: Option<Facets> = botlog()
-        .await
-        .aggregate(pipeline)
-        .await?
-        .try_next()
-        .await?
-        .map(|doc| bson::deserialize_from_document(doc).map_err(mongodb::error::Error::from))
-        .transpose()?;
-    let facets = facets.unwrap_or(Facets {
-        user_hours: Vec::new(),
-        group_hours: Vec::new(),
-        trend: Vec::new(),
-    });
+    let since = duration.span().map(|span| now - span);
+    let (user, group) = tokio::try_join!(
+        count(gid, Some(uid), since, bucket, tz),
+        group_counts(gid, duration.clone(), tz),
+    )?;
 
     let today = now.with_timezone(&tz).date_naive();
     let trend = match bucket {
         Some(bucket) => {
-            let first_found = facets
-                .trend
-                .iter()
-                .filter_map(|c| NaiveDate::parse_from_str(&c.key, KEY_FORMAT).ok())
-                .min();
-            let from = match duration.span() {
-                Some(span) => Some((now - span).with_timezone(&tz).date_naive()),
-                None => first_found,
+            let from = match since {
+                Some(since) => Some(since.with_timezone(&tz).date_naive()),
+                None => group.trend.keys().chain(user.trend.keys()).min().copied(),
             };
-            from.map(|from| fill_trend(bucket, from, today, &facets.trend))
+            from.map(|from| fill_trend(bucket, from, today, &user, &group))
                 .unwrap_or_default()
         }
         None => Vec::new(),
@@ -264,8 +309,8 @@ pub async fn query_activity(
         group_name,
         period: duration.words().to_string(),
         zone: crate::funcs::pkg::timezone::zone_name(tz),
-        user_hours: hours(&facets.user_hours),
-        group_hours: hours(&facets.group_hours),
+        user_hours: user.hours,
+        group_hours: group.hours,
         trend,
         bucket: bucket.unwrap_or(Bucket::Day),
     })
@@ -276,14 +321,28 @@ mod tests {
     use super::*;
 
     fn day(s: &str) -> NaiveDate {
-        NaiveDate::parse_from_str(s, KEY_FORMAT).unwrap()
+        NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
     }
 
-    fn count(key: &str, user: i64, group: i64) -> BucketCount {
-        BucketCount {
-            key: key.into(),
-            user,
-            group,
+    fn counts(trend: &[(&str, u32)]) -> Counts {
+        Counts {
+            hours: [0; 24],
+            trend: trend.iter().map(|&(d, n)| (day(d), n)).collect(),
+        }
+    }
+
+    fn row(h: i32, b: Option<&str>, n: i64, tz: Tz) -> Row {
+        Row {
+            slot: Slot {
+                h,
+                b: b.map(|d| {
+                    let start = day(d).and_hms_opt(0, 0, 0).unwrap();
+                    bson::DateTime::from_chrono(
+                        start.and_local_timezone(tz).unwrap().with_timezone(&Utc),
+                    )
+                }),
+            },
+            n,
         }
     }
 
@@ -299,8 +358,15 @@ mod tests {
 
     #[test]
     fn trend_fills_quiet_buckets_with_zero() {
-        let counts = [count("2026-11-03", 2, 5), count("2026-11-05", 1, 4)];
-        let trend = fill_trend(Bucket::Day, day("2026-11-03"), day("2026-11-06"), &counts);
+        let user = counts(&[("2026-11-03", 2), ("2026-11-05", 1)]);
+        let group = counts(&[("2026-11-03", 5), ("2026-11-05", 4)]);
+        let trend = fill_trend(
+            Bucket::Day,
+            day("2026-11-03"),
+            day("2026-11-06"),
+            &user,
+            &group,
+        );
         let rows: Vec<_> = trend
             .iter()
             .map(|p| (p.label.as_str(), p.user, p.group))
@@ -315,12 +381,17 @@ mod tests {
             ]
         );
 
-        let counts = [count("2026-10-01", 1, 1), count("2026-12-01", 3, 9)];
-        let months: Vec<_> =
-            fill_trend(Bucket::Month, day("2026-10-20"), day("2026-12-02"), &counts)
-                .into_iter()
-                .map(|p| (p.label, p.user))
-                .collect();
+        let user = counts(&[("2026-10-01", 1), ("2026-12-01", 3)]);
+        let months: Vec<_> = fill_trend(
+            Bucket::Month,
+            day("2026-10-20"),
+            day("2026-12-02"),
+            &user,
+            &Counts::default(),
+        )
+        .into_iter()
+        .map(|p| (p.label, p.user))
+        .collect();
         assert_eq!(
             months,
             [
@@ -332,14 +403,22 @@ mod tests {
     }
 
     #[test]
-    fn hours_ignore_out_of_range_values() {
-        let counts = [
-            HourCount { hour: 3, n: 7 },
-            HourCount { hour: 24, n: 1 },
-            HourCount { hour: -1, n: 1 },
+    fn rows_fold_into_hours_and_local_buckets() {
+        // 东京的 11-02 零点是 UTC 11-01 15:00，桶仍要记在 11-02
+        let tz: Tz = "Asia/Tokyo".parse().unwrap();
+        let rows = [
+            row(3, Some("2026-11-02"), 7, tz),
+            row(3, Some("2026-11-09"), 2, tz),
+            row(22, Some("2026-11-02"), 1, tz),
+            row(24, None, 1, tz),
+            row(-1, None, 1, tz),
         ];
-        let hours = hours(&counts);
-        assert_eq!(hours[3], 7);
-        assert_eq!(hours.iter().sum::<u32>(), 7);
+        let counts = Counts::from_rows(&rows, tz);
+        assert_eq!(counts.hours[3], 9);
+        assert_eq!(counts.hours[22], 1);
+        assert_eq!(counts.hours.iter().sum::<u32>(), 10);
+        assert_eq!(counts.trend.get(&day("2026-11-02")), Some(&8));
+        assert_eq!(counts.trend.get(&day("2026-11-09")), Some(&2));
+        assert_eq!(counts.trend.len(), 2);
     }
 }

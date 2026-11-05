@@ -47,13 +47,13 @@ pub async fn count(bot: &Bot, msg: &Message) -> BotResult {
         return Ok(());
     }
 
+    let caption = summary(&activity);
+    // 画图是纯 CPU 活，别占着 tokio 的工作线程
+    let picture = tokio::task::spawn_blocking(move || paint(&activity, appearance)).await??;
     bot.send(
-        SendPhoto::new(
-            msg.chat().id(),
-            InputFile::buffered(paint(&activity, appearance)?),
-        )
-        .caption(summary(&activity))
-        .reply_parameters(reply_to(msg.message_id())),
+        SendPhoto::new(msg.chat().id(), InputFile::buffered(picture))
+            .caption(caption)
+            .reply_parameters(reply_to(msg.message_id())),
     )
     .await?;
     Ok(())
