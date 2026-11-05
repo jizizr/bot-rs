@@ -1,5 +1,5 @@
 use mongodb::bson::DateTime;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_repr::Serialize_repr;
 use telers::types::{CallbackQuery, Message};
 
@@ -177,16 +177,4 @@ impl From<BotLogBuilder> for BotLog {
             DateTime::now().timestamp_millis() - val.0.timestamp.timestamp_millis();
         val.0
     }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct MessageCount {
-    pub user_id: Option<i64>,
-    pub group_id: i64,
-    pub hour_num: i32,
-    pub count: i32,
-
-    pub group_username: Option<String>,
-    pub group_name: Option<String>,
-    pub username: Option<String>,
 }

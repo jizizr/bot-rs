@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-    analysis::freq::paint,
-    dao::mongo::freq::{Duration as FreqDuration, query_data},
+    analysis::freq::{paint, summary},
+    dao::mongo::freq::{Duration as FreqDuration, query_activity},
 };
 
 cmd!(
@@ -18,17 +18,33 @@ pub async fn count(bot: &Bot, msg: &Message) -> BotResult {
     let language_tag = Some("zh-CN");
     let command =
         CountCmd::parse_i18n_from_bot(getor(msg).unwrap().split_whitespace(), language_tag)?;
-    let datas = query_data(
+    let user = msg
+        .from()
+        .ok_or(BotError::Custom("failed to get uid".to_string()))?;
+    show_typing(bot, msg.chat().id());
+    let activity = query_activity(
         msg.chat().id(),
-        msg.from()
-            .ok_or(BotError::Custom("failed to get uid".to_string()))?
-            .id as u64,
+        user.id,
         command.duration,
+        crate::funcs::get_name(user),
+        msg.chat().title().unwrap_or("本群").to_string(),
     )
     .await?;
+    if activity.user_total() == 0 {
+        bot.send(
+            SendMessage::new(
+                msg.chat().id(),
+                format!("{}没有你在本群的发言记录", activity.period),
+            )
+            .reply_parameters(reply_to(msg.message_id())),
+        )
+        .await?;
+        return Ok(());
+    }
 
     bot.send(
-        SendPhoto::new(msg.chat().id(), InputFile::buffered(paint(datas)?))
+        SendPhoto::new(msg.chat().id(), InputFile::buffered(paint(&activity)?))
+            .caption(summary(&activity))
             .reply_parameters(reply_to(msg.message_id())),
     )
     .await?;
