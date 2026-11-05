@@ -1,5 +1,4 @@
-use crate::dao::mysql::wordcloud;
-use crate::{funcs::pkg::escape::markdown, *};
+use crate::{dao::mysql::wordcloud, funcs::pkg::escape::markdown, *};
 use std::collections::HashMap;
 
 pub async fn wcloud(bot: &Bot, group: i64) -> Result<(), BotError> {

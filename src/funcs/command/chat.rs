@@ -1,7 +1,8 @@
 use super::*;
+use std::sync::LazyLock;
 
-lazy_static! {
-    static ref CLIENT: ClientWithMiddleware = retry_client(
+static CLIENT: LazyLock<ClientWithMiddleware> = LazyLock::new(|| {
+    retry_client(
         reqwest::Client::builder()
             .default_headers({
                 let mut headers = reqwest::header::HeaderMap::new();
@@ -10,13 +11,15 @@ lazy_static! {
             })
             .build()
             .unwrap(),
-        2
-    );
-    static ref API_URL: String = format!(
+        2,
+    )
+});
+static API_URL: LazyLock<String> = LazyLock::new(|| {
+    format!(
         "https://generativelanguage.googleapis.774.gs/proxy?key={}",
         SETTINGS.gemini.key
-    );
-}
+    )
+});
 
 cmd!(
     "/chat",

@@ -1,9 +1,7 @@
-use super::*;
 use regex::Regex;
+use std::sync::LazyLock;
 
-lazy_static! {
-    static ref RE: Regex = Regex::new(r"\*\*(.*?)\*\*").unwrap();
-}
+static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*\*(.*?)\*\*").unwrap());
 
 pub fn escape_markdown(text: &str) -> String {
     let mut last_end = 0;

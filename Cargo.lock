@@ -545,7 +545,6 @@ dependencies = [
  "image",
  "indexmap 2.14.2",
  "jieba-rs",
- "lazy_static",
  "lingua",
  "log",
  "md5",

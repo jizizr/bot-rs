@@ -3,7 +3,6 @@ use crate::{
     dao::mongo::analysis::insert_log,
     *,
 };
-use lazy_static::lazy_static;
 use regex::Regex;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};

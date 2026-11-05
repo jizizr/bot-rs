@@ -1,8 +1,8 @@
 use super::*;
+use std::sync::LazyLock;
 
-lazy_static! {
-    static ref MATCH: Regex = Regex::new(r#"<span class="searchmatch">|</span>"#).unwrap();
-}
+static MATCH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"<span class="searchmatch">|</span>"#).unwrap());
 
 cmd!(
     "/wiki",

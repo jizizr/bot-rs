@@ -4,7 +4,11 @@ use clap::ValueEnum;
 use dashmap::DashMap;
 use futures::{StreamExt, future::join_all, stream::FuturesUnordered};
 use ping_server_rs::model::*;
-use std::{collections::HashMap, fmt::Write, sync::Arc};
+use std::{
+    collections::HashMap,
+    fmt::Write,
+    sync::{Arc, LazyLock},
+};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     sync::OnceCell,
@@ -36,11 +40,10 @@ impl Method {
     }
 }
 
-lazy_static! {
-    static ref HOST_MATCH: Regex =
-        Regex::new(r#"(https?://|\s|^)(([^\x20-\x2C\x2E-\x2F\x7B-\x7E]+\.)+([^:\./\s]+))(\s|$)"#)
-            .unwrap();
-}
+static HOST_MATCH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(https?://|\s|^)(([^\x20-\x2C\x2E-\x2F\x7B-\x7E]+\.)+([^:\./\s]+))(\s|$)"#)
+        .unwrap()
+});
 
 static PING_SERVER: OnceCell<HashMap<String, TcpStreamPool<ResilientTcpStream>>> =
     OnceCell::const_new();

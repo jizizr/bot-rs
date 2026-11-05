@@ -1,15 +1,17 @@
 use super::*;
 use reqwest::Url;
-lazy_static! {
-    static ref MATCHS: Vec<RegexSign> = vec![
+use std::sync::LazyLock;
+static MATCHS: LazyLock<Vec<RegexSign>> = LazyLock::new(|| {
+    vec![
         RegexSign::new(BiliUrl::B23, r#"(https?://)b23\.tv/\w+"#),
         RegexSign::new(
             BiliUrl::Bili,
-            r#"(https?://)(.+\.)?bilibili.com[/\w+]+\?[\w+=&]*"#
-        )
-    ];
-    static ref CLIENT: ClientWithMiddleware = retry_client(reqwest::Client::new(), 2);
-}
+            r#"(https?://)(.+\.)?bilibili.com[/\w+]+\?[\w+=&]*"#,
+        ),
+    ]
+});
+static CLIENT: LazyLock<ClientWithMiddleware> =
+    LazyLock::new(|| retry_client(reqwest::Client::new(), 2));
 
 enum BiliUrl {
     B23,

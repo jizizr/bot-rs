@@ -1,4 +1,5 @@
 use rand::Rng;
+use std::sync::LazyLock;
 use url::Url;
 
 use super::*;
@@ -14,11 +15,12 @@ cmd!(
     }
 );
 
-lazy_static! {
-    static ref CLIENT: ClientWithMiddleware = retry_client(reqwest::Client::new(), 2);
-    static ref API_URL: String = SETTINGS.vv.api_url.trim_end_matches('/').to_string();
-    static ref PIC_URL: String = SETTINGS.vv.pic_url.trim_end_matches('/').to_string();
-}
+static CLIENT: LazyLock<ClientWithMiddleware> =
+    LazyLock::new(|| retry_client(reqwest::Client::new(), 2));
+static API_URL: LazyLock<String> =
+    LazyLock::new(|| SETTINGS.vv.api_url.trim_end_matches('/').to_string());
+static PIC_URL: LazyLock<String> =
+    LazyLock::new(|| SETTINGS.vv.pic_url.trim_end_matches('/').to_string());
 
 async fn get_vv_list(desc: String) -> Result<Vec<String>, BotError> {
     let url = format!("{}/search?q={}&n=5", *API_URL, desc);

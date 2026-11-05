@@ -1,14 +1,12 @@
 use super::*;
 use dashmap::DashMap;
-use lazy_static::lazy_static;
 use std::{
     collections::VecDeque,
     ops::{Index, IndexMut},
+    sync::LazyLock,
 };
 
-lazy_static! {
-    static ref MESSAGE_MAP: DashMap<i64, FixedQueue<MessageConfig>> = DashMap::new();
-}
+static MESSAGE_MAP: LazyLock<DashMap<i64, FixedQueue<MessageConfig>>> = LazyLock::new(DashMap::new);
 
 struct FixedQueue<T> {
     queue: VecDeque<T>,

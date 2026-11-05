@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::LazyLock};
 
 use super::*;
 use crate::funcs::pkg::rich::{RichPage, html_escape};
@@ -11,19 +11,32 @@ use tokio::net::TcpStream;
 use tokio_native_tls::{TlsConnector, native_tls};
 use x509_parser::parse_x509_certificate;
 
-lazy_static! {
-    static ref CLIENT: ClientWithMiddleware = retry_client(ClientBuilder::use_rustls_tls(ClientBuilder::new()).build().unwrap(),2);
-    static ref PASTE :ClientWithMiddleware = retry_client(Client::builder().default_headers({
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "Content-Type",
-            HeaderValue::from_static("text/html"),
-        );
-        headers
-    }).build().unwrap(),2);
-    static ref MATCH: Regex = Regex::new(r#"(\s|^|https?://)(([^:\./\s]+\.)+[^\d\./:\s\\"]{2,}|((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?))(:\d{1,5})?(/\S*)*(\s|$)"#).unwrap();
-    static ref CONNECTOR:TlsConnector = TlsConnector::from(native_tls::TlsConnector::new().unwrap());
-}
+static CLIENT: LazyLock<ClientWithMiddleware> = LazyLock::new(|| {
+    retry_client(
+        ClientBuilder::use_rustls_tls(ClientBuilder::new())
+            .build()
+            .unwrap(),
+        2,
+    )
+});
+static PASTE: LazyLock<ClientWithMiddleware> = LazyLock::new(|| {
+    retry_client(
+        Client::builder()
+            .default_headers({
+                let mut headers = HeaderMap::new();
+                headers.insert("Content-Type", HeaderValue::from_static("text/html"));
+                headers
+            })
+            .build()
+            .unwrap(),
+        2,
+    )
+});
+static MATCH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(\s|^|https?://)(([^:\./\s]+\.)+[^\d\./:\s\\"]{2,}|((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?))(:\d{1,5})?(/\S*)*(\s|$)"#).unwrap()
+});
+static CONNECTOR: LazyLock<TlsConnector> =
+    LazyLock::new(|| TlsConnector::from(native_tls::TlsConnector::new().unwrap()));
 
 cmd!(
     "/curl",

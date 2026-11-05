@@ -1,6 +1,5 @@
-use super::*;
 use jieba_rs::Jieba;
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::LazyLock};
 
 macro_rules! hashset {
     ($($x:expr),*) => {
@@ -14,12 +13,12 @@ macro_rules! hashset {
     };
 }
 
-lazy_static! {
-    static ref JIEBA: Jieba = Jieba::new();
-    static ref POS: HashSet<&'static str> = hashset![
+static JIEBA: LazyLock<Jieba> = LazyLock::new(Jieba::new);
+static POS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    hashset![
         "v", "l", "n", "nr", "a", "vd", "nz", "PER", "ns", "LOC", "s", "nt", "ORG", "nw", "vn"
-    ];
-}
+    ]
+});
 
 pub fn text_cut(text: &str) -> Vec<String> {
     JIEBA

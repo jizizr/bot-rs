@@ -1,14 +1,14 @@
 use super::*;
 use lingua::{Language, LanguageDetector, LanguageDetectorBuilder};
 use serde_json::Value;
-lazy_static! {
-    static ref CLIENT: ClientWithMiddleware =
-        retry_client(reqwest::Client::builder().build().unwrap(), 2);
-    static ref LANG: LanguageDetector =
-        LanguageDetectorBuilder::from_languages(&[Language::English, Language::Chinese])
-            .with_preloaded_language_models()
-            .build();
-}
+use std::sync::LazyLock;
+static CLIENT: LazyLock<ClientWithMiddleware> =
+    LazyLock::new(|| retry_client(reqwest::Client::builder().build().unwrap(), 2));
+static LANG: LazyLock<LanguageDetector> = LazyLock::new(|| {
+    LanguageDetectorBuilder::from_languages(&[Language::English, Language::Chinese])
+        .with_preloaded_language_models()
+        .build()
+});
 
 const CN: &str = "ZH";
 const EN: &str = "EN";

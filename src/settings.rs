@@ -1,10 +1,7 @@
-use lazy_static::lazy_static;
 use serde::Deserialize;
-use std::{collections::HashMap, fs::File, io::Read};
+use std::{collections::HashMap, fs::File, io::Read, sync::LazyLock};
 
-lazy_static! {
-    pub static ref SETTINGS: Settings = Settings::default();
-}
+pub static SETTINGS: LazyLock<Settings> = LazyLock::new(Settings::default);
 #[derive(Debug, Deserialize)]
 pub struct Settings {
     pub bot: Bot,

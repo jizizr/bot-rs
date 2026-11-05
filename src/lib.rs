@@ -1,11 +1,15 @@
 use crate::settings::SETTINGS;
 use async_trait::async_trait;
 use funcs::{command::command_handler, text::text_handler};
-use lazy_static::lazy_static;
 use myclap::clap::MyErrorFormatter;
 use serde::de::DeserializeOwned;
-use std::sync::OnceLock;
-use std::{collections::VecDeque, fs::File, io::Read, time::Duration};
+use std::{
+    collections::VecDeque,
+    fs::File,
+    io::Read,
+    sync::{LazyLock, OnceLock},
+    time::Duration,
+};
 pub use telers::{
     Bot,
     enums::ParseMode,
@@ -84,40 +88,38 @@ pub enum BotError {
     PaintError(#[from] charts_rs::CanvasError),
 }
 
-lazy_static! {
-    pub static ref BOT: Bot = {
-        let client = telers_reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(300))
-            .tcp_nodelay(true)
-            .build()
-            .expect("telegram client creation failed");
-        let session = telers::client::Reqwest::new(client);
-        let session = match SETTINGS
-            .bot
-            .api_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|url| !url.is_empty())
-        {
-            Some(api_url) => {
-                let api_url = api_url.trim_end_matches('/');
-                reqwest::Url::parse(api_url).expect("invalid telegram bot api_url");
-                session.with_api_server(std::borrow::Cow::Owned(
-                    telers::client::telegram::APIServer::new(
-                        &format!("{api_url}/bot{{token}}/{{method_name}}"),
-                        &format!("{api_url}/file/bot{{token}}/{{path}}"),
-                        false,
-                        telers::client::telegram::BareFilesPathWrapper,
-                    ),
-                ))
-            }
-            None => session,
-        };
-        Bot::with_client(&SETTINGS.bot.token, session)
+pub static BOT: LazyLock<Bot> = LazyLock::new(|| {
+    let client = telers_reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(300))
+        .tcp_nodelay(true)
+        .build()
+        .expect("telegram client creation failed");
+    let session = telers::client::Reqwest::new(client);
+    let session = match SETTINGS
+        .bot
+        .api_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+    {
+        Some(api_url) => {
+            let api_url = api_url.trim_end_matches('/');
+            reqwest::Url::parse(api_url).expect("invalid telegram bot api_url");
+            session.with_api_server(std::borrow::Cow::Owned(
+                telers::client::telegram::APIServer::new(
+                    &format!("{api_url}/bot{{token}}/{{method_name}}"),
+                    &format!("{api_url}/file/bot{{token}}/{{path}}"),
+                    false,
+                    telers::client::telegram::BareFilesPathWrapper,
+                ),
+            ))
+        }
+        None => session,
     };
-    pub static ref HTTP_CLIENT: reqwest::Client = reqwest::Client::new();
-}
+    Bot::with_client(&SETTINGS.bot.token, session)
+});
+pub static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
 
 #[async_trait]
 pub trait Stream {

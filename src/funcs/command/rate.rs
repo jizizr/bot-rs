@@ -1,8 +1,8 @@
 use super::*;
+use std::sync::LazyLock;
 
-lazy_static! {
-    static ref CLIENT: ClientWithMiddleware = retry_client(reqwest::Client::new(), 2);
-}
+static CLIENT: LazyLock<ClientWithMiddleware> =
+    LazyLock::new(|| retry_client(reqwest::Client::new(), 2));
 
 const RATE_API: &str = "https://wise.com/rates/live";
 

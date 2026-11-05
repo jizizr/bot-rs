@@ -1,11 +1,10 @@
 use super::*;
-use std::fmt::Write;
+use std::{fmt::Write, sync::LazyLock};
 
-lazy_static! {
-    static ref HIS_MATCH: Regex = Regex::new(r#"</em>\.(.*?)</dt>"#).unwrap();
-    static ref LINK_MATCH: Regex =
-        Regex::new(r#"<a href="(.*?)" target="_blank" class="read-btn">阅读全文</a>"#).unwrap();
-}
+static HIS_MATCH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"</em>\.(.*?)</dt>"#).unwrap());
+static LINK_MATCH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"<a href="(.*?)" target="_blank" class="read-btn">阅读全文</a>"#).unwrap()
+});
 
 cmd!(
     "/today",

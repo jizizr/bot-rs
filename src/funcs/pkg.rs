@@ -1,5 +1,4 @@
 use crate::BotError;
-use lazy_static::lazy_static;
 
 pub mod cron;
 pub mod escape;

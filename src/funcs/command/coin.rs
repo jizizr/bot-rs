@@ -1,10 +1,9 @@
 use super::*;
 use cached::proc_macro::cached;
 use chrono::prelude::*;
+use std::sync::LazyLock;
 
-lazy_static! {
-    static ref COIN_TYPES: [&'static str; 3] = ["BTC", "XMR", "ETH"];
-}
+static COIN_TYPES: LazyLock<[&'static str; 3]> = LazyLock::new(|| ["BTC", "XMR", "ETH"]);
 
 #[derive(Deserialize)]
 struct Coin {

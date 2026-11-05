@@ -1,5 +1,6 @@
 use super::*;
 use dashmap::DashMap;
+use std::sync::LazyLock;
 
 macro_rules! dashmaps {
     ($($key:expr => $value:expr),*) => {
@@ -20,8 +21,8 @@ macro_rules! dashmaps {
     };
 }
 
-lazy_static! {
-    static ref FIX_MAP: DashMap<char, char> = dashmaps![
+static FIX_MAP: LazyLock<DashMap<char, char>> = LazyLock::new(|| {
+    dashmaps![
         ')' => '(',
         ']' => '[',
         '}' => '{',
@@ -35,8 +36,8 @@ lazy_static! {
         '》' => '《',
         '＞' => '＜',
         '］' => '［'
-    ];
-}
+    ]
+});
 
 fn clear(input: &mut String, target_char: char) -> Option<()> {
     if let Some((index, char_len)) = input

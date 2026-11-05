@@ -1,10 +1,9 @@
 use crate::settings;
+use std::sync::LazyLock;
 
 use super::*;
 
-lazy_static! {
-    static ref WORD_POOL: Pool = init_mysql(&settings::SETTINGS.db.mysql.url);
-}
+static WORD_POOL: LazyLock<Pool> = LazyLock::new(|| init_mysql(&settings::SETTINGS.db.mysql.url));
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Word {

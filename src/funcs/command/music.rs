@@ -1,17 +1,18 @@
 use super::*;
-use crate::dao::mongo::{
-    music_favorites::{
-        FAVORITE_SCOPE_GROUP, FAVORITE_SCOPE_USER, MusicFavorite, is_favorited, list_favorites,
-        remove_favorite, upsert_favorite,
+use crate::{
+    dao::mongo::{
+        music_favorites::{
+            FAVORITE_SCOPE_GROUP, FAVORITE_SCOPE_USER, MusicFavorite, is_favorited, list_favorites,
+            remove_favorite, upsert_favorite,
+        },
+        music_settings::{
+            UserMusicSettings, get_user_settings, get_user_settings_or_default, save_user_settings,
+        },
     },
-    music_settings::{
-        UserMusicSettings, get_user_settings, get_user_settings_or_default, save_user_settings,
-    },
+    funcs::pkg::rich::{self, RichPage},
 };
-use crate::funcs::pkg::rich::{self, RichPage};
 use ferrous_opencc::{OpenCC, config::BuiltinConfig};
 use futures::future::join_all;
-use lazy_static::lazy_static;
 use lyrics_view::{Cover, LyricSong, LyricView, SongAudio, lyric_cover, song_card};
 use provider::{
     DownloadProgress, JobState, MediaRequest, MusicCollection, MusicMedia, MusicPlatform,
@@ -19,7 +20,7 @@ use provider::{
 };
 use ratelimit::ResourceAction;
 use std::{
-    sync::Arc,
+    sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
 use telers::types::{
@@ -86,16 +87,12 @@ const INLINE_EXAMPLE_KEYWORD: &str = "稻香";
 type SearchCache =
     std::collections::HashMap<(MusicPlatform, String), (Instant, Arc<SearchResults>)>;
 
-lazy_static! {
-    static ref SEARCH_CACHE: std::sync::Mutex<SearchCache> = Default::default();
-}
+static SEARCH_CACHE: LazyLock<std::sync::Mutex<SearchCache>> = LazyLock::new(Default::default);
 
-lazy_static! {
-    static ref LYRIC_TO_SIMPLIFIED: OpenCC =
-        OpenCC::from_config(BuiltinConfig::T2s).expect("builtin OpenCC t2s config");
-    static ref LYRIC_TO_TRADITIONAL: OpenCC =
-        OpenCC::from_config(BuiltinConfig::S2t).expect("builtin OpenCC s2t config");
-}
+static LYRIC_TO_SIMPLIFIED: LazyLock<OpenCC> =
+    LazyLock::new(|| OpenCC::from_config(BuiltinConfig::T2s).expect("builtin OpenCC t2s config"));
+static LYRIC_TO_TRADITIONAL: LazyLock<OpenCC> =
+    LazyLock::new(|| OpenCC::from_config(BuiltinConfig::S2t).expect("builtin OpenCC s2t config"));
 
 cmd!(
     "/music",

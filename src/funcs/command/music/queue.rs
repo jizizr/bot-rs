@@ -15,26 +15,25 @@
 //! `snapshot()` feeds the queue-status alert button.
 
 use crate::{BotError, settings::SETTINGS};
-use lazy_static::lazy_static;
 use std::{
     collections::HashMap,
     sync::{
-        Mutex,
+        LazyLock, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
 };
 use tokio::sync::{Semaphore, SemaphorePermit};
 
-lazy_static! {
-    /// Global download governor, configured from the unified `[music]` config section.
-    pub static ref GOVERNOR: DownloadGovernor = DownloadGovernor::new(
+/// Global download governor, configured from the unified `[music]` config section.
+pub static GOVERNOR: LazyLock<DownloadGovernor> = LazyLock::new(|| {
+    DownloadGovernor::new(
         SETTINGS.music.download_concurrency,
         SETTINGS.music.download_queue_wait_limit,
         SETTINGS.music.download_queue_global_limit,
         SETTINGS.music.download_queue_per_user_limit,
         SETTINGS.music.download_queue_per_chat_limit,
-    );
-}
+    )
+});
 
 pub struct DownloadGovernor {
     /// Download slots. Config `music.download_concurrency`, default 4 (min 1).

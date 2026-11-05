@@ -4,11 +4,13 @@ use fast_qr::{
     qr::QRBuilder,
 };
 use serde_json::json;
+use std::sync::LazyLock;
 
-lazy_static! {
-    static ref MATCH: Regex = Regex::new(r#"(\s|^|https?://)([^:\./\s]+\.)+[^\d\./:\s\\"]{2,}(:(\d{1,4}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(/\S*)*(\s|$)"#).unwrap();
-    static ref CLIENT:ClientWithMiddleware = retry_client(reqwest::Client::new(),2);
-}
+static MATCH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(\s|^|https?://)([^:\./\s]+\.)+[^\d\./:\s\\"]{2,}(:(\d{1,4}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(/\S*)*(\s|$)"#).unwrap()
+});
+static CLIENT: LazyLock<ClientWithMiddleware> =
+    LazyLock::new(|| retry_client(reqwest::Client::new(), 2));
 
 cmd!(
     "/short",

@@ -2,6 +2,7 @@ use crate::{
     analysis::model::{BotLogBuilder, MessageStatus},
     dao::mongo::analysis::insert_log,
 };
+use std::sync::LazyLock;
 
 use super::*;
 use clap::Parser;
@@ -45,9 +46,7 @@ pub async fn chosen_inline_handler(bot: Bot, chosen: ChosenInlineResult) -> BotR
     music::music_chosen_inline_handler(bot, chosen).await
 }
 
-lazy_static! {
-    static ref LIMITER: BottomLocker = BottomLocker(DashSet::new());
-}
+static LIMITER: LazyLock<BottomLocker> = LazyLock::new(|| BottomLocker(DashSet::new()));
 
 #[macro_export]
 macro_rules! command_gen {

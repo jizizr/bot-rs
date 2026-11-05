@@ -1,4 +1,5 @@
 use super::{pkg::kv::GroupFuncSwitch, *};
+use std::sync::LazyLock;
 
 mod comment_buttons;
 mod fix;
@@ -8,10 +9,8 @@ mod pretext;
 mod repeat;
 mod six;
 
-lazy_static! {
-    pub static ref SWITCH: GroupFuncSwitch = GroupFuncSwitch::new();
-    static ref _T: Option<()> = init();
-}
+pub static SWITCH: LazyLock<GroupFuncSwitch> = LazyLock::new(GroupFuncSwitch::new);
+static _T: LazyLock<Option<()>> = LazyLock::new(init);
 
 trait Display {
     fn fmt(&self) -> Option<String>;

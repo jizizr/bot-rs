@@ -11,7 +11,6 @@ music-gateway = { git = "https://github.com/jizizr/mhub", branch = "main", featu
 tokio = "1.0"
 reqwest = { version = "0.12", features = ["rustls-tls", "json", "blocking", "cookies"] }
 serde = { version = "1", features = ["derive"] }
-lazy_static = "1.5"
 regex = "1.10"
 clap = { version = "4.5", features = ["derive"] }
 thiserror = "2"

@@ -19,11 +19,10 @@
 use super::provider::{MusicLyrics, MusicPlatform};
 use crate::{BotError, settings::SETTINGS};
 use dashmap::DashMap;
-use lazy_static::lazy_static;
 use std::{
     collections::{HashMap, VecDeque},
     sync::{
-        Mutex,
+        LazyLock, Mutex,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
@@ -37,11 +36,11 @@ const LYRIC_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
 /// Sweep cadence for the lyric cache.
 const LYRIC_PRUNE_EVERY: usize = 64;
 
-lazy_static! {
-    /// Global limiter, configured from the unified `[music]` config section.
-    pub static ref LIMITER: ResourceRateLimiter = ResourceRateLimiter::from_settings();
-    static ref LYRIC_CACHE: DashMap<(MusicPlatform, String), CachedLyrics> = DashMap::new();
-}
+/// Global limiter, configured from the unified `[music]` config section.
+pub static LIMITER: LazyLock<ResourceRateLimiter> =
+    LazyLock::new(ResourceRateLimiter::from_settings);
+static LYRIC_CACHE: LazyLock<DashMap<(MusicPlatform, String), CachedLyrics>> =
+    LazyLock::new(DashMap::new);
 
 static LYRIC_STORES: AtomicUsize = AtomicUsize::new(0);
 

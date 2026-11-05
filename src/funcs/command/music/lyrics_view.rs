@@ -12,8 +12,11 @@ use super::{
     get_user_settings_or_default, html_escape, lock_unpoisoned, provider, resolve_track,
 };
 use crate::{Bot, BotError, InputFile, SendPhoto, funcs::pkg::rich::RichPage, settings::SETTINGS};
-use lazy_static::lazy_static;
-use std::{collections::HashMap, sync::Mutex, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{LazyLock, Mutex},
+    time::Duration,
+};
 use telers::types::InputRichMessage;
 
 /// Telegram's limit for a caption.
@@ -25,10 +28,8 @@ const BANNER_HEIGHT: u32 = 400;
 const BANNER_COVER_SIZE: u32 = 320;
 const COVER_CACHE_CAPACITY: usize = 1024;
 
-lazy_static! {
-    /// Cover URL → file id of the photo uploaded for it.
-    static ref COVER_PHOTOS: Mutex<HashMap<String, String>> = Default::default();
-}
+/// Cover URL → file id of the photo uploaded for it.
+static COVER_PHOTOS: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Default::default);
 
 /// Telegram's limit for a rich message, with room for the closing tags.
 const RICH_MESSAGE_LIMIT: usize = 32_000;
@@ -203,11 +204,10 @@ impl LyricSong {
 /// Covers at a size that reads well beside lyrics without a heavy download.
 /// URLs whose size cannot be chosen are kept as they are.
 pub(super) fn sized_cover(platform: MusicPlatform, url: &str) -> String {
-    lazy_static! {
-        static ref APPLE_SIZE: regex::Regex =
-            regex::Regex::new(r"/\d+x\d+(bb|cc)?\.(jpg|jpeg|png|webp)$").unwrap();
-        static ref QQ_SIZE: regex::Regex = regex::Regex::new(r"R\d+x\d+").unwrap();
-    }
+    static APPLE_SIZE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"/\d+x\d+(bb|cc)?\.(jpg|jpeg|png|webp)$").unwrap());
+    static QQ_SIZE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"R\d+x\d+").unwrap());
     match platform {
         MusicPlatform::AppleMusic => APPLE_SIZE.replace(url, "/600x600bb.jpg").into_owned(),
         MusicPlatform::Tencent => QQ_SIZE.replace(url, "R500x500").into_owned(),
