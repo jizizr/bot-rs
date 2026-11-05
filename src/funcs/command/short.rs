@@ -9,8 +9,8 @@ use std::sync::LazyLock;
 static MATCH: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(\s|^|https?://)([^:\./\s]+\.)+[^\d\./:\s\\"]{2,}(:(\d{1,4}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5]))?(/\S*)*(\s|$)"#).unwrap()
 });
-static CLIENT: LazyLock<ClientWithMiddleware> =
-    LazyLock::new(|| retry_client(reqwest::Client::new(), 2));
+static CLIENT: LazyLock<reqwest::Client> =
+    LazyLock::new(|| retry_client(reqwest::Client::builder(), "774.gs"));
 
 cmd!(
     "/short",

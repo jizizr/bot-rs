@@ -10,8 +10,8 @@ static MATCHS: LazyLock<Vec<RegexSign>> = LazyLock::new(|| {
         ),
     ]
 });
-static CLIENT: LazyLock<ClientWithMiddleware> =
-    LazyLock::new(|| retry_client(reqwest::Client::new(), 2));
+static CLIENT: LazyLock<reqwest::Client> =
+    LazyLock::new(|| retry_client(reqwest::Client::builder(), "b23.tv"));
 
 enum BiliUrl {
     B23,

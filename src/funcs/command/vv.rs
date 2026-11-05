@@ -15,8 +15,13 @@ cmd!(
     }
 );
 
-static CLIENT: LazyLock<ClientWithMiddleware> =
-    LazyLock::new(|| retry_client(reqwest::Client::new(), 2));
+static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    let host = Url::parse(&SETTINGS.vv.api_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_default();
+    retry_client(reqwest::Client::builder(), &host)
+});
 static API_URL: LazyLock<String> =
     LazyLock::new(|| SETTINGS.vv.api_url.trim_end_matches('/').to_string());
 static PIC_URL: LazyLock<String> =

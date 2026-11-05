@@ -1,17 +1,14 @@
 use super::*;
 use std::sync::LazyLock;
 
-static CLIENT: LazyLock<ClientWithMiddleware> = LazyLock::new(|| {
+static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     retry_client(
-        reqwest::Client::builder()
-            .default_headers({
-                let mut headers = reqwest::header::HeaderMap::new();
-                headers.insert("Content-Type", "application/json".parse().unwrap());
-                headers
-            })
-            .build()
-            .unwrap(),
-        2,
+        reqwest::Client::builder().default_headers({
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert("Content-Type", "application/json".parse().unwrap());
+            headers
+        }),
+        "generativelanguage.googleapis.774.gs",
     )
 });
 static API_URL: LazyLock<String> = LazyLock::new(|| {

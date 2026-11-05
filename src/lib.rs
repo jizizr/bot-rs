@@ -40,8 +40,6 @@ pub enum BotError {
     MusicGateway(#[from] music_gateway::GatewayError),
     #[error("API请求失败: {0}")]
     Request(#[from] reqwest::Error),
-    #[error("API请求失败: {0}")]
-    Retry(#[from] reqwest_middleware::Error),
     #[error("{}\n\n{}", 
         .0,
         .1)]

@@ -2,8 +2,8 @@ use super::*;
 use lingua::{Language, LanguageDetector, LanguageDetectorBuilder};
 use serde_json::Value;
 use std::sync::LazyLock;
-static CLIENT: LazyLock<ClientWithMiddleware> =
-    LazyLock::new(|| retry_client(reqwest::Client::builder().build().unwrap(), 2));
+static CLIENT: LazyLock<reqwest::Client> =
+    LazyLock::new(|| retry_client(reqwest::Client::builder(), "translate.googleapis.com"));
 static LANG: LazyLock<LanguageDetector> = LazyLock::new(|| {
     LanguageDetectorBuilder::from_languages(&[Language::English, Language::Chinese])
         .with_preloaded_language_models()

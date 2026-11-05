@@ -14,25 +14,21 @@ use tokio_rustls::{
 };
 use x509_parser::parse_x509_certificate;
 
-static CLIENT: LazyLock<ClientWithMiddleware> = LazyLock::new(|| {
-    retry_client(
-        ClientBuilder::use_rustls_tls(ClientBuilder::new())
-            .build()
-            .unwrap(),
-        2,
-    )
+/// Fetches whatever URL was asked about. No retries: /curl reports how the
+/// site answered, and an https failure already falls back to http.
+static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    ClientBuilder::use_rustls_tls(ClientBuilder::new())
+        .build()
+        .unwrap()
 });
-static PASTE: LazyLock<ClientWithMiddleware> = LazyLock::new(|| {
+static PASTE: LazyLock<reqwest::Client> = LazyLock::new(|| {
     retry_client(
-        Client::builder()
-            .default_headers({
-                let mut headers = HeaderMap::new();
-                headers.insert("Content-Type", HeaderValue::from_static("text/html"));
-                headers
-            })
-            .build()
-            .unwrap(),
-        2,
+        Client::builder().default_headers({
+            let mut headers = HeaderMap::new();
+            headers.insert("Content-Type", HeaderValue::from_static("text/html"));
+            headers
+        }),
+        "paste.op.wiki",
     )
 });
 static MATCH: LazyLock<Regex> = LazyLock::new(|| {
