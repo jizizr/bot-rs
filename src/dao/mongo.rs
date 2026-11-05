@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod freq;
+pub mod func_switch;
 pub mod music_favorites;
 pub mod music_settings;
 

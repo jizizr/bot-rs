@@ -94,8 +94,34 @@ pub fn init() -> Option<()> {
         guozao::guozao => "play的一环",
         comment_buttons::comment_buttons => "频道歌曲评论区补发按钮"
     );
-    tokio::spawn(SWITCH.pstorer.pool());
     Some(())
+}
+
+/// Reads the groups' switches before messages are handled. If MongoDB isn't
+/// reachable yet, start-up goes on with every feature on and the load is
+/// retried in the background until it succeeds.
+pub async fn load_switches() {
+    use tokio::time::{Duration, sleep, timeout};
+    match timeout(Duration::from_secs(10), SWITCH.load()).await {
+        Ok(Ok(count)) => {
+            log::info!("Loaded feature switches of {count} groups");
+            return;
+        }
+        Ok(Err(err)) => log::error!("Couldn't load feature switches, retrying: {err}"),
+        Err(_) => log::error!("Loading feature switches timed out, retrying"),
+    }
+    tokio::spawn(async {
+        loop {
+            sleep(Duration::from_secs(30)).await;
+            match SWITCH.load().await {
+                Ok(count) => {
+                    log::info!("Loaded feature switches of {count} groups");
+                    break;
+                }
+                Err(err) => log::warn!("Couldn't load feature switches yet: {err}"),
+            }
+        }
+    });
 }
 
 pub async fn text_handler(bot: &Bot, msg: &Message) -> BotResult {

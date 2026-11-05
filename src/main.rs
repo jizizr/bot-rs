@@ -171,6 +171,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     init_logger();
     log::info!("Starting buttons bot...");
     init();
+    bot_rs::funcs::text::load_switches().await;
     let me = loop {
         match BOT.send(GetMe::new()).await {
             Ok(me) => break me,

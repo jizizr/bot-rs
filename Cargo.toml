@@ -43,7 +43,6 @@ tokio-rustls = "0.26"
 rustls-platform-verifier = "0.7"
 x509-parser = "0.18"
 toml = "1"
-sled = "0.34"
 percent-encoding = "2"
 redis = { version = "1", features = ["tokio-comp"] }
 # Only the wire model; the server half stays behind its `server` feature.
