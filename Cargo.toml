@@ -31,6 +31,8 @@ async-trait = "0.1"
 scraper = "0.29"
 cached = { version = "4", features = ["async"] }
 chrono = { version = "0.4" }
+# IANA zones (with daylight saving) for the per-chat time zone setting.
+chrono-tz = "0.10"
 dashmap = "6"
 # Formats the bot decodes (photos, stickers, covers, the word cloud mask) and
 # encodes (jpeg, png, webp). No avif: its encoder, rav1e, was the heaviest part

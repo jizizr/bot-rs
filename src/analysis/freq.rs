@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use charts_rs::{MultiChart, svg_to_webp};
 use serde_json::{Value, json};
 
-use crate::BotError;
+use crate::{BotError, funcs::pkg::timezone::Appearance};
 
 /// How the trend chart groups the days of the period.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,7 +42,9 @@ pub struct Activity {
     pub group_name: String,
     /// The period in words, e.g. `近 30 天` or `全部记录`.
     pub period: String,
-    /// Messages in each hour of the day (Beijing time), 0 to 23.
+    /// The clock the hours are counted on, e.g. `东八区` or `Asia/Tokyo`.
+    pub zone: String,
+    /// Messages in each hour of the day on that clock, 0 to 23.
     pub user_hours: [u32; 24],
     pub group_hours: [u32; 24],
     /// The period split into days, weeks or months, oldest first; empty
@@ -68,9 +70,42 @@ impl Activity {
 
 const WIDTH: u32 = 900;
 const FONT: &str = "Noto Sans SC";
-const ACCENT: &str = "#E8590C";
-const GROUP: &str = "#B8CBE4";
-const MUTED: &str = "#868E96";
+/// Colors of one appearance: the charts-rs theme for text, axes and grid,
+/// and the picture's own colors on top of it.
+struct Palette {
+    theme: &'static str,
+    background: &'static str,
+    /// The member's line.
+    accent: &'static str,
+    /// The group's bars.
+    group: &'static str,
+    /// Subtitle and footnote.
+    muted: &'static str,
+}
+
+impl Palette {
+    fn of(appearance: Appearance) -> Self {
+        match appearance {
+            Appearance::Light => Palette {
+                theme: "light",
+                background: "#FFFFFF",
+                accent: "#E8590C",
+                group: "#B8CBE4",
+                muted: "#868E96",
+            },
+            Appearance::Dark => Palette {
+                theme: DARK_THEME,
+                background: DARK_BACKGROUND,
+                accent: "#FF8A3D",
+                group: "#3D5372",
+                muted: "#9AA3AF",
+            },
+        }
+    }
+}
+// Dark grey rather than charts-rs' navy "dark": closer to Telegram's own dark mode.
+const DARK_THEME: &str = "grafana";
+const DARK_BACKGROUND: &str = "#1F1D1D";
 
 fn percent(part: u32, whole: u32) -> f32 {
     if whole == 0 {
@@ -115,7 +150,7 @@ fn peak_hour(hours: &[u32; 24]) -> Option<usize> {
 
 /// The trend chart: the group's messages as bars on the left axis and the
 /// member's as a line on the right one, with its average and its peak.
-fn trend_chart(activity: &Activity) -> Value {
+fn trend_chart(activity: &Activity, palette: &Palette) -> Value {
     let labels: Vec<&str> = activity.trend.iter().map(|p| p.label.as_str()).collect();
     let group: Vec<u32> = activity.trend.iter().map(|p| p.group).collect();
     let user: Vec<u32> = activity.trend.iter().map(|p| p.user).collect();
@@ -135,7 +170,7 @@ fn trend_chart(activity: &Activity) -> Value {
             activity.share()
         ),
         "sub_title_align": "left",
-        "sub_title_font_color": MUTED,
+        "sub_title_font_color": palette.muted,
         "sub_title_margin": {"left": 8},
         "legend_align": "right",
         "legend_category": "round_rect",
@@ -143,7 +178,7 @@ fn trend_chart(activity: &Activity) -> Value {
         "x_axis_data": labels,
         "x_axis_font_size": 12,
         "x_axis_label_overflow": "thin",
-        "series_colors": [GROUP, ACCENT],
+        "series_colors": [palette.group, palette.accent],
         "series_stroke_width": 2.5,
         "series_symbol": null,
         // 同一根轴：个人的线贴着全群的柱，占比一眼可见
@@ -171,7 +206,7 @@ fn trend_chart(activity: &Activity) -> Value {
 
 /// The day chart: what share of the member's and of the group's messages
 /// fall in each hour, so the two rhythms compare however large each is.
-fn hours_chart(activity: &Activity, with_title: bool) -> Value {
+fn hours_chart(activity: &Activity, palette: &Palette, with_title: bool) -> Value {
     let mut chart = json!({
         "type": "bar",
         "width": WIDTH,
@@ -181,11 +216,10 @@ fn hours_chart(activity: &Activity, with_title: bool) -> Value {
         "legend_margin": {"top": 6, "right": 12},
         "x_axis_data": (0..24).map(|h| format!("{h}")).collect::<Vec<_>>(),
         "x_axis_font_size": 12,
-        "x_axis_title": "一天中的时段（北京时间，时）",
-        "series_colors": [GROUP, ACCENT],
+        "x_axis_title": format!("一天中的时段（{}，时）", activity.zone),
+        "series_colors": [palette.group, palette.accent],
         "series_stroke_width": 2.5,
         "series_symbol": null,
-        "series_fill_opacity": 0.15,
         "series_label_formatter": "{c}%",
         "y_axis_configs": [
             {
@@ -202,7 +236,6 @@ fn hours_chart(activity: &Activity, with_title: bool) -> Value {
                 "data": hour_shares(&activity.user_hours),
                 "category": "line",
                 "smooth": true,
-                "fill": true,
                 "mark_points": [{"category": "max"}]
             }
         ]
@@ -221,7 +254,7 @@ fn hours_chart(activity: &Activity, with_title: bool) -> Value {
                 activity.share()
             ),
             "sub_title_align": "left",
-            "sub_title_font_color": MUTED,
+            "sub_title_font_color": palette.muted,
             "sub_title_margin": {"left": 8},
             "legend_margin": {"top": 40, "right": 12},
             "height": 380,
@@ -233,29 +266,30 @@ fn hours_chart(activity: &Activity, with_title: bool) -> Value {
     chart
 }
 
-/// The `/count` picture as WebP.
-pub fn paint(activity: &Activity) -> Result<Vec<u8>, BotError> {
+/// The `/count` picture as WebP, light or dark.
+pub fn paint(activity: &Activity, appearance: Appearance) -> Result<Vec<u8>, BotError> {
     register_fonts();
+    let palette = Palette::of(appearance);
     let mut charts = Vec::new();
     let has_trend = activity.trend.len() >= 2;
     if has_trend {
-        charts.push(trend_chart(activity));
+        charts.push(trend_chart(activity, &palette));
     }
-    charts.push(hours_chart(activity, !has_trend));
+    charts.push(hours_chart(activity, &palette, !has_trend));
     for chart in &mut charts {
         chart["font_family"] = json!(FONT);
     }
     let spec = json!({
-        "theme": "light",
-        "background_color": "#FFFFFF",
+        "theme": palette.theme,
+        "background_color": palette.background,
         "margin": {"left": 12, "top": 12, "right": 12, "bottom": 8},
         "gap": 18,
         "texts": [{
-            "text": "按北京时间统计",
+            "text": format!("时区：{}", activity.zone),
             "right": 14,
             "bottom": 6,
             "font_size": 12,
-            "font_color": MUTED,
+            "font_color": palette.muted,
             "reserve": true
         }],
         "child_charts": charts,
@@ -301,6 +335,7 @@ mod tests {
             user_name: "小明".into(),
             group_name: "测试群".into(),
             period: "近 30 天".into(),
+            zone: "东八区".into(),
             user_hours: user,
             group_hours: group,
             trend,
@@ -360,9 +395,18 @@ mod tests {
                 group: 12,
             },
         ];
-        assert!(!paint(&activity(user, [2; 24], trend)).unwrap().is_empty());
         assert!(
-            !paint(&activity(user, [2; 24], Vec::new()))
+            !paint(&activity(user, [2; 24], trend.clone()), Appearance::Light)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !paint(&activity(user, [2; 24], trend), Appearance::Dark)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !paint(&activity(user, [2; 24], Vec::new()), Appearance::Dark)
                 .unwrap()
                 .is_empty()
         );

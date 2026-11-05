@@ -1,6 +1,7 @@
 use super::*;
 use crate::analysis::freq::{Activity, Bucket, Point};
-use chrono::{Datelike, Days, Duration as ChronoDuration, FixedOffset, Months, NaiveDate, Utc};
+use chrono::{Datelike, Days, Duration as ChronoDuration, Months, NaiveDate, Utc};
+use chrono_tz::Tz;
 use futures::stream::TryStreamExt;
 use serde::Deserialize;
 
@@ -33,8 +34,6 @@ impl<T: Into<String>> From<T> for Duration {
     }
 }
 
-/// Messages are counted in Beijing time, as the chart says.
-const TZ: &str = "Asia/Shanghai";
 const KEY_FORMAT: &str = "%Y-%m-%d";
 
 impl Duration {
@@ -170,15 +169,17 @@ fn fill_trend(
 }
 
 /// How one member's messages in a group spread over the period and over the
-/// day, next to the whole group's.
+/// day, next to the whole group's, counted on the clock of `tz`.
 pub async fn query_activity(
     gid: i64,
     uid: i64,
     duration: Option<Duration>,
+    tz: Tz,
     user_name: String,
     group_name: String,
 ) -> Result<Activity, BotError> {
     let duration = duration.unwrap_or(Duration::Invalid);
+    let zone = tz.name();
     let now = Utc::now();
     let mut match_condition = doc! { "group_id": gid };
     if let Some(span) = duration.span() {
@@ -187,7 +188,7 @@ pub async fn query_activity(
             doc! { "$gte": bson::DateTime::from_chrono(now - span) },
         );
     }
-    let by_hour = doc! { "$hour": { "date": "$timestamp", "timezone": TZ } };
+    let by_hour = doc! { "$hour": { "date": "$timestamp", "timezone": zone } };
     let mut facets = doc! {
         "user_hours": [
             { "$match": { "user_id": uid } },
@@ -206,12 +207,12 @@ pub async fn query_activity(
                     "_id": {
                         "$dateToString": {
                             "format": KEY_FORMAT,
-                            "timezone": TZ,
+                            "timezone": zone,
                             "date": {
                                 "$dateTrunc": {
                                     "date": "$timestamp",
                                     "unit": bucket.unit(),
-                                    "timezone": TZ,
+                                    "timezone": zone,
                                     "startOfWeek": "monday"
                                 }
                             }
@@ -241,8 +242,7 @@ pub async fn query_activity(
         trend: Vec::new(),
     });
 
-    let beijing = FixedOffset::east_opt(8 * 3600).unwrap();
-    let today = now.with_timezone(&beijing).date_naive();
+    let today = now.with_timezone(&tz).date_naive();
     let trend = match bucket {
         Some(bucket) => {
             let first_found = facets
@@ -251,7 +251,7 @@ pub async fn query_activity(
                 .filter_map(|c| NaiveDate::parse_from_str(&c.key, KEY_FORMAT).ok())
                 .min();
             let from = match duration.span() {
-                Some(span) => Some((now - span).with_timezone(&beijing).date_naive()),
+                Some(span) => Some((now - span).with_timezone(&tz).date_naive()),
                 None => first_found,
             };
             from.map(|from| fill_trend(bucket, from, today, &facets.trend))
@@ -263,6 +263,7 @@ pub async fn query_activity(
         user_name,
         group_name,
         period: duration.words().to_string(),
+        zone: crate::funcs::pkg::timezone::zone_name(tz),
         user_hours: hours(&facets.user_hours),
         group_hours: hours(&facets.group_hours),
         trend,

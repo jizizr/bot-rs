@@ -3,7 +3,7 @@ use crate::{
     BotResult,
     analysis::model::{BotLogBuilder, Group, MessageStatus, User},
     dao::mongo::analysis::insert_log,
-    funcs::command::{coin, config, music, translate},
+    funcs::command::{coin, config, music, timezone, translate},
 };
 macro_rules! dispatch_callbacks {
     (
@@ -39,6 +39,7 @@ pub async fn call_query_handler(bot: Bot, mut q: CallbackQuery) -> BotResult {
         "music" => music::music_callback,
         "config" => config::config_callback,
         "trans" => translate::translate_callback,
+        "tz" => timezone::timezone_callback,
     )
     .inspect_err(|e| {
         blog.set_error(e.to_string());

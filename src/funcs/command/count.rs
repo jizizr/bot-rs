@@ -2,6 +2,7 @@ use super::*;
 use crate::{
     analysis::freq::{paint, summary},
     dao::mongo::freq::{Duration as FreqDuration, query_activity},
+    funcs::pkg::timezone::{Appearance, chat_timezone},
 };
 
 cmd!(
@@ -22,10 +23,14 @@ pub async fn count(bot: &Bot, msg: &Message) -> BotResult {
         .from()
         .ok_or(BotError::Custom("failed to get uid".to_string()))?;
     show_typing(bot, msg.chat().id());
+    // 按群设置的时区统计时段，并按当地是白天还是晚上出浅色或深色的图
+    let tz = chat_timezone(msg.chat().id()).await;
+    let appearance = Appearance::at(&chrono::Utc::now().with_timezone(&tz));
     let activity = query_activity(
         msg.chat().id(),
         user.id,
         command.duration,
+        tz,
         crate::funcs::get_name(user),
         msg.chat().title().unwrap_or("本群").to_string(),
     )
@@ -43,9 +48,12 @@ pub async fn count(bot: &Bot, msg: &Message) -> BotResult {
     }
 
     bot.send(
-        SendPhoto::new(msg.chat().id(), InputFile::buffered(paint(&activity)?))
-            .caption(summary(&activity))
-            .reply_parameters(reply_to(msg.message_id())),
+        SendPhoto::new(
+            msg.chat().id(),
+            InputFile::buffered(paint(&activity, appearance)?),
+        )
+        .caption(summary(&activity))
+        .reply_parameters(reply_to(msg.message_id())),
     )
     .await?;
     Ok(())

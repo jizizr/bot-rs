@@ -6,4 +6,5 @@ pub mod jieba;
 pub mod kv;
 pub mod quote;
 pub mod rich;
+pub mod timezone;
 pub mod wcloud;

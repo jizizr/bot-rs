@@ -30,6 +30,7 @@ pub mod rom;
 pub mod short;
 pub mod start;
 pub mod test;
+pub mod timezone;
 pub mod today;
 pub mod translate;
 pub mod uploader;
@@ -210,6 +211,7 @@ commands! {
     Rom => "rom": "小米刷机包链接",
     Vv => "vv": "vv不削能玩？",
     Count => "count": "发言趋势",
+    Timezone => "timezone" ["tz"]: "查看或设置本群时区",
     Quote => "q" ["quote"]: "回复消息生成语录贴纸",
     Test => "test" hidden: "",
     Uploader => "uploader" hidden: "",
@@ -300,6 +302,7 @@ pub async fn command_handler(bot: &Bot, msg: &Message, me: &User) -> BotResult {
         Rom => rom::rom,
         Vv => vv::vv,
         Count => count::count,
+        Timezone => timezone::timezone,
         Quote => quote::quote,
         Test => test::test,
         Uploader => uploader::uploader,
