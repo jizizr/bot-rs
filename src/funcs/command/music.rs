@@ -1487,6 +1487,7 @@ fn apply_music_setting(
 /// Delivers a song in a chat. The status message that showed the progress
 /// becomes the song card itself; only without one, or when Telegram refuses
 /// the edit, is a new message sent (and the status removed).
+#[allow(clippy::too_many_arguments)]
 async fn send_media(
     bot: &Bot,
     msg: &Message,
@@ -1494,17 +1495,29 @@ async fn send_media(
     reply_to: Option<i64>,
     query: &MusicQuery,
     media: &MusicMedia,
+    extras: &CardExtras,
 ) -> BotResult {
     let track = &media.track;
-    let markup = track_menu(track, Some(query), msg);
+    let markup = track_menu(track, Some(query), msg, extras.lyric_button());
+    let cover = &extras.cover;
     if let Some(status) = status_msg {
-        let mut edit = SongMessage::Chat(status)
-            .edit()
-            .rich_message(chat_song_card(media));
-        if let Some(markup) = markup.clone() {
-            edit = edit.reply_markup(markup);
-        }
-        match bot.send(edit).await.map_err(BotError::from) {
+        let edit = |cover: &Cover| {
+            let mut edit = SongMessage::Chat(status)
+                .edit()
+                .rich_message(chat_song_card(media, extras, cover));
+            if let Some(markup) = markup.clone() {
+                edit = edit.reply_markup(markup);
+            }
+            edit
+        };
+        let result = match bot.send(edit(cover)).await.map_err(BotError::from) {
+            Err(err) if *cover != Cover::None && !is_invalid_cached_file_error(&err) => {
+                log::error!("song card with cover failed, editing without: {err}");
+                bot.send(edit(&Cover::None)).await.map_err(BotError::from)
+            }
+            result => result,
+        };
+        match result {
             Ok(_) => return Ok(()),
             // 文件失效交给上层作废缓存重取
             Err(err) if is_invalid_cached_file_error(&err) => return Err(err),
@@ -1512,14 +1525,24 @@ async fn send_media(
         }
     }
 
-    let mut card = SendRichMessage::new(msg.chat().id(), chat_song_card(media));
-    if let Some(reply_to) = reply_to {
-        card = card.reply_parameters(crate::reply_to(reply_to));
-    }
-    if let Some(markup) = markup.clone() {
-        card = card.reply_markup(markup);
-    }
-    let sent = match bot.send(card).await.map_err(BotError::from) {
+    let card = |cover: &Cover| {
+        let mut card = SendRichMessage::new(msg.chat().id(), chat_song_card(media, extras, cover));
+        if let Some(reply_to) = reply_to {
+            card = card.reply_parameters(crate::reply_to(reply_to));
+        }
+        if let Some(markup) = markup.clone() {
+            card = card.reply_markup(markup);
+        }
+        card
+    };
+    let result = match bot.send(card(cover)).await.map_err(BotError::from) {
+        Err(err) if *cover != Cover::None && !is_invalid_cached_file_error(&err) => {
+            log::error!("song card with cover failed, sending without: {err}");
+            bot.send(card(&Cover::None)).await.map_err(BotError::from)
+        }
+        result => result,
+    };
+    let sent = match result {
         Ok(_) => Ok(()),
         Err(err) if is_invalid_cached_file_error(&err) => return Err(err),
         Err(err) => {
@@ -1572,14 +1595,114 @@ async fn send_audio_message(
     Ok(())
 }
 
-/// A song as chat and inline messages show it: a rich card whose lyrics can
-/// open in place.
-fn chat_song_card(media: &MusicMedia) -> telers::types::InputRichMessage {
-    song_card(
-        &LyricSong::from_track(&media.track),
-        media.track.platform,
-        &song_audio(media),
-    )
+/// A song as chat and inline messages show it: a rich card with its cover
+/// and, when there are any, its lyrics folded under it.
+fn chat_song_card(
+    media: &MusicMedia,
+    extras: &CardExtras,
+    cover: &Cover,
+) -> telers::types::InputRichMessage {
+    let platform = media.track.platform;
+    let audio = song_audio(media);
+    match &extras.lyrics {
+        CardLyrics::Shown(lyrics, script) => {
+            LyricView::new(&extras.song, platform, lyrics, *script).rich_with_audio(cover, &audio)
+        }
+        CardLyrics::Absent | CardLyrics::Pending(_) => {
+            song_card(&extras.song, platform, &audio, cover)
+        }
+    }
+}
+
+/// The lyrics a song card shows.
+#[derive(Clone, Debug)]
+enum CardLyrics {
+    /// Shown in this script, with a button to switch it.
+    Shown(provider::MusicLyrics, MusicLyricScript),
+    /// The platform has none for this song: no lyric button.
+    Absent,
+    /// Not to be had right now (rate limit, error): the button asks again.
+    Pending(String),
+}
+
+/// What a song card adds to the file: the song as known, its cover banner
+/// and its lyrics.
+#[derive(Clone, Debug)]
+struct CardExtras {
+    song: LyricSong,
+    cover: Cover,
+    lyrics: CardLyrics,
+}
+
+/// The lyric button under a card: label and the script it switches to.
+type LyricButton = Option<(&'static str, Option<MusicLyricScript>)>;
+
+/// A lyric button that opens the lyrics in the user's script.
+const OPEN_LYRICS: LyricButton = Some(("歌词", None));
+
+impl CardExtras {
+    fn lyric_button(&self) -> LyricButton {
+        match &self.lyrics {
+            CardLyrics::Shown(_, script) => Some((script.switch_label(), Some(script.toggled()))),
+            CardLyrics::Absent => None,
+            CardLyrics::Pending(_) => OPEN_LYRICS,
+        }
+    }
+}
+
+/// Gathers a card's extras side by side: the cover banner (asking the
+/// gateway for the cover when the cached track lacks one) and the lyrics in
+/// `script`, the user's own when `None`.
+async fn card_extras(
+    bot: &Bot,
+    track: &MusicTrack,
+    user_id: i64,
+    chat_id: Option<i64>,
+    script: Option<MusicLyricScript>,
+) -> CardExtras {
+    let cover = async {
+        let song = match LyricSong::from_track(track) {
+            song if song.cover.is_some() => song,
+            song => LyricSong::resolve(track.platform, &track.id, user_id, song).await,
+        };
+        let cover = lyric_cover(bot, &song).await;
+        (song, cover)
+    };
+    let lyrics = async {
+        if !track.platform.supports_lyrics() || track.id.trim().is_empty() {
+            return CardLyrics::Absent;
+        }
+        let script = match script {
+            Some(script) => script,
+            None => MusicLyricScript::from_stored_value(
+                &get_user_settings_or_default(user_id).await.lyric_script,
+            ),
+        };
+        match fetch_lyrics_limited(track.platform, &track.id, user_id, chat_id).await {
+            Ok(Some(lyrics)) => CardLyrics::Shown(lyrics, script),
+            Ok(None) => CardLyrics::Absent,
+            Err(err) => {
+                log::warn!("card lyrics {}:{}: {err}", track.platform.id(), track.id);
+                CardLyrics::Pending(err.to_string())
+            }
+        }
+    };
+    let ((song, cover), lyrics) = tokio::join!(cover, lyrics);
+    CardExtras {
+        song,
+        cover,
+        lyrics,
+    }
+}
+
+/// `card_extras` in the background, so a download need not wait for them.
+fn spawn_card_extras(
+    bot: Bot,
+    track: MusicTrack,
+    user_id: i64,
+    chat_id: Option<i64>,
+) -> JoinHandle<CardExtras> {
+    tokio::spawn(async move { card_extras(&bot, &track, user_id, chat_id, None).await })
 }
 
 /// The song file a card plays, if `msg` is one.
@@ -1754,15 +1877,15 @@ enum Destination<'a> {
 }
 
 impl Destination<'_> {
-    async fn send(&self, bot: &Bot, media: &MusicMedia) -> BotResult {
+    async fn send(&self, bot: &Bot, media: &MusicMedia, extras: &CardExtras) -> BotResult {
         match self {
             Destination::Chat {
                 msg,
                 status_msg,
                 reply_to,
                 query,
-            } => send_media(bot, msg, *status_msg, *reply_to, query, media).await,
-            Destination::Inline(id) => edit_inline_song_card(bot, id, media).await,
+            } => send_media(bot, msg, *status_msg, *reply_to, query, media, extras).await,
+            Destination::Inline(id) => edit_inline_song_card(bot, id, media, extras).await,
         }
     }
 }
@@ -1778,14 +1901,26 @@ async fn deliver(
     destination: Destination<'_>,
 ) -> Result<MusicMedia, BotError> {
     let mut retried = false;
+    // 重取文件时歌曲不变，封面与歌词沿用第一次的
+    let mut known_extras = None;
     loop {
-        let media = obtain_media(bot, request.clone(), user_id, chat_id, status).await?;
+        let (media, prefetch) =
+            obtain_media(bot, request.clone(), user_id, chat_id, status).await?;
         if !retried && is_suspicious_media(&media.track, media.byte_size) {
             provider::invalidate(&media).await;
             retried = true;
             continue;
         }
-        match destination.send(bot, &media).await {
+        let extras = match (known_extras.take(), prefetch) {
+            (Some(extras), _) => extras,
+            (None, Some(prefetch)) => match prefetch.await {
+                Ok(extras) => extras,
+                Err(_) => card_extras(bot, &media.track, user_id, chat_id, None).await,
+            },
+            (None, None) => card_extras(bot, &media.track, user_id, chat_id, None).await,
+        };
+        let extras = known_extras.insert(extras);
+        match destination.send(bot, &media, extras).await {
             Ok(()) => return Ok(media),
             Err(err) if !retried && is_invalid_cached_file_error(&err) => {
                 provider::invalidate(&media).await;
@@ -1806,7 +1941,7 @@ async fn obtain_media(
     user_id: i64,
     chat_id: Option<i64>,
     status: &StatusTarget,
-) -> Result<MusicMedia, BotError> {
+) -> Result<(MusicMedia, Option<JoinHandle<CardExtras>>), BotError> {
     let gateway = provider::gateway()?;
     // 即将发歌：老缓存若还没内嵌歌词，让 MHub 先补上再给 file_id（超时则仍给旧文件）
     let lookup = gateway
@@ -1816,11 +1951,16 @@ async fn obtain_media(
         })
         .await?;
     if let Some(media) = lookup.media {
-        return Ok(media);
+        return Ok((media, None));
     }
     let _admission = queue::GOVERNOR.admit(user_id, chat_id)?;
     let download_token =
         ratelimit::ensure_admitted(ResourceAction::Download, user_id, chat_id, request.platform)?;
+    // 未命中缓存时歌曲已知，封面横幅与歌词在排队和下载期间并行准备
+    let prefetch = lookup
+        .track
+        .clone()
+        .map(|track| spawn_card_extras(bot.clone(), track, user_id, chat_id));
     let slot = {
         let queued_bot = bot.clone();
         let queued_status = status.clone();
@@ -1841,6 +1981,9 @@ async fn obtain_media(
             Err(e) => {
                 // 未实际下载，按凭证精确退还刚记录的下载额度
                 ratelimit::LIMITER.refund(download_token);
+                if let Some(prefetch) = &prefetch {
+                    prefetch.abort();
+                }
                 return Err(e);
             }
         }
@@ -1882,7 +2025,15 @@ async fn obtain_media(
     drop(tx);
     reporter.abort();
     let _ = reporter.await;
-    Ok(result?)
+    match result {
+        Ok(media) => Ok((media, prefetch)),
+        Err(err) => {
+            if let Some(prefetch) = &prefetch {
+                prefetch.abort();
+            }
+            Err(err.into())
+        }
+    }
 }
 
 /// Old Apple Music entries sometimes hold a preview with the full song's
@@ -2477,21 +2628,67 @@ async fn edit_inline_song_card(
     bot: &Bot,
     inline_message_id: &str,
     media: &MusicMedia,
+    extras: &CardExtras,
 ) -> BotResult {
-    let card = chat_song_card(media);
-    let mut request = EditMessageText::new()
-        .inline_message_id(inline_message_id)
-        .rich_message(card);
-    if let Some(markup) = inline_track_menu(&media.track) {
-        request = request.reply_markup(markup);
-    }
-    match bot.send(request).await.map_err(BotError::from) {
+    let cover = &extras.cover;
+    let request = |cover: &Cover| {
+        let mut request = EditMessageText::new()
+            .inline_message_id(inline_message_id)
+            .rich_message(chat_song_card(media, extras, cover));
+        if let Some(markup) =
+            inline_track_menu_with_lyric_button(&media.track, extras.lyric_button())
+        {
+            request = request.reply_markup(markup);
+        }
+        request
+    };
+    let result = match bot.send(request(cover)).await.map_err(BotError::from) {
+        Err(err) if *cover != Cover::None && !is_not_modified(&err) => {
+            log::error!("inline song card with cover failed, editing without: {err}");
+            bot.send(request(&Cover::None))
+                .await
+                .map_err(BotError::from)
+        }
+        result => result,
+    };
+    match result {
         Ok(_) => Ok(()),
         Err(err) if is_not_modified(&err) => Ok(()),
         Err(err) => {
             log::error!("inline song card refused, sending audio: {err}");
             edit_inline_audio(bot, inline_message_id, media).await
         }
+    }
+}
+
+/// Rewrites a song card in a chat, without the cover if Telegram cannot
+/// fetch it.
+async fn edit_chat_song_card(
+    bot: &Bot,
+    msg: &Message,
+    media: &MusicMedia,
+    extras: &CardExtras,
+) -> BotResult {
+    let cover = &extras.cover;
+    let edit = |cover: &Cover| {
+        let mut edit = SongMessage::Chat(msg)
+            .edit()
+            .rich_message(chat_song_card(media, extras, cover));
+        if let Some(markup) = track_menu(&media.track, None, msg, extras.lyric_button()) {
+            edit = edit.reply_markup(markup);
+        }
+        edit
+    };
+    let result = match bot.send(edit(cover)).await.map_err(BotError::from) {
+        Err(err) if *cover != Cover::None && !is_not_modified(&err) => {
+            log::error!("song card with cover failed, editing without: {err}");
+            bot.send(edit(&Cover::None)).await.map_err(BotError::from)
+        }
+        result => result,
+    };
+    match result {
+        Err(err) if !is_not_modified(&err) => Err(err),
+        _ => Ok(()),
     }
 }
 
@@ -3144,7 +3341,7 @@ async fn handle_lyrics_callback(
             user_id,
             platform,
             id,
-            script,
+            Some(script),
             &settings,
         )
         .await;
@@ -3398,8 +3595,9 @@ impl SongMessage<'_> {
     }
 }
 
-/// Opens a song card's lyrics in place: the card as it was, then the cover
-/// and the lyric page, with buttons to switch script or fold it back.
+/// Redraws a song card with its lyrics in `script` (the user's own when
+/// `None`): the card, its cover, then the folded lyrics, with the lyric
+/// button switching script.
 #[allow(clippy::too_many_arguments)]
 async fn handle_song_lyrics_callback(
     bot: &Bot,
@@ -3408,22 +3606,13 @@ async fn handle_song_lyrics_callback(
     user_id: i64,
     platform: MusicPlatform,
     id: &str,
-    script: MusicLyricScript,
+    script: Option<MusicLyricScript>,
     settings: &UserMusicSettings,
 ) -> BotResult {
     let chat_id = match &target {
         SongMessage::Chat(msg) => Some(msg.chat().id()),
         SongMessage::Inline(_) => None,
     };
-    let Some(lyrics) = fetch_lyrics_limited(platform, id, user_id, chat_id).await? else {
-        bot.send(
-            AnswerCallbackQuery::new(callback_id.to_string())
-                .text(format!("{} 没有可用歌词", platform.label()))
-                .show_alert(true),
-        )
-        .await?;
-        return Ok(());
-    };
     let Some(media) = inline_song_media(platform, id, settings).await else {
         bot.send(
             AnswerCallbackQuery::new(callback_id.to_string())
@@ -3433,83 +3622,53 @@ async fn handle_song_lyrics_callback(
         .await?;
         return Ok(());
     };
-    // 缓存里的歌曲信息不带封面，缺了就向网关补一次
-    let song = match LyricSong::from_track(&media.track) {
-        song if song.cover.is_some() => song,
-        song => LyricSong::resolve(platform, id, user_id, song).await,
+    let extras = card_extras(bot, &media.track, user_id, chat_id, script).await;
+    let alert = match (&extras.lyrics, script) {
+        // 显式切换繁简时才提示；旧消息的「收起歌词」只是重画卡片
+        (CardLyrics::Absent, Some(_)) => Some(format!("{} 没有可用歌词", platform.label())),
+        (CardLyrics::Pending(err), Some(_)) => Some(err.clone()),
+        _ => None,
     };
-    let cover = lyric_cover(bot, &song).await;
-    let audio = song_audio(&media);
-    let page = LyricView::new(&song, platform, &lyrics, script).rich_with_audio(&cover, &audio);
-    let edit = target
-        .edit()
-        .rich_message(page)
-        .reply_markup(open_lyrics_menu(platform, id, script));
-    match bot.send(edit).await.map_err(BotError::from) {
-        Err(err) if !is_not_modified(&err) => return Err(err),
-        _ => {}
+    if let Some(alert) = alert {
+        bot.send(
+            AnswerCallbackQuery::new(callback_id.to_string())
+                .text(alert)
+                .show_alert(true),
+        )
+        .await?;
+        return Ok(());
+    }
+    match target {
+        SongMessage::Inline(id) => edit_inline_song_card(bot, id, &media, &extras).await?,
+        SongMessage::Chat(msg) => edit_chat_song_card(bot, msg, &media, &extras).await?,
     }
     bot.send(AnswerCallbackQuery::new(callback_id.to_string()))
         .await?;
     Ok(())
 }
 
-/// Under a song card with its lyrics open: switch script, or fold back.
-fn open_lyrics_menu(
-    platform: MusicPlatform,
-    id: &str,
-    script: MusicLyricScript,
-) -> InlineKeyboardMarkup {
-    let row = [
-        MusicCallbackAction::Lyrics(platform, id.to_string(), Some(script.toggled()))
-            .encode()
-            .map(|callback| callback_button(script.switch_label(), callback)),
-        MusicCallbackAction::InlineCollapse(platform, id.to_string())
-            .encode()
-            .map(|callback| callback_button("收起歌词", callback)),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>();
-    InlineKeyboardMarkup::new([row])
-}
-
-/// Folds a song card's lyrics back into the card.
+/// The fold-back button of cards sent before lyrics came folded in: the card
+/// is simply drawn again as it now is.
 async fn handle_song_collapse_callback(
     bot: &Bot,
     callback_id: &str,
     target: SongMessage<'_>,
+    user_id: i64,
     platform: MusicPlatform,
     id: &str,
     settings: &UserMusicSettings,
 ) -> BotResult {
-    let Some(media) = inline_song_media(platform, id, settings).await else {
-        bot.send(
-            AnswerCallbackQuery::new(callback_id.to_string())
-                .text("这首歌的缓存已失效，请重新发送")
-                .show_alert(true),
-        )
-        .await?;
-        return Ok(());
-    };
-    match target {
-        SongMessage::Inline(id) => edit_inline_song_card(bot, id, &media).await?,
-        SongMessage::Chat(msg) => {
-            let mut edit = SongMessage::Chat(msg)
-                .edit()
-                .rich_message(chat_song_card(&media));
-            if let Some(markup) = track_menu(&media.track, None, msg) {
-                edit = edit.reply_markup(markup);
-            }
-            match bot.send(edit).await.map_err(BotError::from) {
-                Err(err) if !is_not_modified(&err) => return Err(err),
-                _ => {}
-            }
-        }
-    }
-    bot.send(AnswerCallbackQuery::new(callback_id.to_string()))
-        .await?;
-    Ok(())
+    handle_song_lyrics_callback(
+        bot,
+        callback_id,
+        target,
+        user_id,
+        platform,
+        id,
+        None,
+        settings,
+    )
+    .await
 }
 
 async fn handle_inline_lyric_text_callback(
@@ -4198,7 +4357,7 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
                     user_id,
                     platform,
                     &id,
-                    script,
+                    Some(script),
                     &settings,
                 )
                 .await;
@@ -4212,6 +4371,7 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
                     &bot,
                     &callback_id,
                     SongMessage::Inline(&inline_message_id),
+                    user_id,
                     platform,
                     &id,
                     &settings,
@@ -4434,6 +4594,7 @@ pub async fn music_callback(bot: Bot, q: CallbackQuery) -> Result<(), BotError> 
                     &bot,
                     &callback_id,
                     SongMessage::Chat(&msg),
+                    user_id,
                     platform,
                     &id,
                     &settings,
@@ -4463,18 +4624,24 @@ fn track_menu(
     track: &MusicTrack,
     fallback_query: Option<&MusicQuery>,
     msg: &Message,
+    lyric_button: LyricButton,
 ) -> Option<InlineKeyboardMarkup> {
-    track_menu_for_context(track, fallback_query, is_group_chat(msg), msg.chat().id())
+    track_menu_for_context(
+        track,
+        fallback_query,
+        is_group_chat(msg),
+        msg.chat().id(),
+        lyric_button,
+    )
 }
 
 fn inline_track_menu(track: &MusicTrack) -> Option<InlineKeyboardMarkup> {
-    inline_track_menu_with_lyric_label(track, "歌词", None)
+    inline_track_menu_with_lyric_button(track, OPEN_LYRICS)
 }
 
-fn inline_track_menu_with_lyric_label(
+fn inline_track_menu_with_lyric_button(
     track: &MusicTrack,
-    lyric_label: &str,
-    lyric_target: Option<MusicLyricScript>,
+    lyric_button: LyricButton,
 ) -> Option<InlineKeyboardMarkup> {
     let mut utility_row = Vec::new();
     if let Ok(url) = Url::parse(track.cover.trim())
@@ -4494,6 +4661,7 @@ fn inline_track_menu_with_lyric_label(
     // 点开后这条 inline 消息原地变成带播放器的富文本歌词页
     if track.platform.supports_lyrics()
         && !track.id.trim().is_empty()
+        && let Some((lyric_label, lyric_target)) = lyric_button
         && let Some(callback) =
             MusicCallbackAction::Lyrics(track.platform, track.id.clone(), lyric_target).encode()
     {
@@ -4563,6 +4731,7 @@ fn track_menu_for_context(
     fallback_query: Option<&MusicQuery>,
     is_group: bool,
     chat_id: i64,
+    lyric_button: LyricButton,
 ) -> Option<InlineKeyboardMarkup> {
     let mut utility_row = Vec::new();
     if !track.cover.trim().is_empty()
@@ -4595,10 +4764,11 @@ fn track_menu_for_context(
     if !track.id.trim().is_empty() {
         // Bilibili/酷狗没有歌词接口，不渲染必然弹“没有可用歌词”的死按钮
         if track.platform.supports_lyrics()
+            && let Some((lyric_label, lyric_target)) = lyric_button
             && let Some(callback) =
-                MusicCallbackAction::Lyrics(track.platform, track.id.clone(), None).encode()
+                MusicCallbackAction::Lyrics(track.platform, track.id.clone(), lyric_target).encode()
         {
-            action_row.push(callback_button("歌词", callback));
+            action_row.push(callback_button(lyric_label, callback));
         }
         if let Some(callback) = MusicCallbackAction::Favorite(MusicFavoriteAction::Toggle {
             scope: FavoriteScope::User,
@@ -4708,7 +4878,8 @@ pub async fn comment_buttons(bot: &Bot, msg: &Message) -> BotResult {
     }
     let track = cached.track;
     // 缓存行不带封面，获取封面按钮会被 track_menu_for_context 自然省略
-    let Some(keyboard) = track_menu_for_context(&track, None, true, msg.chat().id()) else {
+    let Some(keyboard) = track_menu_for_context(&track, None, true, msg.chat().id(), OPEN_LYRICS)
+    else {
         return Ok(());
     };
     if let Err(err) = bot
@@ -5397,7 +5568,7 @@ mod tests {
             platform: MusicPlatform::AppleMusic,
             keyword: "1624001324".to_string(),
         };
-        let markup = track_menu_for_context(&track, Some(&query), false, 0).unwrap();
+        let markup = track_menu_for_context(&track, Some(&query), false, 0, OPEN_LYRICS).unwrap();
         let callback = markup.inline_keyboard[0]
             .iter()
             .find_map(|button| {
@@ -5427,7 +5598,7 @@ mod tests {
             bitrate: None,
             format: Some("m4a".to_string()),
         };
-        let markup = track_menu_for_context(&track, None, true, -100123).unwrap();
+        let markup = track_menu_for_context(&track, None, true, -100123, OPEN_LYRICS).unwrap();
         assert_eq!(markup.inline_keyboard.len(), 2);
         assert_eq!(&*markup.inline_keyboard[0][0].text, "获取封面");
         assert_eq!(&*markup.inline_keyboard[0][1].text, "搜索更多");
@@ -5461,7 +5632,7 @@ mod tests {
             bitrate: None,
             format: Some("m4a".to_string()),
         };
-        let markup = track_menu_for_context(&track, None, true, -100123).unwrap();
+        let markup = track_menu_for_context(&track, None, true, -100123, OPEN_LYRICS).unwrap();
         let labels = button_labels(&markup);
         assert!(!labels.contains(&"歌词"));
         assert!(labels.contains(&"收藏"));
@@ -5475,7 +5646,7 @@ mod tests {
         let mut kugou_track = track.clone();
         kugou_track.platform = MusicPlatform::Kugou;
         kugou_track.id = "ABCDEF0123456789ABCDEF0123456789".to_string();
-        let markup = track_menu_for_context(&kugou_track, None, false, 0).unwrap();
+        let markup = track_menu_for_context(&kugou_track, None, false, 0, OPEN_LYRICS).unwrap();
         assert!(!button_labels(&markup).contains(&"歌词"));
     }
 

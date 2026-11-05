@@ -216,12 +216,6 @@ pub(super) fn sized_cover(platform: MusicPlatform, url: &str) -> String {
     }
 }
 
-/// `mm:ss` for a time in milliseconds.
-pub(super) fn lyric_clock(time: u64) -> String {
-    let seconds = time / 1000;
-    format!("{:02}:{:02}", seconds / 60, seconds % 60)
-}
-
 /// The cover a lyric page shows.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum Cover {
@@ -362,20 +356,32 @@ impl SongAudio {
     }
 }
 
-/// An inline song as a rich card. Its lyrics open by editing it into the
-/// same card with the lyric page under it, which an audio message cannot be.
+/// `page` with the cover banner appended, when there is one.
+fn with_cover(page: RichPage, cover: &Cover) -> RichPage {
+    match cover {
+        Cover::Uploaded(file_id) => page.uploaded_photo(file_id),
+        Cover::None => page,
+    }
+}
+
+/// A song as a rich card: name, byline, player, details, then the cover.
+/// Its lyrics open by editing it into the same card with the lyric page
+/// under the cover, which an audio message cannot be.
 pub(super) fn song_card(
     song: &LyricSong,
     platform: MusicPlatform,
     audio: &SongAudio,
+    cover: &Cover,
 ) -> InputRichMessage {
-    audio
-        .card(
+    with_cover(
+        audio.card(
             RichPage::default(),
             song.title.as_deref().unwrap_or("歌曲"),
             &song.byline(platform),
-        )
-        .build()
+        ),
+        cover,
+    )
+    .build()
 }
 
 /// What every lyric page shows, already in the requested script.
@@ -424,14 +430,8 @@ impl LyricView {
     fn lines_html(&self, break_tag: &str, budget: usize) -> String {
         let mut body = String::new();
         for line in &self.lines {
-            let mut entry = match line.time {
-                Some(time) => format!(
-                    "<code>{}</code> {}",
-                    lyric_clock(time),
-                    html_escape(&line.text)
-                ),
-                None => html_escape(&line.text),
-            };
+            // 给人读的页面不带时间轴，时间只留在 LRC 文件里
+            let mut entry = html_escape(&line.text);
             if let Some(translation) = &line.translation {
                 entry.push_str(&format!("{break_tag}<i>{}</i>", html_escape(translation)));
             }
@@ -464,13 +464,12 @@ impl LyricView {
     }
 
     fn rich_page(&self, cover: &Cover, audio: Option<&SongAudio>) -> InputRichMessage {
-        let with_cover = |page: RichPage| match cover {
-            Cover::Uploaded(file_id) => page.uploaded_photo(file_id),
-            Cover::None => page,
-        };
         let page = match audio {
-            Some(audio) => with_cover(audio.card(RichPage::default(), &self.title, &self.byline)),
-            None => with_cover(RichPage::default())
+            Some(audio) => with_cover(
+                audio.card(RichPage::default(), &self.title, &self.byline),
+                cover,
+            ),
+            None => with_cover(RichPage::default(), cover)
                 .heading(&self.title)
                 .paragraph(&self.byline),
         };
@@ -600,7 +599,6 @@ mod tests {
             sized_cover(MusicPlatform::Netease, "https://p1.music.126.net/x.jpg?a=1"),
             "https://p1.music.126.net/x.jpg?a=1"
         );
-        assert_eq!(lyric_clock(62_340), "01:02");
     }
 
     fn sample_audio() -> SongAudio {
@@ -647,7 +645,7 @@ mod tests {
             Some(
                 "<img src=\"tg://photo?id=media0\"/><h3>晴天</h3>\
                  <p>周杰伦 &amp; &lt;Band&gt; · QQ音乐 · 叶惠美</p>\
-                 <blockquote expandable><code>00:01</code> 故事的小黃花<br><i>Little flower</i></blockquote>\
+                 <blockquote expandable>故事的小黃花<br><i>Little flower</i></blockquote>\
                  <details><summary>制作人员</summary><p>作詞：周杰倫</p></details>\
                  <footer>QQ音乐 · 繁体</footer>"
             )
@@ -655,7 +653,7 @@ mod tests {
         assert_eq!(
             view.caption(),
             "<b>晴天</b>\n周杰伦 &amp; &lt;Band&gt; · QQ音乐 · 叶惠美\n\
-             <blockquote expandable><code>00:01</code> 故事的小黃花\n<i>Little flower</i></blockquote>\n\
+             <blockquote expandable>故事的小黃花\n<i>Little flower</i></blockquote>\n\
              作詞：周杰倫\nQQ音乐 · 繁体"
         );
     }
@@ -703,18 +701,25 @@ mod tests {
     }
 
     #[test]
-    fn song_cards_show_the_song_and_its_player() {
+    fn song_cards_show_the_song_its_player_and_its_cover() {
         let (song, _) = sample();
-        let card = song_card(&song, MusicPlatform::Tencent, &sample_audio());
+        let head = "<h3>晴天</h3><p>周杰伦 &amp; &lt;Band&gt; · QQ音乐 · 叶惠美</p>\
+                    <audio src=\"tg://audio?id=media0\"></audio>\
+                    <blockquote>22.36MB 750.33kbps<br>#AppleMusic #m4a</blockquote>";
+        let card = song_card(
+            &song,
+            MusicPlatform::Tencent,
+            &sample_audio(),
+            &Cover::Uploaded("AgAD".to_string()),
+        );
         assert_eq!(
             card.html.as_deref(),
-            Some(
-                "<h3>晴天</h3><p>周杰伦 &amp; &lt;Band&gt; · QQ音乐 · 叶惠美</p>\
-                 <audio src=\"tg://audio?id=media0\"></audio>\
-                 <blockquote>22.36MB 750.33kbps<br>#AppleMusic #m4a</blockquote>"
-            )
+            Some(format!("{head}<img src=\"tg://photo?id=media1\"/>").as_str())
         );
+        assert_eq!(card.media.as_ref().map(|media| media.len()), Some(2));
         assert_eq!(card.skip_entity_detection, Some(false));
+        let bare = song_card(&song, MusicPlatform::Tencent, &sample_audio(), &Cover::None);
+        assert_eq!(bare.html.as_deref(), Some(head));
     }
 
     #[test]
