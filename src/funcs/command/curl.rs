@@ -8,7 +8,10 @@ use reqwest::{
 };
 use scraper::{Html, Selector};
 use tokio::net::TcpStream;
-use tokio_native_tls::{TlsConnector, native_tls};
+use tokio_rustls::{
+    TlsConnector,
+    rustls::{ClientConfig, crypto::aws_lc_rs, pki_types::ServerName},
+};
 use x509_parser::parse_x509_certificate;
 
 static CLIENT: LazyLock<ClientWithMiddleware> = LazyLock::new(|| {
@@ -35,8 +38,20 @@ static PASTE: LazyLock<ClientWithMiddleware> = LazyLock::new(|| {
 static MATCH: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(\s|^|https?://)(([^:\./\s]+\.)+[^\d\./:\s\\"]{2,}|((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?))(:\d{1,5})?(/\S*)*(\s|$)"#).unwrap()
 });
-static CONNECTOR: LazyLock<TlsConnector> =
-    LazyLock::new(|| TlsConnector::from(native_tls::TlsConnector::new().unwrap()));
+/// 和 reqwest 同一套 rustls：显式用 aws-lc-rs（依赖树里 ring 也开着，
+/// 不指定会因选不出默认 provider 而 panic），证书按系统信任链校验。
+static CONNECTOR: LazyLock<Result<TlsConnector, String>> = LazyLock::new(|| {
+    let provider = std::sync::Arc::new(aws_lc_rs::default_provider());
+    let verifier =
+        rustls_platform_verifier::Verifier::new(provider.clone()).map_err(|e| e.to_string())?;
+    let config = ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| e.to_string())?
+        .dangerous()
+        .with_custom_certificate_verifier(std::sync::Arc::new(verifier))
+        .with_no_client_auth();
+    Ok(TlsConnector::from(std::sync::Arc::new(config)))
+});
 
 cmd!(
     "/curl",
@@ -160,19 +175,24 @@ async fn get_ip_info(ip: &str) -> Vec<(&'static str, String)> {
 /// The certificate the server presents, as table rows.
 async fn get_ssl(url: &str) -> Result<Vec<(&'static str, String)>, BotError> {
     // 连接到远程服务器
-    let stream = CONNECTOR
-        .connect(url, TcpStream::connect(format!("{url}:443")).await?)
+    let connector = CONNECTOR
+        .as_ref()
+        .map_err(|e| BotError::Custom(format!("TLS 初始化失败: {e}")))?;
+    let server_name = ServerName::try_from(url.to_string())
+        .map_err(|e| BotError::Custom(format!("无效的主机名: {e}")))?;
+    let stream = connector
+        .connect(server_name, TcpStream::connect(format!("{url}:443")).await?)
         .await?;
 
-    // 获取服务器证书
+    // 获取服务器证书（链上第一张是站点自己的证书）
     let certificate = stream
         .get_ref()
-        .peer_certificate()?
+        .1
+        .peer_certificates()
+        .and_then(|chain| chain.first())
         .ok_or_else(|| BotError::Custom("服务器未提供证书".to_string()))?;
 
-    // 输出证书的 DER 编码
-    let buffer = certificate.to_der()?.to_vec();
-    let (_, cert) = parse_x509_certificate(&buffer)?;
+    let (_, cert) = parse_x509_certificate(certificate.as_ref())?;
 
     // 获取证书信息
     let subject = cert.tbs_certificate.subject;

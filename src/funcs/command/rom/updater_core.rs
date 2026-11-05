@@ -2109,7 +2109,10 @@ pub extern "C" fn updater_login(login_json: *const c_char) -> *mut c_char {
         }
         let sid = if global { "miuiota_intl" } else { "miuiromota" };
         let locale = if global { "en_US" } else { "zh_CN" };
-        let hash = format!("{:X}", md5::compute(password));
+        let hash: String = <md5::Md5 as md5::Digest>::digest(password)
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect();
         let http = login_client()?;
         if let Some(flag) = flag {
             let verify_code = verify_two_factor_ticket(&http, identity_session, flag, ticket)?;

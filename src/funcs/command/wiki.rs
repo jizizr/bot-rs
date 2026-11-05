@@ -42,7 +42,7 @@ async fn get_wiki(msg: &Message) -> Result<String, BotError> {
     let keyword = search.search.join(" ");
     let result: SearchResult = get(&format!(
         "https://zh.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit=1&srsearch={}",
-        urlencoding::encode(&keyword)
+        crate::funcs::url_encode(&keyword)
     ))
     .await?;
     if result.query.searchinfo.totalhits == 0 {

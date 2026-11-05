@@ -51,7 +51,7 @@ async fn translate_req(tl: &str, text: &str, is_compare: bool) -> Result<String,
     let url_str = format!(
         "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={}&dt=t&q={}",
         tl,
-        urlencoding::encode(text),
+        crate::funcs::url_encode(text),
     );
     Ok({
         let data = extract_data(CLIENT.get(url_str).send().await?.json::<Value>().await?)?;

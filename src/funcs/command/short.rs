@@ -1,6 +1,6 @@
 use super::*;
 use fast_qr::{
-    convert::{Builder, Shape, image::ImageBuilder},
+    convert::{Builder, Shape, svg::SvgBuilder},
     qr::QRBuilder,
 };
 use serde_json::json;
@@ -85,25 +85,39 @@ async fn get_short(msg: &Message) -> Result<String, BotError> {
     }
 }
 
-fn url2qr(url: &str) -> Vec<u8> {
-    let qrcode = QRBuilder::new(url).build().unwrap();
+fn url2qr(url: &str) -> Result<Vec<u8>, BotError> {
+    let qrcode = QRBuilder::new(url)
+        .build()
+        .map_err(|e| BotError::Custom(format!("二维码生成失败: {e:?}")))?;
 
-    ImageBuilder::default()
+    let svg = SvgBuilder::default()
         .shape(Shape::RoundedSquare)
         .background_color([255, 255, 255, 0]) // Handles transparency
-        .fit_width(150)
-        .to_pixmap(&qrcode)
-        .encode_png()
-        .unwrap()
+        .to_str(&qrcode);
+    // 用 charts-rs 自带的 resvg 栅格化，省掉 fast_qr 的另一套旧版 resvg
+    Ok(charts_rs::svg_to_png_with_size(&svg, Some(150), None)?)
 }
 
 pub async fn short(bot: &Bot, msg: &Message) -> BotResult {
     show_typing(bot, msg.chat().id());
     let url = get_short(msg).await?;
     bot.send(
-        SendPhoto::new(msg.chat().id(), InputFile::buffered(url2qr(&url)))
+        SendPhoto::new(msg.chat().id(), InputFile::buffered(url2qr(&url)?))
             .caption(format!("短链接：{url}")),
     )
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qr_is_a_150px_png() {
+        let png = url2qr("https://example.com/s/abc").unwrap();
+        let qr = image::load_from_memory_with_format(&png, image::ImageFormat::Png).unwrap();
+        assert_eq!(qr.width(), 150);
+        assert_eq!(qr.width(), qr.height());
+    }
 }

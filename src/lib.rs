@@ -79,8 +79,6 @@ pub enum BotError {
     #[error("{}", .0)]
     RedisError(#[from] redis::RedisError),
     #[error("{}", .0)]
-    TlsError(#[from] tokio_native_tls::native_tls::Error),
-    #[error("{}", .0)]
     SslError(#[from] x509_parser::nom::Err<x509_parser::error::X509Error>),
     #[error("{}", .0)]
     MongoError(#[from] mongodb::error::Error),

@@ -8,7 +8,7 @@ edition = "2024"
 # Music sources, accounts and the Telegram cache live in MHub; this crate is
 # its gateway contract and client, pinned to the MHub commit it was built with.
 music-gateway = { git = "https://github.com/jizizr/mhub", branch = "main", features = ["client"] }
-tokio = "1.0"
+tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.13", features = ["rustls", "json", "blocking", "cookies", "query", "form"] }
 serde = { version = "1", features = ["derive"] }
 regex = "1.10"
@@ -23,25 +23,33 @@ log = "0.4"
 tracing = { version = "0.1", features = ["log"] }
 pretty_env_logger = "0.5"
 serde_json = { version = "1.0", features = ["preserve_order"] }
-fast_qr = { version = "0.14", features = ["image"] }
+# Only the SVG builder: it is rasterised through charts-rs' resvg, so the
+# crate does not pull a second, older resvg/tiny-skia stack of its own.
+fast_qr = { version = "0.14", features = ["svg"] }
 mysql_async = "0.37"
 async-trait = "0.1"
 scraper = "0.29"
 cached = { version = "4", features = ["async"] }
 chrono = { version = "0.4" }
 dashmap = "6"
-image = "0.25"
+# Formats the bot decodes (photos, stickers, covers, the word cloud mask) and
+# encodes (jpeg, png, webp). No avif: its encoder, rav1e, was the heaviest part
+# of the defaults and nothing here writes avif.
+image = { version = "0.25", default-features = false, features = ["rayon", "jpeg", "png", "webp", "gif"] }
 jieba-rs = "0.11"
 cron = "0.17"
-tokio-native-tls = "0.3"
+# /curl reads the server certificate over the same rustls stack reqwest uses.
+tokio-rustls = "0.26"
+rustls-platform-verifier = "0.7"
 x509-parser = "0.18"
 toml = "1"
 sled = "0.34"
-urlencoding = "2.1"
+percent-encoding = "2"
 reqwest-middleware = { version = "0.5", features = ["json", "query", "form"] }
 reqwest-retry = "0.9"
 redis = { version = "1", features = ["tokio-comp"] }
-ping-server-rs = { git = "https://github.com/jizizr/ping-server-rs" }
+# Only the wire model; the server half stays behind its `server` feature.
+ping-server-rs = { git = "https://github.com/jizizr/ping-server-rs", default-features = false }
 futures = "0.3"
 lingua = { version = "1", default-features = false, features = [
     "chinese",
@@ -58,10 +66,11 @@ aes = "0.9"
 base64 = "0.23"
 cbc = { version = "0.2", features = ["alloc"] }
 indexmap = { version = "2", features = ["serde"] }
-md5 = "0.8"
+# Same MD5 implementation MongoDB already builds (lib name `md5`).
+md-5 = "0.11"
 prost = "0.14"
 uuid = { version = "1", features = ["v4"] }
-charts-rs = { version = "2", features = ["image-encoder"] }
+charts-rs = { version = "2", features = ["png", "webp"] }
 clap-i18n-richformatter = { git = "https://github.com/jizizr/clap-i18n-richformatter", features = [
     "derive",
 ] }

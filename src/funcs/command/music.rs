@@ -413,7 +413,7 @@ impl MusicCallbackAction {
             MusicCallbackAction::SearchMore(query) => format!(
                 "{CALLBACK_PREFIX} s {} {}",
                 query.platform.callback_code(),
-                urlencoding::encode(&query.keyword)
+                crate::funcs::url_encode(&query.keyword)
             ),
             MusicCallbackAction::SearchPage {
                 platform,
@@ -437,7 +437,7 @@ impl MusicCallbackAction {
                     .map(str::trim)
                     .filter(|keyword| !keyword.is_empty())
                 {
-                    let with_keyword = format!("{payload} {}", urlencoding::encode(keyword));
+                    let with_keyword = format!("{payload} {}", crate::funcs::url_encode(keyword));
                     if with_keyword.len() <= CALLBACK_LIMIT {
                         payload = with_keyword;
                     }
@@ -574,7 +574,7 @@ impl MusicCallbackAction {
         match action {
             "s" => Ok(MusicCallbackAction::SearchMore(MusicQuery {
                 platform,
-                keyword: urlencoding::decode(value)
+                keyword: crate::funcs::url_decode(value)
                     .map_err(|e| BotError::Custom(e.to_string()))?
                     .into_owned(),
             })),
@@ -584,7 +584,7 @@ impl MusicCallbackAction {
                     |(id, keyword)| {
                         (
                             id.to_string(),
-                            urlencoding::decode(keyword)
+                            crate::funcs::url_decode(keyword)
                                 .ok()
                                 .map(|keyword| keyword.into_owned())
                                 .filter(|keyword| !keyword.trim().is_empty()),
