@@ -30,6 +30,7 @@ pub fn build(png_bytes: &mut Vec<u8>, words: HashMap<&str, usize>) -> Result<(),
     let config = Config {
         // 布局在遮罩尺寸上进行，输出放大 5 倍
         scale: 5.0,
+        max_words: crate::dao::mysql::wordcloud::MAX_WORDS,
         prefer_horizontal: 0.9,
         background_color: Some("white".into()),
         // 不复现 Python 版的历史 bug，不追求逐字节对齐
