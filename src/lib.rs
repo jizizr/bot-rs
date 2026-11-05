@@ -84,6 +84,8 @@ pub enum BotError {
     MongoError(#[from] mongodb::error::Error),
     #[error("{}", .0)]
     PaintError(#[from] charts_rs::Error),
+    #[error("{}", .0)]
+    WordCloudError(#[from] ::wordcloud::WordCloudError),
 }
 
 pub static BOT: LazyLock<Bot> = LazyLock::new(|| {

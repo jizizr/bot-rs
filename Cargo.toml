@@ -55,7 +55,7 @@ lingua = { version = "1", default-features = false, features = [
     "chinese",
     "english",
 ] }
-wcloud = { git = "https://github.com/jizizr/wcloud" }
+wordcloud = { git = "https://github.com/jizizr/wordcloud-rs" }
 rand = "0.10"
 url = "2.5"
 mongodb = { version = "3.10", default-features = false, features = ["compat-3-3-0", "bson-3", "rustls-tls", "dns-resolver"] }
