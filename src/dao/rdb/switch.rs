@@ -27,8 +27,8 @@ async fn shared_conn() -> Result<(MultiplexedConnection, bool), BotError> {
     let conn = RDB
         .get_multiplexed_async_connection_with_config(
             &AsyncConnectionConfig::default()
-                .set_connection_timeout(Duration::from_millis(500))
-                .set_response_timeout(Duration::from_millis(500)),
+                .set_connection_timeout(Some(Duration::from_millis(500)))
+                .set_response_timeout(Some(Duration::from_millis(500))),
         )
         .await?;
     *CONN.lock().unwrap() = Some(conn.clone());

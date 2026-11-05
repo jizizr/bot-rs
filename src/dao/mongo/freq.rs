@@ -192,7 +192,7 @@ pub async fn query_data(
     let results: Vec<MessageCount> = cursor
         .map(|result| {
             result.and_then(|doc| {
-                mongodb::bson::from_document(doc).map_err(mongodb::error::Error::from)
+                mongodb::bson::deserialize_from_document(doc).map_err(mongodb::error::Error::from)
             })
         })
         .try_collect()

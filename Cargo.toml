@@ -9,16 +9,13 @@ edition = "2024"
 # its gateway contract and client, pinned to the MHub commit it was built with.
 music-gateway = { git = "https://github.com/jizizr/mhub", branch = "main", features = ["client"] }
 tokio = "1.0"
-reqwest = { version = "0.12", features = ["rustls-tls", "json", "blocking", "cookies"] }
+reqwest = { version = "0.13", features = ["rustls", "json", "blocking", "cookies", "query", "form"] }
 serde = { version = "1", features = ["derive"] }
 regex = "1.10"
 clap = { version = "4.5", features = ["derive"] }
 thiserror = "2"
 # Pre-release: pin exactly and read the changelog before moving.
 telers = { version = "=1.0.0-beta.10", default-features = false, features = ["rustls-tls", "serde", "webhooks-axum"] }
-# The HTTP client telers' session is built on (it uses a newer reqwest than
-# the rest of the crate); also serves the webhook endpoint.
-telers-reqwest = { package = "reqwest", version = "0.13", default-features = false }
 axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
 log = "0.4"
 # telers reports through tracing; with no subscriber this forwards its events
@@ -26,24 +23,24 @@ log = "0.4"
 tracing = { version = "0.1", features = ["log"] }
 pretty_env_logger = "0.5"
 serde_json = { version = "1.0", features = ["preserve_order"] }
-fast_qr = { version = "0.12", features = ["image"] }
-mysql_async = "0.35"
-async-trait = "0.1.8"
-scraper = "0.23"
-cached = { version = "0.55", features = ["async"] }
+fast_qr = { version = "0.14", features = ["image"] }
+mysql_async = "0.37"
+async-trait = "0.1"
+scraper = "0.29"
+cached = { version = "4", features = ["async"] }
 chrono = { version = "0.4" }
 dashmap = "6"
 image = "0.25"
-jieba-rs = "0.7"
-cron = "0.15"
+jieba-rs = "0.11"
+cron = "0.17"
 tokio-native-tls = "0.3"
-x509-parser = "0.17"
-toml = "0.8"
+x509-parser = "0.18"
+toml = "1"
 sled = "0.34"
 urlencoding = "2.1"
-reqwest-middleware = "0.4"
-reqwest-retry = "0.7"
-redis = { version = "0.29", features = ["tokio-comp"] }
+reqwest-middleware = { version = "0.5", features = ["json", "query", "form"] }
+reqwest-retry = "0.9"
+redis = { version = "1", features = ["tokio-comp"] }
 ping-server-rs = { git = "https://github.com/jizizr/ping-server-rs" }
 futures = "0.3"
 lingua = { version = "1", default-features = false, features = [
@@ -51,20 +48,20 @@ lingua = { version = "1", default-features = false, features = [
     "english",
 ] }
 wcloud = { git = "https://github.com/jizizr/wcloud" }
-rand = "0.9"
+rand = "0.10"
 url = "2.5"
-mongodb = "3"
-bson = { version = "2", features = ["chrono-0_4"] }
+mongodb = { version = "3.10", default-features = false, features = ["compat-3-3-0", "bson-3", "rustls-tls", "dns-resolver"] }
+bson = { version = "3", features = ["chrono-0_4", "serde"] }
 serde_repr = "0.1"
 anstyle = "1.0"
-aes = "0.8"
-base64 = "0.22"
-cbc = { version = "0.1", features = ["alloc"] }
+aes = "0.9"
+base64 = "0.23"
+cbc = { version = "0.2", features = ["alloc"] }
 indexmap = { version = "2", features = ["serde"] }
-md5 = "0.7"
-prost = "0.13"
+md5 = "0.8"
+prost = "0.14"
 uuid = { version = "1", features = ["v4"] }
-charts-rs = { version = "0.3", features = ["image-encoder"] }
+charts-rs = { version = "2", features = ["image-encoder"] }
 clap-i18n-richformatter = { git = "https://github.com/jizizr/clap-i18n-richformatter", features = [
     "derive",
 ] }
@@ -76,3 +73,4 @@ tempfile = "3"
 [profile.release]
 lto = true
 panic = "abort"
+

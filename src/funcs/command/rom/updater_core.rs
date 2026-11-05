@@ -3,7 +3,7 @@ use super::updater_links::{
 };
 use aes::Aes128;
 use base64::{Engine as _, engine::general_purpose};
-use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+use cbc::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
 use chrono::{Local, TimeZone};
 use indexmap::IndexMap;
 use prost::Message;
@@ -529,7 +529,7 @@ where
 fn miui_encrypt(json_request: &str, security_key: &[u8]) -> Result<String, String> {
     let encrypted = Aes128CbcEnc::new_from_slices(security_key, IV)
         .map_err(|e| e.to_string())?
-        .encrypt_padded_vec_mut::<Pkcs7>(json_request.as_bytes());
+        .encrypt_padded_vec::<Pkcs7>(json_request.as_bytes());
     Ok(general_purpose::URL_SAFE.encode(encrypted))
 }
 
@@ -540,7 +540,7 @@ fn miui_decrypt(encrypted_text: &str, security_key: &[u8]) -> Result<String, Str
         .map_err(|e| e.to_string())?;
     let decrypted = Aes128CbcDec::new_from_slices(security_key, IV)
         .map_err(|e| e.to_string())?
-        .decrypt_padded_vec_mut::<Pkcs7>(&encrypted)
+        .decrypt_padded_vec::<Pkcs7>(&encrypted)
         .map_err(|e| e.to_string())?;
     String::from_utf8(decrypted).map_err(|e| e.to_string())
 }

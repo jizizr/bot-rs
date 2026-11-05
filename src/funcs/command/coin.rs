@@ -16,7 +16,7 @@ struct CoinData {
     price: f64,
 }
 
-#[cached(time = 10, result = true)]
+#[cached(ttl_secs = 10)]
 async fn coin_price(coin_type: String) -> Result<f64, BotError> {
     let price: Coin = get(&format!(
         "https://api.huobi.pro/market/history/kline?&period=1min&size=1&symbol={coin_type}usdt"

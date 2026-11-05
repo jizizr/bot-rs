@@ -9,7 +9,7 @@ pub fn paint(datas: HashMap<String, HashMap<u8, f32>>) -> Result<Vec<u8>, BotErr
         .into_iter()
         .map(|(k, v)| Series {
             name: k,
-            data: (0..24).map(|i| *v.get(&i).unwrap_or(&0.0)).collect(),
+            data: (0..24).map(|i| Some(*v.get(&i).unwrap_or(&0.0))).collect(),
             label_show: true,
             ..Default::default()
         })
@@ -20,7 +20,7 @@ pub fn paint(datas: HashMap<String, HashMap<u8, f32>>) -> Result<Vec<u8>, BotErr
         (0..24).map(|i| i.to_string()).collect(),
         THEME_GRAFANA,
     );
-    line_chart.series_smooth = true;
+    line_chart.series.smooth = true;
     svg_to_webp(&line_chart.svg()?)
         .map_err(|e| BotError::Custom(format!("failed to convert svg to webp: {e}")))
 }

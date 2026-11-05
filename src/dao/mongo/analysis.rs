@@ -31,19 +31,22 @@ pub async fn insert_log(log: (&BotLog, &User, &Group)) -> Result<(), mongodb::er
     let result = tokio::time::timeout(std::time::Duration::from_secs(2), async {
         super::botlog()
             .await
-            .insert_one(bson::to_document(botlog)?)
+            .insert_one(bson::serialize_to_document(botlog)?)
             .await?;
         super::user()
             .await
             .replace_one(
                 doc! {"user_id": user.get_id() as i64},
-                bson::to_document(user)?,
+                bson::serialize_to_document(user)?,
             )
             .upsert(true)
             .await?;
         super::group()
             .await
-            .replace_one(doc! {"group_id": group.get_id()}, bson::to_document(group)?)
+            .replace_one(
+                doc! {"group_id": group.get_id()},
+                bson::serialize_to_document(group)?,
+            )
             .upsert(true)
             .await?;
         Ok::<(), mongodb::error::Error>(())

@@ -5047,13 +5047,8 @@ mod tests {
         );
         let bot = Bot::with_client(
             "1:test",
-            telers::client::Reqwest::new(
-                telers_reqwest::Client::builder()
-                    .no_proxy()
-                    .build()
-                    .unwrap(),
-            )
-            .with_api_server(std::borrow::Cow::Owned(api)),
+            telers::client::Reqwest::new(reqwest::Client::builder().no_proxy().build().unwrap())
+                .with_api_server(std::borrow::Cow::Owned(api)),
         );
         for payload in payloads {
             let callback: CallbackQuery = serde_json::from_value(serde_json::json!({

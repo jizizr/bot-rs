@@ -85,11 +85,11 @@ pub enum BotError {
     #[error("{}", .0)]
     MongoError(#[from] mongodb::error::Error),
     #[error("{}", .0)]
-    PaintError(#[from] charts_rs::CanvasError),
+    PaintError(#[from] charts_rs::Error),
 }
 
 pub static BOT: LazyLock<Bot> = LazyLock::new(|| {
-    let client = telers_reqwest::Client::builder()
+    let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(300))
         .tcp_nodelay(true)

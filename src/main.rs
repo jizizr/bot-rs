@@ -76,7 +76,7 @@ fn router() -> Router {
 /// A fresh secret per start: Telegram sends it with every webhook call, so
 /// nothing else can feed updates to the local listener.
 fn webhook_secret() -> String {
-    use rand::Rng;
+    use rand::RngExt;
     rand::rng()
         .sample_iter(rand::distr::Alphanumeric)
         .take(48)
