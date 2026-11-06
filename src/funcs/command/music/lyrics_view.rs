@@ -11,13 +11,17 @@ use super::{
     MusicLyricScript, MusicPlatform, MusicQuery, MusicTrack, convert_lyric_script,
     get_user_settings_or_default, html_escape, lock_unpoisoned, provider, resolve_track,
 };
-use crate::{Bot, BotError, InputFile, SendPhoto, funcs::pkg::rich::RichPage, settings::SETTINGS};
+use crate::{
+    Bot, BotError, InputFile, SendPhoto, dao::mongo::music_covers, funcs::pkg::rich::RichPage,
+    settings::SETTINGS,
+};
 use std::{
     collections::HashMap,
-    sync::{LazyLock, Mutex},
+    sync::{Arc, LazyLock, Mutex},
     time::Duration,
 };
 use telers::types::InputRichMessage;
+use tokio::sync::OnceCell;
 
 /// Telegram's limit for a caption.
 const CAPTION_LIMIT: usize = 1024;
@@ -27,9 +31,14 @@ const BANNER_WIDTH: u32 = 1200;
 const BANNER_HEIGHT: u32 = 400;
 const BANNER_COVER_SIZE: u32 = 320;
 const COVER_CACHE_CAPACITY: usize = 1024;
+/// Part of every stored banner's key: bump it when `cover_banner` changes
+/// its look, so old uploads are not reused for the new one.
+const BANNER_VERSION: &str = "banner-v1";
 
-/// Cover URL → file id of the photo uploaded for it.
-static COVER_PHOTOS: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Default::default);
+/// Cover URL → the banner's file id, filled once however many pages ask for
+/// it at the same time. Backed by MongoDB, so restarts do not upload again.
+static COVER_PHOTOS: LazyLock<Mutex<HashMap<String, Arc<OnceCell<String>>>>> =
+    LazyLock::new(Default::default);
 
 /// Telegram's limit for a rich message, with room for the closing tags.
 const RICH_MESSAGE_LIMIT: usize = 32_000;
@@ -231,23 +240,58 @@ pub(super) async fn lyric_cover(bot: &Bot, song: &LyricSong) -> Cover {
     let Some(url) = song.cover.as_deref() else {
         return Cover::None;
     };
-    match tokio::time::timeout(COVER_UPLOAD_TIMEOUT, uploaded_banner(bot, url)).await {
-        Ok(Ok(file_id)) => Cover::Uploaded(file_id),
-        Ok(Err(err)) => {
+    let cell = {
+        let mut photos = lock_unpoisoned(&COVER_PHOTOS);
+        if photos.len() >= COVER_CACHE_CAPACITY && !photos.contains_key(url) {
+            photos.clear();
+        }
+        photos.entry(url.to_string()).or_default().clone()
+    };
+    if let Some(file_id) = cell.get() {
+        return Cover::Uploaded(file_id.clone());
+    }
+    // 上传放进独立任务：超时只是这一页不等它，上传完成后照样记下 file_id，
+    // 不会因为取消而让下一次重复上传
+    let upload = tokio::spawn({
+        let bot = bot.clone();
+        let url = url.to_string();
+        async move {
+            cell.get_or_try_init(|| banner_file_id(&bot, &url))
+                .await
+                .cloned()
+        }
+    });
+    match tokio::time::timeout(COVER_UPLOAD_TIMEOUT, upload).await {
+        Ok(Ok(Ok(file_id))) => Cover::Uploaded(file_id),
+        Ok(Ok(Err(err))) => {
             log::error!("lyric cover banner failed: {err}");
             Cover::None
         }
+        Ok(Err(err)) => {
+            log::error!("lyric cover banner task failed: {err}");
+            Cover::None
+        }
         Err(_) => {
-            log::error!("lyric cover banner timed out");
+            log::warn!("lyric cover banner still uploading, page goes without it");
             Cover::None
         }
     }
 }
 
-async fn uploaded_banner(bot: &Bot, url: &str) -> Result<String, BotError> {
-    if let Some(file_id) = lock_unpoisoned(&COVER_PHOTOS).get(url) {
-        return Ok(file_id.clone());
+/// The banner's file id: the one stored for it, or a fresh upload.
+async fn banner_file_id(bot: &Bot, url: &str) -> Result<String, BotError> {
+    let key = format!("{BANNER_VERSION}:{url}");
+    if let Some(file_id) = music_covers::get(&key).await {
+        return Ok(file_id);
     }
+    let file_id = upload_banner(bot, url).await?;
+    if let Err(err) = music_covers::put(&key, &file_id).await {
+        log::error!("cover banner could not be stored: {err}");
+    }
+    Ok(file_id)
+}
+
+async fn upload_banner(bot: &Bot, url: &str) -> Result<String, BotError> {
     // 与 MHub 的音频缓存同一个落点：没配存储群时传到 bot 主人的私聊
     let chat_id = match SETTINGS.music.inline_upload_chat_id {
         0 => SETTINGS.bot.owner,
@@ -281,11 +325,6 @@ async fn uploaded_banner(bot: &Bot, url: &str) -> Result<String, BotError> {
         .and_then(|sizes| sizes.last())
         .map(|size| size.file_id.to_string())
         .ok_or_else(|| BotError::Custom("uploaded cover has no photo".to_string()))?;
-    let mut photos = lock_unpoisoned(&COVER_PHOTOS);
-    if photos.len() >= COVER_CACHE_CAPACITY {
-        photos.clear();
-    }
-    photos.insert(url.to_string(), file_id.clone());
     Ok(file_id)
 }
 

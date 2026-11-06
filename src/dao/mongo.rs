@@ -2,6 +2,7 @@ pub mod analysis;
 pub mod chat_settings;
 pub mod freq;
 pub mod func_switch;
+pub mod music_covers;
 pub mod music_favorites;
 pub mod music_settings;
 
