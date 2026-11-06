@@ -11,7 +11,7 @@
 //! 换语言 / 切对照时从被回复的消息重新取原文，不在内存里存会话状态。
 
 use super::*;
-use crate::funcs::pkg::{escape::html, tgfile};
+use crate::funcs::pkg::{escape::html, rich, tgfile};
 use base64::Engine;
 use serde::Deserialize;
 use std::{borrow::Cow, sync::LazyLock, time::Duration};
@@ -223,7 +223,7 @@ enum Source {
 
 /// 消息里可以送给模型看的图：图片、图片文件、贴纸（动态/视频贴纸用静态缩略图）
 fn image_of(msg: &Message) -> Result<Option<String>, BotError> {
-    if let Some(sizes) = msg.photo() {
+    if let Some(sizes) = msg.photo().or_else(|| rich::first_photo(msg)) {
         // 尺寸从小到大；取不超过模型最长边的最大一张，都超过就取最小的
         let pick = sizes
             .iter()
@@ -277,6 +277,16 @@ fn strip_command(text: &str) -> Option<(&str, Option<&'static Lang>)> {
 fn source_of(msg: &Message, quote: Option<&TextQuote>) -> Result<Option<Source>, BotError> {
     if let Some(quote) = quote.filter(|q| !q.text.trim().is_empty()) {
         return Ok(Some(Source::Text(quote.text.to_string())));
+    }
+    // 富文本消息（如歌曲卡片）有文字就翻文字，只有图时才看图——不去翻封面
+    if let Message::RichMessage(_) = msg {
+        return Ok(match rich::plain_blocks(msg) {
+            Some(text) => Some(Source::Text(text)),
+            None => image_of(msg)?.map(|file_id| Source::Image {
+                file_id,
+                caption: None,
+            }),
+        });
     }
     let text = getor(msg).map(|text| match strip_command(text) {
         Some((rest, _)) => rest,
