@@ -50,10 +50,6 @@ redis = { version = "1", features = ["tokio-comp"] }
 # Only the wire model; the server half stays behind its `server` feature.
 ping-server-rs = { git = "https://github.com/jizizr/ping-server-rs", default-features = false }
 futures = "0.3"
-lingua = { version = "1", default-features = false, features = [
-    "chinese",
-    "english",
-] }
 wordcloud = { git = "https://github.com/jizizr/wordcloud-rs" }
 rand = "0.10"
 url = "2.5"

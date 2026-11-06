@@ -351,5 +351,18 @@ pub async fn msg_handler(bot: Bot, msg: Message) -> BotResult {
     if command_handler(&bot, &msg, me).await.is_ok() {
         return Ok(());
     }
+    // 私聊里转发来的文字 / 图片直接翻译
+    match funcs::command::translate::forwarded(&bot, &msg).await {
+        Ok(true) => return Ok(()),
+        Ok(false) => {}
+        Err(e) => {
+            bot.send(
+                SendMessage::new(msg.chat().id(), e.to_string())
+                    .reply_parameters(reply_to(msg.message_id())),
+            )
+            .await?;
+            return Ok(());
+        }
+    }
     text_handler(&bot, &msg).await
 }
