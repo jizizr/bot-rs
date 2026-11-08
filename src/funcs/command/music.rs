@@ -39,7 +39,6 @@ const CALLBACK_PREFIX: &str = "music";
 const CALLBACK_LIMIT: usize = 64;
 const MUSIC_PANEL_OWNER_NOTICE: &str = "这是其他用户的音乐面板，请发送 /music 打开自己的面板";
 const MUSIC_PLATFORM_OPTIONS: &[(&str, &str)] = &[
-    ("soda", "汽水"),
     ("tencent", "QQ音乐"),
     ("netease", "网易云"),
     ("kugou", "酷狗"),
@@ -62,7 +61,6 @@ const SEARCH_PLATFORMS: &[(MusicPlatform, &str)] = &[
     (MusicPlatform::Tencent, "QQ音乐"),
     (MusicPlatform::Netease, "网易云"),
     (MusicPlatform::AppleMusic, "Apple"),
-    (MusicPlatform::Soda, "汽水"),
     (MusicPlatform::Kugou, "酷狗"),
     (MusicPlatform::Bilibili, "B站"),
     (MusicPlatform::YouTubeMusic, "YouTube"),
@@ -843,7 +841,18 @@ fn media_request(query: &MusicQuery, selected_id: Option<&str>, quality: &str) -
 }
 
 fn settings_platform(settings: &UserMusicSettings) -> MusicPlatform {
-    MusicPlatform::from_stored_default(&settings.default_platform)
+    served_platform(MusicPlatform::from_stored_default(
+        &settings.default_platform,
+    ))
+}
+
+/// MHub took Soda offline (2026-11-08): its full tracks need the official
+/// client's request signature. Anything still naming it goes to Apple Music.
+fn served_platform(platform: MusicPlatform) -> MusicPlatform {
+    match platform {
+        MusicPlatform::Soda => MusicPlatform::AppleMusic,
+        platform => platform,
+    }
 }
 
 fn user_id_from_message(msg: &Message) -> i64 {
@@ -2385,7 +2394,7 @@ fn parse_inline_music_query(
             break;
         };
         if let Some(parsed_platform) = MusicPlatform::from_alias(&last) {
-            platform = parsed_platform;
+            platform = served_platform(parsed_platform);
             parts.pop();
             continue;
         }
@@ -6104,7 +6113,8 @@ mod tests {
         for results in [Some(&results), None] {
             let rows = callbacks(&search_page_menu(&query, results, 1, 42));
             assert_eq!(rows.len(), 3);
-            assert!(rows[1].iter().any(|(text, _)| text == "✅ 酷狗"));
+            assert!(rows.iter().flatten().any(|(text, _)| text == "✅ 酷狗"));
+            assert!(rows.iter().flatten().all(|(text, _)| !text.contains("汽水")));
         }
     }
 
