@@ -5,6 +5,7 @@ pub mod func_switch;
 pub mod music_covers;
 pub mod music_favorites;
 pub mod music_settings;
+pub mod rom_dumps;
 
 use super::*;
 use bson::doc;

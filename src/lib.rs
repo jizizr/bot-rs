@@ -86,10 +86,16 @@ pub enum BotError {
     WordCloudError(#[from] ::wordcloud::WordCloudError),
 }
 
-pub static BOT: LazyLock<Bot> = LazyLock::new(|| {
+pub static BOT: LazyLock<Bot> =
+    LazyLock::new(|| bot_with_token(&SETTINGS.bot.token, Duration::from_secs(300)));
+
+/// A bot talking to the same Bot API server as the main one (the local
+/// server when `api_url` is set), for another token such as the upload bot,
+/// or with a longer `timeout` for big uploads.
+pub fn bot_with_token(token: &str, timeout: Duration) -> Bot {
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(300))
+        .timeout(timeout)
         .tcp_nodelay(true)
         .build()
         .expect("telegram client creation failed");
@@ -115,8 +121,8 @@ pub static BOT: LazyLock<Bot> = LazyLock::new(|| {
         }
         None => session,
     };
-    Bot::with_client(&SETTINGS.bot.token, session)
-});
+    Bot::with_client(token, session)
+}
 pub static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
 
 #[async_trait]

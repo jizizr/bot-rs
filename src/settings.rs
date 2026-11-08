@@ -49,6 +49,14 @@ pub struct Music {
     /// 0 keeps them in the owner's private chat, as MHub does.
     #[serde(default)]
     pub inline_upload_chat_id: i64,
+    /// MHub 同名配置：上传 bot 往这个私有频道发文件，主 bot 转发那条消息
+    /// 拿到自己的 file_id。上传 bot 的 DC 离服务器更近，大文件快得多。
+    /// 0 表示不中转，主 bot 直接上传
+    #[serde(default)]
+    pub upload_channel_id: i64,
+    /// 上传 bot 的 token 文件，`/uploader` 写的就是它
+    #[serde(default = "default_upload_bot_token_file")]
+    pub upload_bot_token_file: String,
     // Download governor (funcs/command/music/queue.rs): concurrent download
     // slots, bounded waiting queue, and live-work admission caps.
     #[serde(default = "default_music_download_concurrency")]
@@ -107,11 +115,17 @@ pub struct Music {
     pub collection_rate_global: usize,
 }
 
+fn default_upload_bot_token_file() -> String {
+    "/etc/music-gateway/uploader-token".to_string()
+}
+
 impl Default for Music {
     fn default() -> Self {
         Self {
             gateway: MusicGateway::default(),
             inline_upload_chat_id: 0,
+            upload_channel_id: 0,
+            upload_bot_token_file: default_upload_bot_token_file(),
             download_concurrency: default_music_download_concurrency(),
             download_queue_wait_limit: default_music_download_queue_wait_limit(),
             download_queue_global_limit: default_music_download_queue_global_limit(),

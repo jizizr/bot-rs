@@ -20,6 +20,7 @@ pub mod coin;
 pub mod config;
 pub mod count;
 pub mod curl;
+pub mod dump;
 pub mod hitokoto;
 pub mod id;
 pub mod music;
@@ -210,6 +211,7 @@ commands! {
     Ocr => "ocr": "识别图片中的文字",
     Ping => "ping": "Ping",
     Rom => "rom": "小米刷机包链接",
+    Dump => "dump": "从卡刷包链接提取分区镜像",
     Vv => "vv": "vv不削能玩？",
     Count => "count": "发言趋势",
     Timezone => "timezone" ["tz"]: "查看或设置本群时区",
@@ -302,6 +304,7 @@ pub async fn command_handler(bot: &Bot, msg: &Message, me: &User) -> BotResult {
         Ocr => translate::ocr,
         Ping => ping::ping,
         Rom => rom::rom,
+        Dump => dump::dump,
         Vv => vv::vv,
         Count => count::count,
         Timezone => timezone::timezone,

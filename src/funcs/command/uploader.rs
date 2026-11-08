@@ -1,8 +1,5 @@
 use super::*;
 
-/// Where the uploader bot's token is kept for MHub's uploads.
-const UPLOADER_TOKEN_PATH: &str = "/etc/music-gateway/uploader-token";
-
 /// `/uploader <token>`, owner only, private chat only: stores the uploader
 /// bot's token on the server so the owner can set it from a phone. The
 /// message carrying the token is deleted right away and the token is never
@@ -37,7 +34,8 @@ pub async fn uploader(bot: &Bot, msg: &Message) -> BotResult {
 
 fn save_token(token: &str) -> std::io::Result<()> {
     use std::{fs, io::Write, os::unix::fs::OpenOptionsExt};
-    let temp = format!("{UPLOADER_TOKEN_PATH}.new");
+    let path = &crate::settings::SETTINGS.music.upload_bot_token_file;
+    let temp = format!("{path}.new");
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -46,5 +44,5 @@ fn save_token(token: &str) -> std::io::Result<()> {
         .open(&temp)?;
     file.write_all(token.as_bytes())?;
     file.sync_all()?;
-    fs::rename(temp, UPLOADER_TOKEN_PATH)
+    fs::rename(temp, path)
 }

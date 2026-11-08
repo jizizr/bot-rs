@@ -71,8 +71,18 @@ clap-i18n-richformatter = { git = "https://github.com/jizizr/clap-i18n-richforma
 ] }
 ferrous-opencc = "0.4"
 skia-safe = { version = "0.157", features = ["textlayout"] }
+# /dump：按 Range 读卡刷包，解 payload.bin 里的 xz / bz2 / zstd 块，
+# 或 zip 里 deflate 存放的镜像
+bytes = "1"
+lzma-rust2 = { version = "0.16", default-features = false, features = ["std", "xz"] }
+bzip2 = "0.6"
+zstd = "0.14"
+flate2 = "1"
+sha2 = "0.11"
 [dev-dependencies]
 tempfile = "3"
+# 测试里要压出 xz 数据
+lzma-rust2 = { version = "0.16", default-features = false, features = ["std", "xz", "encoder"] }
 
 [profile.release]
 lto = true

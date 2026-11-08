@@ -529,6 +529,8 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "bson",
+ "bytes",
+ "bzip2",
  "cached",
  "cbc",
  "charts-rs",
@@ -540,11 +542,13 @@ dependencies = [
  "dashmap",
  "fast_qr",
  "ferrous-opencc",
+ "flate2",
  "futures",
  "image",
  "indexmap 2.14.2",
  "jieba-rs",
  "log",
+ "lzma-rust2",
  "md-5",
  "mongodb",
  "music-gateway",
@@ -562,6 +566,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_repr",
+ "sha2 0.11.1",
  "skia-safe",
  "telers",
  "tempfile",
@@ -574,6 +579,7 @@ dependencies = [
  "uuid",
  "wordcloud",
  "x509-parser",
+ "zstd",
 ]
 
 [[package]]
@@ -695,6 +701,15 @@ name = "bytes"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
+
+[[package]]
+name = "bzip2"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3a53fac24f34a81bc9954b5d6cfce0c21e18ec6959f44f56e8e90e4bb7c346c"
+dependencies = [
+ "libbz2-rs-sys",
+]
 
 [[package]]
 name = "cached"
@@ -2864,6 +2879,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
 
 [[package]]
+name = "libbz2-rs-sys"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32f454fd6831a29c0e827ed075bca2a15be201bd57f4168f0fd1041124eab17e"
+
+[[package]]
 name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2986,6 +3007,15 @@ name = "lru-slab"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
+
+[[package]]
+name = "lzma-rust2"
+version = "0.16.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca93e534d1142d1d0dcca6d25fe302508a5dfb40b302802904577725ea0b695b"
+dependencies = [
+ "sha2 0.11.1",
+]
 
 [[package]]
 name = "macro_magic"
