@@ -100,11 +100,12 @@ pub async fn save_user_settings(settings: &UserMusicSettings) -> Result<(), BotE
 }
 
 fn normalize_settings(mut settings: UserMusicSettings) -> UserMusicSettings {
-    // Soda went offline in MHub on 2026-11-08; its users moved to Apple Music.
+    // Soda and Kugou went offline in MHub on 2026-11-08; their users moved
+    // to Apple Music.
     if settings.default_platform.trim().is_empty()
         || matches!(
             settings.default_platform.trim(),
-            "soda" | "qs" | "qishui" | "汽水" | "汽水音乐"
+            "soda" | "qs" | "qishui" | "汽水" | "汽水音乐" | "kugou" | "kg" | "酷狗" | "酷狗音乐"
         )
     {
         settings.default_platform = default_platform();
@@ -126,6 +127,11 @@ mod tests {
     fn soda_defaults_move_to_apple_music() {
         let mut settings = UserMusicSettings::defaults_for(1);
         settings.default_platform = "soda".to_string();
+        assert_eq!(
+            normalize_settings(settings.clone()).default_platform,
+            "applemusic"
+        );
+        settings.default_platform = "kugou".to_string();
         assert_eq!(normalize_settings(settings).default_platform, "applemusic");
     }
 

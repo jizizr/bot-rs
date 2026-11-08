@@ -41,7 +41,6 @@ const MUSIC_PANEL_OWNER_NOTICE: &str = "这是其他用户的音乐面板，请�
 const MUSIC_PLATFORM_OPTIONS: &[(&str, &str)] = &[
     ("tencent", "QQ音乐"),
     ("netease", "网易云"),
-    ("kugou", "酷狗"),
     ("bilibili", "Bilibili"),
     ("applemusic", "Apple Music"),
     ("youtubemusic", "YouTube Music"),
@@ -61,7 +60,6 @@ const SEARCH_PLATFORMS: &[(MusicPlatform, &str)] = &[
     (MusicPlatform::Tencent, "QQ音乐"),
     (MusicPlatform::Netease, "网易云"),
     (MusicPlatform::AppleMusic, "Apple"),
-    (MusicPlatform::Kugou, "酷狗"),
     (MusicPlatform::Bilibili, "B站"),
     (MusicPlatform::YouTubeMusic, "YouTube"),
 ];
@@ -846,11 +844,12 @@ fn settings_platform(settings: &UserMusicSettings) -> MusicPlatform {
     ))
 }
 
-/// MHub took Soda offline (2026-11-08): its full tracks need the official
-/// client's request signature. Anything still naming it goes to Apple Music.
+/// MHub took Soda and Kugou offline (2026-11-08): neither plays licensed
+/// songs without an account flow MHub does not have. Anything still naming
+/// them goes to Apple Music.
 fn served_platform(platform: MusicPlatform) -> MusicPlatform {
     match platform {
-        MusicPlatform::Soda => MusicPlatform::AppleMusic,
+        MusicPlatform::Soda | MusicPlatform::Kugou => MusicPlatform::AppleMusic,
         platform => platform,
     }
 }
@@ -6092,7 +6091,7 @@ mod tests {
     #[test]
     fn empty_and_failed_searches_still_offer_platforms() {
         let query = MusicQuery {
-            platform: MusicPlatform::Kugou,
+            platform: MusicPlatform::Bilibili,
             keyword: "晴天".to_string(),
         };
         let results = SearchResults {
@@ -6102,19 +6101,23 @@ mod tests {
         assert!(
             search_page(&query, &results, 1)
                 .html()
-                .contains("<p>酷狗音乐 · 没有找到结果</p>")
+                .contains("<p>Bilibili · 没有找到结果</p>")
         );
         let failure = search_failure_page(&query, &BotError::Custom("超时 <x>".to_string()));
         assert!(
             failure
                 .html()
-                .contains("<p>酷狗音乐 · 搜索失败</p><blockquote>超时 &lt;x&gt;</blockquote>")
+                .contains("<p>Bilibili · 搜索失败</p><blockquote>超时 &lt;x&gt;</blockquote>")
         );
         for results in [Some(&results), None] {
             let rows = callbacks(&search_page_menu(&query, results, 1, 42));
             assert_eq!(rows.len(), 3);
-            assert!(rows.iter().flatten().any(|(text, _)| text == "✅ 酷狗"));
-            assert!(rows.iter().flatten().all(|(text, _)| !text.contains("汽水")));
+            assert!(rows.iter().flatten().any(|(text, _)| text == "✅ B站"));
+            assert!(
+                rows.iter()
+                    .flatten()
+                    .all(|(text, _)| !text.contains("汽水") && !text.contains("酷狗"))
+            );
         }
     }
 
